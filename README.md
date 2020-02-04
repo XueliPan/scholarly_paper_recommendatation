@@ -2,7 +2,6 @@
 
 The project is about recommending relevant scholarly papers to researchers based theri research interests which can be inferred frome their published papers.
 
-dahglalggah
 
 ## Data description
 The project use the [dataset 2](https://scholarbank.nus.edu.sg/handle/10635/146027) released by Kazunari Sugiyama and Min-Yen Kan in National University of Singapore. We contacted the creator of the dataset and requested for raw pdf files.
