@@ -1,0 +1,1151 @@
+Integrated Instruction Selection and Register
+
+Allocation for Compact Code Generation Exploiting
+
+Freeform Mixing of 16- and 32-bit Instructions
+
+Tobias J.K. Edler von Koch
+
+Igor Böhm
+
+Björn Franke
+
+Institute for Computing Systems Architecture
+School of Informatics, University of Edinburgh
+
+Informatics Forum, 10 Crichton Street, Edinburgh, EH8 9AB, United Kingdom
+
+T.J.K.Edler-Von-Koch@sms.ed.ac.uk, I.Bohm@sms.ed.ac.uk, bfranke@inf.ed.ac.uk
+
+Abstract
+For memory constrained embedded systems code size is at
+least as important as performance. One way of increasing
+code density is to exploit compact instruction formats, e.g.
+ARM Thumb, where the processor either operates in stan-
+dard or compact instruction mode. The ARCompact ISA con-
+sidered in this paper is different in that it allows freeform
+mixing of 16- and 32-bit instructions without a mode switch.
+Compact 16-bit instructions can be used anywhere in the
+code given that additional register constraints are satisﬁed.
+In this paper we present an integrated instruction selection
+and register allocation methodology and develop two ap-
+proaches for mixed-mode code generation: a simple oppor-
+tunistic scheme and a more advanced feedback-guided in-
+struction selection scheme. We have implemented a code
+generator targeting the ARCompact ISA and evaluated its ef-
+fectiveness against the ARC750D embedded processor and
+the EEMBC benchmark suite. On average, we achieve a code
+size reduction of 16.7% across all benchmarks whilst at the
+same time improving performance by on average 17.7%.
+
+Categories and Subject Descriptors D.3 [Programming
+Languages]: Processors—Code Generation; D.3 [Program-
+ming Languages]: Processors—Compilers
+
+General Terms Algorithms, experimentation, measure-
+ment, performance
+
+Keywords
+Instruction selection, register allocation, code
+size, dual instruction set architecture, variable-length in-
+structions, ARCompact
+
+Permission to make digital or hard copies of all or part of this work for personal or
+classroom use is granted without fee provided that copies are not made or distributed
+for proﬁt or commercial advantage and that copies bear this notice and the full citation
+on the ﬁrst page. To copy otherwise, to republish, to post on servers or to redistribute
+to lists, requires prior speciﬁc permission and/or a fee.
+CGO’10, April 24–28, 2010, Toronto, Ontario, Canada.
+Copyright c(cid:13) 2010 ACM 978-1-60558-635-9/10/04. . . $10.00
+
+Introduction
+
+1.
+A large number of embedded processors are deployed in
+cost-sensitive, but high-volume markets where even mod-
+est savings of unit cost can lead to a substantial overall cost
+reduction. Highly integrated systems-on-chip (SoC) serve
+these markets and provide embedded processors as part of
+a more complex system integrated with other components
+such as memories and various peripheral devices on the
+same chip. Of all components, memories typically occupy
+the largest fraction of the chip area and, hence, contribute
+most to the overall cost. Among embedded memories,f ﬂash
+storage plays a prominent role as non-volatile memory that
+needs to be large enough to store the full image of the bi-
+nary executable. As a consequence, any reduction in code
+size translates directly to equivalent savings of die area and,
+eventually, unit cost. For example, 128-Mbit of NOR ﬂash
+(two bits per cell) fabricated with 0.13µm design rules us-
+ing a multilevel-charge (MLC) storage scheme occupy a chip
+area of 27.3mm2 [6] whereas an ARM Cortex-M3 processor
+(CM3Core core) only occupies 0.43mm2 at the same tech-
+nology node [3].
+
+One popular architectural approach to code size reduc-
+tion is the provision of a compact instruction set architec-
+ture (ISA) alongside the standard, full-width RISC ISA. For
+example, some ARM processors (e.g. ARM7TDMI) imple-
+ment the compact Thumb instruction set whereas MIPS has a
+similar offering called MIPS16e. Common to these compact
+16-bit ISAs is that the processor either operates in 16-bit or
+32-bit mode and switching between modes of operation is
+done through mode change operations which add a certain
+runtime and code size overhead. Furthermore, not all reg-
+isters available in 32-bit mode are also accessible in 16-bit
+mode. Compilers seeking to take full advantage of compact
+instruction formats need to analyse the code and identify re-
+gions where the beneﬁts of a compact instruction format out-
+weigh its disadvantages (i.e. mode switching overhead and
+increased register pressure on the restricted register set). Sig-
+
+180niﬁcant care needs to be taken as performance degradation
+by up to 98% as a result of an overly aggressive use of com-
+pact instructions has been reported in e.g. [11].
+
+In this paper we consider the ARCompact [2] ISA im-
+plemented by the ARC 600 & 700 series of embedded pro-
+cessors. The ARCompact, ARM Thumb-2 [14] and also the
+recently introduced microMIPS [13] ISAs are different from
+other compact ISAs in that they allow freeform mixing of
+16- and 32-bit instructions without a mode switch. This en-
+ables the compiler to generate a ﬁne-grained interleaving
+of 16- and 32-bit instructions, thus potentially leading to
+greater code density without performance loss. However, at
+the same time the compiler needs to decide for every in-
+struction that has a compact counterpart whether to emit the
+full-width or compact version. This decision does not only
+depend on the availability of an equivalent compact instruc-
+tion, but additional register constraints need to be obeyed.
+Due to fewer instruction bits, 16-bit instructions comprise
+shorter register ﬁelds, and can only address eight rather than
+32 registers for the standard 32-bit instructions in case of the
+ARCompact ISA. These register constraints demand an inte-
+grated approach where instruction selection and register al-
+location are considered simultaneously. Failure to do so may
+lead to missed opportunities or, even worse, to code bloat
+and performance loss due to excessive register-to-register
+data movement and, thus, negate the intended code size re-
+duction effect.
+
+Before we discuss the proposed code generation approach
+in detail, we provide a motivating example that highlights
+some of the issues encountered in the selection of compact
+instructions.
+
+Consider the small basic block in the ﬁrst column of ta-
+ble 1. Suppose that in this block only registers r2..r4 are
+available for use while all other registers contain values
+whose live ranges begin before and end after this basic block.
+
+32-Bit Only
+
+Mixed Mode
+(Aggressive)
+
+Mixed Mode
+(Integrated)
+
+ld r2,[sp,0] ld_s r2,[sp,0] ld_s r2,[sp,0]
+ld r3,[sp,4] ld_s r3,[sp,4] ld_s r3,[sp,4]
+
+mov r4,r1
+
+ld r4,[sp,8] ld_s r1,[sp,8] ld r4,[sp,8]
+add r2,r2,r3 add_s r2,r2,r3 add_s r2,r2,r3
+asl r2,r2,2
+sub r2,r2,r4 sub_s r2,r2,r1 sub r2,r2,r4
+
+asl_s r2,r2,2
+
+asl_s r2,r2,2
+
+24 bytes
+
+mov r1,r4
+20 bytes
+
+Table 1. Three versions of a sample basic block: 32-bit in-
+structions only; aggressive use of 16-bit instructions; inte-
+grated instruction selection and register allocation avoiding
+register-to-register data movement.
+
+Of these, r2 and r3 can be accessed by 16-bit instructions
+whereas r4 cannot. We give three different versions of the
+basic block. The ﬁrst one uses 32-bit instructions only (left
+column), this results in a code size of 6 × 4 = 24 bytes. For
+the second version (second column), we instructed the code
+generator to use 16-bit instructions – denoted by the suf-
+ﬁx “_s” – wherever possible. This clearly leads to a prob-
+lem: since these compact instructions can only operate on
+a limited set of registers, the register allocator has to insert
+additional move instructions to “spill” the value currently
+stored in r1, which is 16-bit accessible, to r4 so it can use
+three 16-bit accessible registers, r1..r3. The aggressive use
+of compact instructions has increased the overall instruc-
+tion count and the resulting code size is 6 × 2 + 2 × 4 = 20
+bytes. A better solution is presented in the third version of
+the basic block (third column). In that version, only some
+of the instructions have been replaced by their 16-bit coun-
+terparts. Those instructions operating on register r4 remain
+32-bit instructions. As a result “spilling” from the limited
+16-bit accessible registers into the general-purpose registers
+is avoided and, thus, the instruction count remains constant
+while the code size is further reduced to 4 × 2 + 2 × 4 = 16
+bytes. This example demonstrates that instruction selection
+and register allocation need to be considered simultaneously
+to avoid excessive register trafﬁc and to fully exploit the ben-
+eﬁts of a compact ISA.
+
+1.2 Contributions
+
+1. The development of an integrated instruction selection
+and register allocation framework targeting freely inter-
+leavable compact and standard RISC instructions for code
+size reduction,
+
+2. the investigation of an opportunistic instruction selection
+procedure that obeys the stricter register constraints of
+the compact instruction format, but does not actively seek
+to maximise the usage of compact instructions,
+
+3. the development of a more sophisticated instruction se-
+lection scheme that uses feedback information obtained
+from standard instruction selection and register allocation
+for improved compact code generation,
+
+4. a demonstration of the practical
+
+integration of both
+
+schemes in a CoSy-based compiler targeting the ARCompact
+ISA,
+
+5. an extensive evaluation against the industry standard
+EEMBC benchmark suite and a cycle-accurate simulator
+of the ARC750D processor, and
+
+16 bytes
+
+6. a comparison with GCC 4.2.1 targeting the ARCompact
+
+ISA on the same platform.
+
+1.3 Overview
+
+The remainder of this paper is structured as follows. In Sec-
+tion 2 we provide background information on the ARCompact
+
+1.1 Motivating Example
+
+Among the contributions of this paper are:
+
+181instruction set architecture and its particular ability of freeform
+mixing of 16- and 32-bit instructions without a mode switch
+as well as on the CoSy compiler development system [1].
+This is followed by an in-depth description of our code
+generation approach in Section 3 where we develop two
+schemes for the selection of compact instructions under reg-
+ister constraints. In Section 4 we evaluate the effectiveness
+of our methodology and present extensive benchmarking re-
+sults. The context of related work is established in section 5,
+before we summarise and conclude in section 6.
+
+2. Background
+In this section, we give an overview of the ARC750D pro-
+cessor and its instruction set architecture. This is followed
+by a brief presentation of those features of the CoSy com-
+piler construction framework that are relevant to the work
+presented in this paper.
+
+2.1 ARC750D and the ARCompact ISA
+
+The ARC750D processor [2] is a conﬁgurable implemen-
+tation of the ARCompact instruction-set architecture with
+the particular goal of creating an energy-efﬁcient and easily
+extensible embedded microprocessor. ARCompact is a 32-
+bit RISC ISA supporting both 32-bit-wide and 16-bit-wide
+instructions. Both types of instructions can be intermixed
+freely without additional overhead as no mode-switch or de-
+compression stage is required. A 32-bit memory value may
+contain either one 32-bit instruction, two 16-bit instructions
+or even a combination of half a 32-bit instruction and one
+16-bit instruction. Thus, the frequent use of 16-bit instruc-
+tions could reduce code size up to a theoretical maximum
+of 50%. In practice, this value is lower as not all instruc-
+tions have a compact counterpart. ARC claim up to 40% code
+size reduction on their web site [2]. Obviously, compact in-
+structions have certain limitations when compared to their
+32-bit counterparts: in most cases, they only have access to
+a limited subset of the 32 core registers, namely the eight
+registers r0..r3 (callee-saved) and r12..r15 (caller-saved); the
+range for immediate operands is generally limited; and ﬂags,
+such as carry, overﬂow, zero-result etc. are not set, to name a
+few. In table 2, we give examples of a few of the 32-bit add
+and the corresponding 16-bit add_s instructions to illustrate
+these limitations.
+
+2.2 CoSy Compiler Construction Framework
+
+Having seen the opportunities for code size reduction pro-
+vided by 16-bit instructions, we will now describe the CoSy
+compiler framework [1] that has been used in the implemen-
+tation of the proposed compact code generator.
+
+CoSy provides a multi-pass compiler architecture where
+the compiler back-end operates on a mid-level intermediate
+representation (MIR), produced by the compiler’s front- and
+mid-end. The code generator executes three principal passes,
+namely Match/Cover, Register Allocation and Code Emis-
+
+Instruction
+
+dest
+
+src1
+
+src2
+
+add a,b,c
+add a,b,u6
+add a,b,limm
+
+any reg
+any reg
+any reg
+
+any reg
+any reg
+any reg
+
+any reg
+6-bit unsig. imm.
+long immediate
+
+add_s a,b,c
+16bit reg
+add_s a,b,u3
+16bit reg
+add_s a,a,limm 16bit reg
+
+16bit reg
+16bit reg
+(dest)
+
+16bit reg
+3-bit unsig. imm.
+long immediate
+
+Table 2. Comparison of 32-bit and 16-bit formats for the
+add dest,src1,src2 instruction.
+
+sion. The Match/Cover pass computes a cost minimal cov-
+ering of the MIR given the usual tree-pattern rewrite rules
+mapping IR nodes onto processor instructions. Each rule is
+associated with a – possibly dynamic – cost. According to
+the selected rules the MIR is transformed into a directed
+acyclic graph (DAG) low-level intermediate representation
+(LIR) that is annotated with pointers to the original MIR
+nodes. Later passes maintain and extend these annotations
+such that the user is able to trace back the creation point of
+any LIR node. We make use of this feature in Section 3.2 to
+implement feedback-guided instruction selection. A graph
+colouring-based register allocator maps pseudo-registers to
+actual registers or memory and is responsible for inserting
+spill code. The register allocator provided with CoSy can
+handle several overlapping register classes and we use this
+feature for the implementation of separate, but non-disjoint
+registers classes for 16-bit accessible and globally accessible
+registers, respectively. Finally, assembly code is emitted for
+each LIR node using code emission rules for each type of
+LIR node.
+
+2.3 Naïve ARCompact Code Generation using CoSy
+
+The obvious approach to add support for 16-bit instruc-
+tions to the CoSy compiler framework would be to add new
+tree-pattern rules for this class of instructions with lower
+costs than their 32-bit counterparts. The compiler would
+then select 16-bit instructions wherever possible and we
+would hope that this measure has the desired effect on code
+size. Such a naïve scheme, however, has serious shortcom-
+ings that are due to register allocation occurring after the
+Match/Cover pass and register access constraints of 16-bit
+instructions as described above. By using 16-bit instruc-
+tions almost exclusively, we effectively reduce the size of
+the available register set to just a small subset of the general-
+purpose registers available to 32-bit instructions. This in-
+evitably leads to higher register pressure and results in an
+increased number of register-to-register data moves or even
+spills to memory. Thus, even though we might be able to
+reduce code size initially, these additional instructions will
+negate the beneﬁts from using a compact instruction format.
+In addition, extra data moves and spills will most certainly
+degrade performance and are therefore highly undesirable.
+
+182Figure 1. Typical distribution of dynamic register accesses.
+
+3. Methodology
+From our discussion in Section 2.3 it becomes evident that
+we need to balance the use of 16-bit instructions against the
+increase in register pressure resulting from their restricted
+register addressing capabilities. Keeping in mind our goal of
+reducing code size as much as possible, we therefore want to
+maximise the use of 16-bit instructions while minimising the
+amount of move and spill instructions inserted at the register
+allocation stage solely because of the use of 16-bit instruc-
+tions. In the following sections, we propose two methods to
+achieve this. The ﬁrst one, the opportunistic use of 16-bit in-
+structions, is implemented purely at the code emission stage
+and requires no further changes to the compiler framework.
+The second one, the selective use of 16-bit instructions di-
+rected by MIR annotations using code generator feedback,
+is more involved but less dependent on speciﬁc traits of the
+ARCompact ISA and expected to produce better results.
+
+3.1 Opportunistic Instruction Selection
+
+Our ﬁrst compact instruction selection scheme is motivated
+by the non-uniform distribution of register accesses that
+favours registers with lower ID over those with higher ID.
+An example distribution is shown in Figure 1. It is clearly
+visible that the lower part of the register set is accessed much
+more frequently than the upper part. This is partly due to the
+fact that the standard graph colouring register allocator al-
+ways selects the register with the lowest ID of the set of
+possible registers for a value. In addition, calling conven-
+tions dictate that arguments are passed in registers r0..r7 and
+the result is returned in register r0. Finally, immediate val-
+ues tend to be small and often fall within the limited bounds
+16-bit instructions can operate on.
+
+We exploit the fact that 16-bit accessible registers are al-
+ready frequently used in standard 32-bit code and construct
+an opportunistic instruction selector that does not aim to
+speciﬁcally identify compact instructions in the match/cover
+stage, but delays this decision until after standard 32-bit in-
+struction selection and register allocation. Only at the code
+emission stage do we check if an instruction that possesses
+a 16-bit counterpart incidentally satisﬁes the stricter regis-
+ter constraints of that compact instruction. If this is the case
+
+Figure 2. Sequence of stages of the opportunistic scheme
+for mixed-mode instruction selection.
+we emit a short 16-bit instruction, otherwise we emit a stan-
+dard 32-bit instruction. In either case, we leave the register
+allocation intact as only the type of instruction is affected.
+Figure 2 summarises this approach schematically. Certainly,
+this approach will only work because of the coincidental
+match between frequently used registers and those registers
+accessible by 16-bit ARCompact instructions. Still, this op-
+portunistic scheme avoids the main drawback of the naïve
+solution from Section 2.2, namely the introduction of addi-
+tional register moves and spilling. In addition, this compact
+code generation scheme has low implementation complexity
+and only requires local changes to the code emission pass.
+
+3.2 Feedback-Guided Instruction Selection
+
+The opportunistic instruction selection scheme presented in
+the previous section has a number of shortcomings. First,
+we rely on the coincidence that standard graph colouring re-
+sults in code that frequently satisﬁes the stricter register con-
+straints of the 16-bit ARCompact instructions. Other archi-
+tectures may embed registers accessible by short instructions
+elsewhere in the register set and our simple opportunistic ap-
+proach will become less effective. Second, it seems concep-
+tually unsound that 16-bit instructions are handled outside
+the cost framework of the match/cover stage and defy stan-
+dard instruction selection and register allocation. For this
+reason, it appears likely that we may miss further opportuni-
+ties for the use of 16-bit instructions.
+
+We therefore propose an improved approach based on
+code generator feedback, which is illustrated in Figure 3. In
+summary, we run two iterations over the match/cover and
+register allocation stages. The purpose of the ﬁrst iteration
+is to attempt aggressive 16-bit code generation including in-
+struction selection and register allocation. At the end of this
+ﬁrst iteration feedback is gathered and made available to the
+second iteration of code generation. During the second code
+generation stage the feedback is then used to determine and
+annotate register pressure points in the MIR where 16-bit in-
+structions should be avoided. This allows for the feedback-
+guided, selective use of 16-bit instructions in the second it-
+eration and, thus, avoids the introduction of register pressure
+related register-to-register move operations.
+
+!"#"$"%"&"'"(")"*"!+"!!"!#"!$"!%"!&"!'"!("!)"!*"#+"#!"##"#$"#%"#&"#'"#("#)"#*"$+"$!"$#"$$"Register Accesses!Registers!Match / Cover32-bit patterns onlyRegister AllocationCode Emission32-bit/16-bit instructionsMIRLIRLIRASM183tion node it relates to. This in turn allows us to locate
+the MIR node that gave rise to it using the MIR-LIR
+links inserted at the match/cover stage (see Section 2.2).
+We can then annotate this MIR node with an additional
+“no 16-bit” ﬂag indicating that the node should not be
+covered with a 16-bit instruction rule so as to avoid ad-
+ditional move or spill instructions. Finally, the LIR pro-
+duced in this iteration is discarded.
+
+II. Feedback-guided Code Generation.
+
+1. Match/Cover. In the second iteration, the match/cover
+stage uses MIR annotations to selectively disable the
+use of 16-bit instruction rules for nodes ﬂagged in
+the previous IR annotation stage. This is achieved by
+specifying special CONDITION clauses available in the
+code generator description language that should hold
+for rules to be applied.
+
+2. Register Allocation. We expect that the register allo-
+cator will insert signiﬁcantly fewer, if any, additional
+moves and spills caused by 16-bit instructions in this
+second iteration. While it is possible that new moves
+or spills will appear in different places, this is unlikely
+since most of the register pressure actually results from
+temporary variables that have short live ranges within a
+basic block.
+
+3. Code Emission. In this stage, we perform standard
+code emission targeting 16- and 32-bit rules. As before
+in the opportunistic scheme, we may ﬁnd that even for
+some 32-bit instruction nodes marked with the “no 16-
+bit” ﬂag the stricter register constraints for the use with
+16-bit instructions are incidentally satisﬁed. Thus, we
+additionally employ the opportunistic scheme and use
+16-bit instructions wherever possible as doing so does
+not incur any extra cost.
+
+For the example shown in Table 1 we would initially
+generate the code in the second column, however, without
+actually emitting this code (see Figure 4). Next, we would
+identify the two inserted mov instructions as ones that have
+been introduced by the register allocator to free space in the
+16-bit accessible register range for the ld_s r1,[sp,8]
+and sub_s r2,r2,r1 instructions, respectively. We mark
+these two short instructions with the “no 16-bit” ﬂag, before
+entering the actual feedback-guided code generation stage.
+When we encounter the two instructions again, we check
+for the “no 16-bit” ﬂag and decide not to emit compact
+instructions, but to resort to their standard 32-bit versions.
+Finally, after the subsequent run of the register allocator the
+shorter code sequence shown in the third column of Table 1
+is emitted.
+
+It is important to note that although we are using feed-
+back to guide instruction selection in our compact code gen-
+eration methodology, this feedback information is generated
+statically within the compiler and unlike [10, 11, 12] does
+not require any proﬁling.
+
+Figure 3. Feedback-based approach for mixed-mode in-
+struction selection.
+
+In the following paragraphs we explain the two phases –
+IR Annotation and Feedback-guided Code Generation – in
+detail:
+
+I. IR Annotation.
+
+1. Match/Cover. In contrast
+
+to the opportunistic ap-
+proach, we add all 16-bit instructions as separate tree-
+pattern matching rules to the match/cover stage with
+costs lower than those of the corresponding 32-bit in-
+structions, i.e. we use both 16- and 32-bit rules with a
+preference for the 16-bit ones due to their lower cost.
+
+2. Register Allocation. The aggressive use of 16-bit in-
+structions will most likely introduce a large number of
+additional register moves and spills during register al-
+location. When such additional instructions are inserted
+into the LIR, the register allocator inserts backpointers
+to the MIR nodes that “caused” them. For example, sup-
+pose that one of the operands for a 16-bit add instruc-
+tion is originally located in a register that is not 16-bit
+accessible. In this case, the register allocator will in-
+sert an additional register move operation to place the
+value in a register accessible by short instructions. This
+may result in more move operations to be inserted to
+free the temporary space in the 16-bit accessible reg-
+ister set. All of these move operations will be inserted
+before the actual add instruction node and links will
+be set up pointing to the newly created auxiliary move
+nodes. After register allocation, we can then trace back
+exactly which MIR nodes were at the origin of addi-
+tional moves or spills.
+
+3. MIR Annotation. In this pass we iterate over all LIR
+nodes and identify those moves and spills that were di-
+rectly caused by 16-bit instructions based on a number
+of simple tree patterns. Whenever such a node is found,
+we use the backpointer inserted during the previous reg-
+ister allocation pass and determine the 16-bit instruc-
+
+Match / Cover32-bit patterns onlyRegister AllocationCode Emission32-bit/16-bit instructionsMIRMIR & LIRASMMIR & LIRMIR Annotationselectively deactivate 16-bitAnnotated MIRLIRLIR184Figure 4. Feedback-guided compact code generation for the example in Table 1.
+
+4. Empirical Evaluation
+We have extensively evaluated our integrated code genera-
+tion approach and in this section we describe our experimen-
+tal setup and methodology before we present and discuss our
+results.
+
+4.1 Experimental Setup and Methodology
+
+We have evaluated our compact code generation approach
+against the EEMBC 1.1 benchmark suite [7] that comprises
+applications from the automotive, consumer, networking, of-
+ﬁce and telecom domains. All codes have been built with
+our highly optimising compiler based on the commercial
+CoSy compiler development system [1]. Our main interest
+has been on code size, therefore we have measured code size,
+i.e. the total size of the .text segments of all object ﬁles
+forming a single benchmark (except for the benchmark har-
+ness), using the UNIX tool size. In addition, we have mea-
+sured the performance impact resulting from our code gener-
+ation methodology using a veriﬁed, cycle-accurate simulator
+of the ARC750D processor. Table 3 lists the conﬁguration
+details of our target processor.
+
+Finally, we have also compiled the full set of benchmarks
+with the ARC port of the GCC 4.2.1 compiler with full op-
+timisation and mixed code generation enabled (’-mA7 -O3
+-mmixed-code’) in order to compare the beneﬁts of exploit-
+ing the compact instruction format of the ARCompact ISA
+with GCC to our approach.
+
+Throughout this section, plain 32-bit code (featuring 32-
+bit instructions exclusively) serves as the baseline. This code
+is generated by our CoSy-based compiler for the discussion
+of our compact code generation schemes, and by GCC for the
+evaluation of GCC’s approach so that relative improvements
+
+Core
+Pipeline
+Execution Order
+Branch Prediction
+ISA
+Floating-Point
+Memory System
+L1 Cache
+
+Instruction
+Data
+L2 Cache
+Bus Width/Latency/Clock Divisor
+Simulation
+Simulator
+Options
+I/O & System Calls
+
+ARC750D
+
+7-stage (interlocked)
+
+In-Order
+
+Yes
+
+ARCompact
+Hardware
+
+8k/2-way associative
+8k/2-way associative
+
+None
+
+32-bit/16 cycles/2
+
+Full-system, cycle-accurate
+
+Default
+Emulated
+
+Table 3. Conﬁguration of the ARC750D simulator.
+
+due to mixed-mode code generation become comparable for
+both compilers.
+
+4.2 Code Size
+
+We initially discuss code size reduction due to the selection
+of compact instructions as this has been the primary moti-
+vation for our work. Our overall code size results are sum-
+marised in the diagram shown in Figure 5. For each of the
+EEMBC benchmarks from the automotive, consumer, net-
+working, ofﬁce and telecommunication domains we present
+three results relating to the percentages of code size im-
+provements resulting from (a) our opportunistic scheme, (b)
+our feedback-guided instruction selection scheme, and (c)
+
+ld  v2,xld  v3,yld  v4,zadd v5,v2,v3asl v6,v5,2sub v7,v6,v4ld_s  v2,[sp,0]ld_s  v3,[sp,4]ld_s  v4,[sp,8]add_s v5,v2,v3asl_s v6,v5,2sub_s v7,v6,v4ld_s  r2,[sp,0]ld_s  r3,[sp,4]mov   r4,r1ld_s  r1,[sp,8]add_s r2,r2,r3asl_s r2,r2,2sub_s r2,r2,r1mov   r1,r4No 16-bitNo 16-bitld  v2,xld  v3,yld  v4,zadd v5,v2,v3asl v6,v5,2sub v7,v6,v4No 16-bitNo 16-bitld_s  v2,[sp,0]ld_s  v3,[sp,4]ld    v4,[sp,8]add_s v5,v2,v3asl_s v6,v5,2sub   v7,v6,v4ld_s  r2,[sp,0]ld_s  r3,[sp,4]ld    r4,[sp,8]add_s r2,r2,v3asl_s r2,r2,2sub   r2,r2,r4ld_s  r2,[sp,0]ld_s  r3,[sp,4]ld    r4,[sp,8]add_s r2,r2,v3asl_s r2,r2,2sub   r2,r2,r4Match/CoverRegister Allocation & MIR AnnotationMIRMatch/Cover &Discard MIRRegister AllocationCode EmissionMIRMIRLIRLIRLIRAnnotated MIRAnnotated MIRMIR AnnotationFeedback Guided Code GenerationvX ... Virtual RegisterrX ... Physical Register185Figure 5. Code size improvements due to compact code generation for the EEMBC 1.1 benchmarks (baseline: 32-bit only).
+
+the ARC port of the GCC 4.2.1 compiler. We will discuss the
+GCC results separately in Section 4.4.
+
+For the opportunistic scheme code size reductions be-
+tween 6.4% and 31.4% are achieved, with an average im-
+provement of 15.4%. For individual programs (fft00 and
+autocor00) code size improvements of 30% are reached
+(30.0%) or exceeded (31.4%). This result is slightly surpris-
+ing given that the opportunistic scheme does not actively
+seek to maximise the use of 16-bit instructions, but only
+identiﬁes and converts 32-bit instructions that already satisfy
+the stricter register constraints of the corresponding 16-bit
+instructions. Only 6 out of 32 applications fail to deliver code
+size reductions of more than 10% for this simple scheme,
+while 14 benchmarks are improved by more than 15%. This
+suggests that our initial assumption, namely that in standard
+32-bit code most register trafﬁc is already handled in 16-
+bit accessible registers, holds in general (see Figure 1). Any
+scheme trying to improve on this would need to identify fur-
+ther opportunities among the few remaining instructions that
+operate on non-16-bit accessible registers whilst the 16-bit
+accessible registers are not fully utilised.
+
+With this information it is not surprising that our feedback-
+guided instruction selection scheme performs only slightly
+better than the simpler opportunistic scheme. We observe
+that although the average improvement (16.7%) is not much
+higher than for the simple scheme (15.4%) feedback-guided
+instruction selection provides more consistent improvements
+across the range of benchmarks and reduces the standard
+deviation from the mean from 6.45% to 5.86%. In partic-
+
+ular, our more advanced scheme produces denser code for
+benchmarks such as bitmnp01, pntrch01, rgbcmy01,
+rgbyiq01 and viterb00 where the simple scheme does
+not perform too well. Still, both schemes perform simi-
+larly on those applications that provide the greatest op-
+portunities for code size reductions (autocor00, fft00,
+tblook01, basefp01).
+
+It is important to note that for both of our compact code
+generation schemes there is not a single case where the code
+size has been increased as this is impossible for either of the
+two algorithms.
+
+ARC claims up to 40% code size reduction for the ex-
+tensive use of compact instructions [2], however, this rep-
+resents a theoretical upper bound only achievable if com-
+pact instructions are used for virtually all operations and all
+live data ﬁts into the small 16-bit accessible register subset.
+In practice, our code generation methodology comes close
+to this theoretical limit for a number of applications (e.g.
+autocor00 and fft00) while for the majority of codes
+we reach about 45% of the hypothetical peak code size sav-
+ings.
+
+4.3 Performance
+
+Next we evaluate the performance impact of our compact
+code generation methodology. A summary of our results is
+shown in the diagram in Figure 6.
+
+Across the range of benchmarks the opportunistic scheme
+reduces the cycle count by 16.6% on average. For individual
+applications (conven00 and viterb00) performance im-
+
+aifftr01aiifft01bitmnp01canrdr01iirflt01pntrch01rspeed01ttsprk01a2time01aifirf01basefp01cacheb01idctrn01matrix01puwmod01tblook01cjpegdjpegrgbcmy01rgbyiq01ospfpktflowroutelookupbezier01dither01rotate01text01autcor00conven00fbital00fft00viterb00average-505101520253035Improvement in Code Size (in %)Feedback-guided selection (avg: 16.7%)Opportunistic selection        (avg: 15.4%)GCC                                  (avg: 2.7%)  automotiveconsumernetofficetelecom186Figure 6. Performance improvements due to compact code generation for the EEMBC 1.1 benchmarks (baseline: 32-bit only).
+
+provements in excess of 30% can be observed. Only 5 out of
+32 applications are improved by less than 10%, whereas 7
+programs are sped up by more than 20%. Not a single pro-
+gram suffers from performance degradation as a result of op-
+portunistic compact code generation.
+
+Similar to the code size evaluation in the previous Sec-
+tion, feedback-guided instruction selection gives a slight
+improvement over the simpler opportunistic scheme. On
+average, performance is improved by 17.7%. Unlike the
+case with code size, feedback-guided instruction selection
+does not perform better across the entire set of applications,
+but there are benchmarks where one of the two schemes
+clearly outperforms the other. For example,
+the oppor-
+tunistic scheme produces faster code for the rotate01,
+conven00, fbittal00 and viterb00 benchmarks
+whereas the feedback-guided scheme takes a lead on the
+bitmnp01, pntrch01, idctrn01, rgbyiq01, ospf
+and autocor00 codes. For a single program (bezier01)
+the feedback-guided scheme results in a negligible perfor-
+mance loss of 1.06%.
+
+We have investigated the origin of the performance gains
+observed in our experiments and found that these largely re-
+sult from improved instruction cache behaviour due to in-
+creased code density of the mixed-mode code. With 8kB
+the size of the level-1 instruction cache in our processor
+is relatively small, but representative for typical low-power
+and low-cost embedded processor cores. Any code size re-
+duction technique will inevitably lead to higher instruction
+
+cache hit rates for any non-trivial application. For the one
+application where we see a minor performance degradation
+we have found that this is caused by an increased number of
+instruction cache conﬂicts. The conﬂicts can be avoided if
+we conﬁgure the ARC750D processor to contain a 4-way as-
+sociative instruction cache rather than the 2-way associative
+cache that has been used in our experiments.
+
+The reason why most of the prior work in this ﬁeld [9,
+10, 11, 12, 16] has reported performance losses or, at best,
+the same level of performance for mixed-mode code is that
+the mode switching overhead associated with the Thumb,
+Thumb-2 and MIPS16e ISAs exceeds the performance gains
+from a reduced number of instruction cache misses. Due to
+the ability to freely interleave compact and standard instruc-
+tions without mode switch the ARCompact ISA does not suf-
+fer this penalty.
+
+4.4 Comparison to GCC
+
+The diagrams in ﬁgures 5 and 6 contain additional data
+points for the ofﬁcial ARC port of the GCC 4.2.1 compiler
+targeting the ARCompact ISA and ARC750D processor.
+
+The comparison of code size improvements when going
+from plain 32-bit code to mixed-mode code reveals that GCC
+performs signiﬁcantly worse than either of our two schemes.
+On average, mixed-mode code generation in the GCC com-
+piler results in a modest 2.7% reduction in code size over the
+32-bit baseline. For two programs the code size reduction ex-
+ceeds 10%, however, for the majority of programs code size
+savings of less than 5% are the norm. The poor performance
+
+aifftr01aiifft01bitmnp01canrdr01iirflt01pntrch01rspeed01ttsprk01a2time01aifirf01basefp01cacheb01idctrn01matrix01puwmod01tblook01cjpegdjpegrgbcmy01rgbyiq01ospfpktflowroutelookupbezier01dither01rotate01text01autcor00conven00fbital00fft00viterb00average-50-40-30-20-10010203040Improvement in Cycle Count (in %)Feedback-guided selection (avg: 17.7%)Opportunistic selection        (avg: 16.6%)GCC                               (avg: -2.08%)  automotivenetconsumerofficetelecom187Publication
+
+Comment
+
+Platform
+
+Compiler
+
+Benchmarks
+
+Code Size Red. Performance Gain
+
+(Name/Number)
+
+(Avg./Range)
+
+(Avg./Range)
+
+(Architecture/ISA)
+Repeated instruction Custom MIPS4000/
+selection, no caches, Modiﬁed MIPS16
+1-cycle mem. access
+
+Proﬁle-guided IS,
+
+StrongARM SA-110/
+
+SimpleScalar
+
+Proﬁle-guided IS,
+code size levels
+ISA not ﬁxed, but
+
+app.-speciﬁc
+
+ARM-Thumb
+
+Intel XScale PXA250
+
+UniCore
+
+(proprietary)
+
+[10, 11]
+
+[9]
+
+[12]
+
+[16]
+
+EXPRESS
+
+Livermore Loops/22
+
+31%-49%
+
+up to -24% (=loss)
+
+38%/
+
+-6%/
+
+XScale GCC 2.9 MediaBench/12
+
+Zephyr/VPO
+
+GCC 3.2.1
+(Post-pass)
+
+MiBench &
+
+MediaBench/4
+
+MediaBench/15
+
+28.2%/
+
+34.5%/
+
+16%/
+
+22.8%-31.9% up to -14.5% (=loss)
+
+up to 42.1% 0% to -49% (=loss)
+
+14%-18%
+
+up to -2% (=loss)
+
+-2.03%/
+
+0%/
+
+Table 4. Comparison to other published results for mixed-mode code generation.
+
+of the GCC compiler is due to the non-integrated instruction
+selection and register allocation stages where 16-bit instruc-
+tions are generated without taking into consideration the in-
+creased register pressure on the restricted, 16-bit accessible
+register subset.
+
+The performance results for the GCC compiler shown in
+Figure 6 are even more disappointing. On average, mixed-
+mode applications generated by GCC perform 2.08% worse
+than their 32-bit counterparts. 13 out of 32 programs suffer
+from performance degradation with individual benchmarks
+(aifirf01) taking 46.1% more cycles to execute. At the
+same time the possible performance gains that can be ob-
+served for the remaining programs are limited and do not
+come close to those resulting from our proposed techniques.
+For only two programs (ttsprk01 and rgbcmy01) GCC
+delivers higher speed improvements than either of our two
+schemes. Overall, we feel the very modest code size im-
+provements achieved by GCC do not justify the potentially
+large drop in performance. This may present a serious ob-
+stacle to the widespread adoption of mixed-mode GCC code
+generation by code size and performance aware users.
+
+5. Related Work
+Compact instruction sets are supported by a number of com-
+mercial embedded processors and code size aware compila-
+tion techniques targeting these short instruction formats have
+found signiﬁcant interest in the scientiﬁc community [9,
+10, 11, 12, 16]. All of these papers address mixed mode
+code generation where there is an overhead associated with
+switching between compact and standard instruction sets. In
+this paper, however, we are concerned with an ISA that al-
+lows freeform mixing of 16- and 32-bit instructions and to
+the best of our knowledge this problem has not yet been ad-
+dressed in the academic literature.
+
+A direct comparison of our results to those published
+elsewhere is difﬁcult due to different choices of benchmarks,
+compiler frameworks and not least instruction set architec-
+tures. Nonetheless, we juxtapose the available results on
+code size reduction and performance impact along with rele-
+vant details relating to the architectures and ISAs, compilers,
+and benchmarks in Table 4.
+
+In [9] a modiﬁed MIPS16 ISA is targeted and a com-
+piler ﬂow with repeated instruction selection passes is pro-
+posed. After the ﬁrst instruction selection stage targeting a
+generic 3-address ISA a proﬁtability analysis is performed
+that guides the second instruction selection stage in its se-
+lection of compact instructions. In a ﬁnal step register alloca-
+tion takes place. This work is similar to our approach in that
+compiler feedback is used to improve compact code genera-
+tion, however, the main difference is that register allocation
+is not taken into account and, as a consequence, excessive
+spilling may occur. The single-cycle memory access model,
+however, almost eliminates the spilling cost. This and the
+trivial Livermore loops benchmarks may lead to overly opti-
+mistic performance results, which still show an overall slow-
+down. The reported code size reduction, however, is impres-
+sive, but requires further evaluation on more representative
+benchmarks.
+
+Feedback information is used in [10, 11] for the selec-
+tion of ARM and Thumb instructions. Frequently executed
+functions are identiﬁed via proﬁling before a heuristic based
+on expected performance and relative code size is used to
+choose between 32-bit ARM and 16-bit Thumb instructions.
+In contrast, our approach does not require this expensive pro-
+ﬁling stage and operates on purely static information avail-
+able in the compiler. Overall, code size reduction is good,
+but the higher code density does not translate to performance
+gains resulting from improved instruction cache behaviour.
+Instruction set assignment is determined on a per-basic-
+block basis in [12]. This requires a proﬁle-guided control
+ﬂow analysis to determine the program points where the
+processor’s execution mode should be switched. An effort
+level is chosen depending on a code size budget set by the
+user. In order to avoid excessive mode switching overhead
+a detailed proﬁtability analysis that estimates the cost and
+beneﬁt of using different instruction sets for different parts
+of a given program is required. As a secondary goal the
+impact of using a compact instruction format on the worst-
+case execution time is analysed. Again, we do not rely on
+proﬁling, but employ static feedback information within the
+compiler. While the overall code size reduction is good for
+four small applications and the most aggressive code size
+
+188budget, the performance penalty can be drastic. For more
+relaxed settings, the performance loss can be compensated,
+but at the same time code size savings drop sharply.
+
+A slightly unconventional approach to compact code gen-
+eration is taken in [16] where mixed mode code generation
+is performed as a post pass to the actual compiler. In addi-
+tion, the semantics of the chosen compact ISA is changed in
+order to efﬁciently encode mode changing operations. This
+results in good code size reductions without incurring any
+signiﬁcant performance loss. In contrast, we target a ﬁxed
+ISA requiring no architectural changes whilst reducing code
+size and, at the same time, improving performance across the
+entire range of benchmarks.
+
+In summary, those techniques in [9, 10, 11, 12, 16] that
+achieve higher code size reductions than our approach result
+in signiﬁcant performance losses. For [16] the code size
+gains are comparable, but we generate faster code and do
+not rely on hardware modiﬁcations.
+
+The method in patent [8] describes a compilation tech-
+nique targeting compact instructions of the ARCompact in-
+struction set where a block of code is compiled for both stan-
+dard 32-bit and compact 16-bit instruction sets. Eventually,
+whichever version is “better” gets chosen. In this scheme
+compact code generation is aggressive, however, whenever
+spilling occurs a “clean up” operation is performed to off-
+load memory references to the general-purpose register set.
+This scheme is largely identical to the aggressive scheme
+shown in Table 1 with all its disadvantages.
+
+MIPS and ARM state code size savings up to 35% and
+26%, respectively, for their microMIPS [13] and Thumb-
+2 [14] ISAs while performance drops by 2%. A direct com-
+parison of the Thumb, Thumb-2, MIPS16e and ARCompact
+ISAs is given in [15]. Design trade-offs for microprocessors
+with variable length instructions are subject of [5] and gen-
+eral code-size reduction methods are surveyed in [4].
+
+6. Summary and Conclusions
+We have developed an integrated instruction selection and
+register allocation methodology for a compact ISA with
+freely interleavable 16- and 32-bit instructions. We have pre-
+sented a simple, yet powerful opportunistic instruction selec-
+tion scheme and a more general, feedback-guided scheme
+that is more portable and does not, unlike the ﬁrst scheme,
+depend on a particular distribution of register accesses. Ex-
+perimental results based on our highly optimising CoSy
+compiler targeting the ARC750D processor demonstrate that
+an average code size reduction of 16.7% can be achieved
+across the industry standard EEMBC benchmarks whilst at
+the same time improving performance by on average 17.7%.
+This result is encouraging and shows that code size reduc-
+tion and optimisation for performance are not mutually ex-
+clusive, but can be obtained simultaneously.
+
+Future work will include the power/energy evaluation of
+
+our compact code generation methodology.
+
+References
+[1] ACE Associated Computer Experts bv. CoSy compiler devel-
+opment system. http://www.ace.nl, retrieved 12 Au-
+gust 2009.
+
+[2] ARC
+
+International.
+
+ARC750D
+
+Core.
+
+http://www.arc.com, retrieved 12 August 2009.
+
+[3] ARM Ltd. ARM Cortex-M3. http://www.arm.com,
+
+retrieved 12 August 2009.
+
+[4] Árpád Beszédes, Rudolf Ferenc, Tibor Gyimóthy, André Do-
+lenc, and Karsisto, Konsta. Survey of code-size reduction
+methods. ACM Computing Surveys, Vol. 35, No. 3, pp. 223–
+267, 2003.
+
+[5] John Bunda, Don Fussell, W.C. Athas, and Roy Jenevein.
+16-bit vs. 32-bit instructions for pipelined microprocessors.
+SIGARCH Computer Architecture News, Vol. 21, No. 2, pp.
+237–246, 1993.
+
+[6] Dave Bursky.
+
+A Flash
+http://electronicdesign.com, ED Online
+5267, July 2003.
+
+Nonvolatile Memory: More Than
+design,
+ID
+
+electronic
+
+In The
+
+Pan.
+
+In
+
+[7] The Embedded Microprocessor Benchmark Consortium.
+EEMBC Benchmark Suite. http://www.eembc.org, re-
+trieved 12 August 2009.
+
+[8] Richard A. Fuhler, Thomas J. Pennello, Michael Lee Jalkut,
+and Peter Warnes. Method and Apparatus for Compiling
+Instructions for a Data Processor. United States Patent US
+7278137B1, Oct. 2, 2007.
+
+[9] A. Halambi, A. Shrivastava, P. Biswas, N. Dutt, A. Nicolau.
+An Efﬁcient Compiler Technique for Code Size Reduction
+Using Reduced Bit-Width ISAs. In Proceedings of the Con-
+ference on Design, Automation and Test in Europe (DATE), p.
+402, 2002.
+
+[10] Arvind Krishnaswamy and Rajiv Gupta. Proﬁle guided se-
+lection of ARM and Thumb instructions. ACM SIGPLAN
+Notices, Vol. 32, No. 7, pp. 56–64, 2002.
+
+[11] Arvind Krishnaswamy and Rajiv Gupta. Mixed-width instruc-
+tion sets. Communications of the ACM, Vol. 46, No. 8, pp.
+47–52, 2003.
+
+[12] Sheayun Lee, Jaejin Lee, Chang Park, Sang Min. Selective
+code transformation for dual instruction set processors. ACM
+Transactions on Embedded Computing Systems, Vol. 6, No.
+2, 2007.
+
+[13] MIPS Technologies. microMIPS Instruction Set Architecture.
+
+MD00690, Revision 01.00, October 2009.
+
+[14] Richard Phelan. Improving ARM Code Density and Perfor-
+mance – New Thumb Extensions to the ARM Architecture.
+ARM Thumb-2 Core Technology Whitepaper, June 2003.
+
+[15] Jim Turley. Code compression under the microscope. In Em-
+bedded Systems Design, http://www.embedded.com,
+retrieved 12 August 2009.
+
+[16] Liu Xianhua, Zhang Jiyu, Cheng Xu. Efﬁcient code size
+In Proceedings of the
+reduction without performance loss.
+ACM Symposium on Applied Computing (SAC), pp. 666–672,
+2007.
+
+189

@@ -1,0 +1,1903 @@
+Privacy-Preserving Remote Diagnostics
+
+Justin Brickell
+
+Donald E. Porter
+
+Vitaly Shmatikov
+
+Emmett Witchel
+
+The University of Texas at Austin
+
+{jlbrick,porterde,shmat,witchel}@cs.utexas.edu
+
+ABSTRACT
+We present an efﬁcient protocol for privacy-preserving evaluation
+of diagnostic programs, represented as binary decision trees or
+branching programs. The protocol applies a branching diagnos-
+tic program with classiﬁcation labels in the leaves to the user’s
+attribute vector. The user learns only the label assigned by the
+program to his vector; the diagnostic program itself remains secret.
+The program’s owner does not learn anything. Our construc-
+tion is signiﬁcantly more efﬁcient than those obtained by direct
+application of generic secure multi-party computation techniques.
+We use our protocol to implement a privacy-preserving version
+of the Clarify system for software fault diagnosis, and demonstrate
+that its performance is acceptable for many practical scenarios.
+
+Categories and Subject Descriptors
+E.3 [Data]: Data Encryption; I.2.1 [Artiﬁcial Intelligence]: Ap-
+plications and Expert Systems
+
+General Terms
+Algorithms, Security, Performance
+
+Keywords
+Privacy, Data Mining, Diagnostics, Branching Programs
+
+1.
+
+INTRODUCTION
+
+Diagnostic programs, typically represented as decision trees or
+binary branching programs, are the cornerstone of expert systems
+and data analysis tools. Learning and evaluating diagnostic pro-
+grams which classify data on the basis of certain features are among
+the most fundamental data mining tasks.
+
+Evaluation of a diagnostic program on a remote user’s data of-
+ten presents privacy risks to both the user and the program’s owner.
+The program’s owner may not want the user to learn the entire con-
+tents of the diagnostic program, while the user may not want to
+reveal his local data to the program’s owner. For example, con-
+sider a medical expert system, where the diagnostic program is the
+
+Permission to make digital or hard copies of all or part of this work for
+personal or classroom use is granted without fee provided that copies are
+not made or distributed for proﬁt or commercial advantage and that copies
+bear this notice and the full citation on the ﬁrst page. To copy otherwise, to
+republish, to post on servers or to redistribute to lists, requires prior speciﬁc
+permission and/or a fee.
+CCS’07, October 29–November 2, 2007, Alexandria, Virginia, USA.
+Copyright 2007 ACM 978-1-59593-703-2/07/0010...$5.00.
+
+realization of a substantial investment, and the data on which the
+program is evaluated contain information about the user’s health.
+
+Another example is remote software fault diagnosis, which is an
+increasingly popular support method for complex applications. The
+details of remote software diagnostic systems differ (see Section 5),
+but there are many commonalities. An application does something
+undesirable (crashes, becomes slow or unresponsive, quits with an
+obscure error message), and the runtime system gathers some data
+about the problem. The software manufacturer uses this informa-
+tion to diagnose the problem, usually by reading a small subset of
+the data. Users are typically required to ship all fault-related data to
+the manufacturer. For example, most users of Microsoft Windows
+have encountered the (in)famous “send error report” button.
+
+The data gathered by the runtime system may contain sensitive
+information, such as passwords and snippets of the user’s docu-
+ments. Many users are not willing to reveal this information to
+the software manufacturer. On the other hand, software manufac-
+turers often view their proprietary diagnostic programs as valuable
+intellectual property. Diagnostic programs may reveal the applica-
+tion’s support history, unpatched security vulnerabilities, and other
+information about the implementation and internal structure of the
+application that the manufacturer may prefer to keep secret.
+
+This paper describes a method for privacy-preserving evaluation
+of diagnostic branching programs. This problem is different from
+privacy-preserving learning of decision trees, which has been the
+subject of much research [1, 4, 22]. We assume that the diagnostic
+program already exists, in the form of a binary decision tree or
+branching program, and investigate how to apply it to the user’s
+data in such a way that the program is not revealed to the user, and
+the user’s data are not revealed to the program’s owner.
+
+Our contributions. We present a practical, provably secure inter-
+active protocol for privacy-preserving evaluation of branching pro-
+grams. The protocol takes place between a Server, in possession
+of a binary branching program T , and a User, in possession of an
+attribute vector v. The User learns c = T (v), the diagnostic label
+that T assigns to v. The Server may or may not learn the label—we
+consider both variants.
+
+Our protocol does not reveal any useful information except the
+outcome of the computation, which is the diagnostic label in this
+case. In particular, the User does not learn how the branching pro-
+gram arrived at the diagnosis, nor which of the User’s attributes
+it considered, nor the topology of the branching program, nor any
+other diagnostic labels that it may contain. The Server, on the other
+hand, learns nothing whatsoever about the User’s local data.
+
+We emphasize the strong privacy properties achieved by our pro-
+tocol. For example, secrecy of the program being evaluated is
+not the standard requirement of secure multi-party computation,
+which usually assumes that the program is public, and only the par-
+
+498ties’ respective inputs are secret. In many of our applications, the
+user should not learn which of his attributes are considered by the
+branching program. If the attribute vector is very large (as is the
+case, for example, in software fault diagnostics, where the attribute
+vector is a record of the user’s runtime environment), achieving
+these security properties efﬁciently is a difﬁcult challenge.
+
+Our branching program evaluation protocol combines in a novel
+way several cryptographic techniques such as homomorphic en-
+cryption, blinding, and Yao’s “garbled circuits” method. Yao’s
+method is used in a somewhat unusual way, not simply as a black-
+box realization of secure circuit evaluation. We exploit the details
+of circuit representation in Yao’s protocol to implement a condi-
+tional oblivious transfer primitive needed by our protocol.
+
+We present a substantial case study, in which we use our method
+to implement a privacy-preserving version of Clarify [17], a system
+for remote diagnosis of software faults. We apply our protocol to
+the decision trees generated by Clarify for several large, real-world
+applications such as gcc and latex, and demonstrate that its per-
+formance is efﬁcient for many practical scenarios.
+
+While there have been many theoretical results in the ﬁeld of
+secure multi-party computation, actual implementations and work-
+ing systems are extremely rare. Experimental evaluation of our
+prototype implementation demonstrates that our protocol performs
+signiﬁcantly better than the generic methods.
+
+The paper is organized as follows. We describe related work
+in Section 2, and our cryptographic toolkit in Section 3. In Sec-
+tion 4, we present our protocol. In Section 5, we apply it to privacy-
+preserving software fault diagnosis, and analyze its performance in
+Section 6. Conclusions are in Section 7.
+
+2. RELATED WORK
+
+This paper follows a long tradition of research in the secure
+multi-party computation (SMC) paradigm. Informally, security of
+a protocol in the SMC paradigm is deﬁned as computational in-
+distinguishability from a simulation of some ideal functionality, in
+which the trusted third party accepts the parties’ inputs and carries
+out the computation. Formal deﬁnitions for various settings can be
+found, for example, in [2, 7, 15].
+
+Any probabilistic polynomial-time multi-party computation,
+represented as a circuit or a binary decision diagram, can be con-
+verted into a “privacy-preserving” one using generic techniques
+of Yao [40] and Goldreich et al. [16]. Generic constructions,
+however,
+tend to be impractical due to their complexity (e.g.,
+see the comparison of our techniques with the generic approach
+in Section 4.5). Recent research has focused on ﬁnding more
+efﬁcient privacy-preserving algorithms for problems such as com-
+putation of approximations [10], auctions [31], set matching and
+intersection [12], surveys [11], and various data mining problems.
+Some SMC research has used branching programs instead of cir-
+cuits as function representation [14,29]. It is still the case, however,
+that when computing f (x, y) securely, f is assumed to be known
+to both parties, while x and y are their private inputs. In our sce-
+nario, we are computing g(y), where g is the private input of the
+ﬁrst party and y is the private input of the second party. This can
+be implemented by making f a generic function evaluator and x a
+description of the particular function g. As we show in Section 4.5,
+this approach does not scale to the size of branching programs that
+arise in real-world applications. Selective private function evalu-
+ation [8] considers evaluation of functions on large datasets, but
+the functions are much simpler than the branching programs con-
+sidered in this paper. To achieve practical efﬁciency, our protocol
+fundamentally relies on the structure of branching programs.
+
+Many papers investigated the problem of privacy-preserving de-
+
+cision tree learning, both in cryptographic [22] and statistical [1, 4]
+settings. Decision tree learning is a machine learning technique for
+building a compact classiﬁer that best represents a set of labeled ex-
+amples. The problem considered in this paper is privacy-preserving
+evaluation of decision trees and branching programs, which is fun-
+damentally different (and complementary) to the problem of tree
+learning. For example, in our protocol the tree is an input, whereas
+in the privacy-preserving learning protocols the tree is the output.
+
+Concurrently and independently of this work, Ishai and Paskin
+presented a protocol for evaluating a branching program P on an
+encrypted input x in such a way that only P (x) is revealed to the
+evaluator [19]. The representation of P must contain only single-
+bit decision nodes and output a single bit. This protocol appears im-
+practical for scenarios such as remote software diagnostics where
+the user’s input contains thousands of 32-bit values.
+
+Crypto-computing [36] considers the problem of a circuit owner
+obliviously evaluating the circuit on encrypted inputs. While in our
+construction the User evaluates an encrypted branching program, in
+the crypto-computing paradigm the Server would perform the com-
+putation on the encrypted attribute vector. It is not clear whether the
+theoretical techniques of [36] lend themselves to a practical imple-
+mentation, and shifting the burden of evaluation to the Server is not
+desirable in practical applications.
+
+Several papers considered problems which are superﬁcially sim-
+ilar to our remote software diagnostics scenario. The Scrash sys-
+tem [5] removes sensitive information from the crash data, thus en-
+abling users who are concerned about privacy to assist in building
+a software crash diagnostic. Scrash requires re-compilation, and
+assumes that users have access to the program’s source code. By
+contrast, we focus on privacy-preserving evaluation of “black-box”
+fault diagnosis programs. Unlike Scrash, our system can be applied
+to commercial software applications, which are compiled without
+symbols and distributed without source code.
+
+The Friends Troubleshooting Network system [18, 38] allows
+participants in a trust network to collaborate in order to diagnose
+software errors. By contrast, we assume that the diagnostic tool is
+controlled by a single party (e.g., the software manufacturer). Fur-
+thermore, our protocol is cryptographically secure.
+
+3. CRYPTOGRAPHIC TOOLS
+
+3.1 Oblivious transfer
+
+Oblivious transfer (OT) is a fundamental cryptographic primi-
+tive [21, 35]. A 1-out-of-2 oblivious transfer, denoted as OT 1
+2 , is
+a protocol between two parties, the Chooser and the Sender. The
+Chooser’s input is the index i ∈ {0, 1}. The Sender’s inputs are
+the values x0, x1. As a result of the protocol, the Chooser learns xi
+(and only xi), while the Sender learns nothing.
+
+In our constructions, we use oblivious transfer as a “black-box”
+primitive, i.e., our constructions do not depend on a particular OT
+In our implementations, we employ the Naor-
+implementation.
+Pinkas constructions for OT 1
+2 re-
+quires one online and one ofﬂine modular exponentiation for the
+sender, and one online and one ofﬂine modular exponentiation for
+the chooser. Amortization techniques of [30] can achieve fewer
+than one exponentiation per oblivious transfer, but reducing the
+number of exponentiations by more than a constant factor requires
+an impractical increase in the communication complexity.
+
+2 [30]. Each instance of OT 1
+
+3.2 Homomorphic encryption
+
+A homomorphic encryption scheme is a semantically secure
+cryptosystem that permits algebraic manipulations on plaintexts
+given their respective ciphertexts. In this paper, we require an en-
+
+cryption scheme with an additively homomorphic property, which
+allows E[x1 + x2] to be computed from E[x1] and E[x2].
+
+In our prototype implementation, we use the Paillier cryptosys-
+tem [34]. This is sufﬁcient when the participants are semi-honest.
+If security against malicious participants is required, the homomor-
+phic encryption scheme needs the additional property of veriﬁa-
+bility: there should exist efﬁcient zero-knowledge proof systems
+which enable a participant to prove certain relationships between
+the encrypted plaintexts and previously committed values (see Sec-
+tion 4.4). Such efﬁcient proof systems are not known for the Paillier
+cryptosystem. In the malicious case, the protocol should be imple-
+mented with a homomorphic, veriﬁable cryptosystem, e.g., the ho-
+momorphic version of the Camenisch-Shoup cryptosystem [6, 20].
+
+3.3 Garbled circuits
+
+Garbled circuits are a fundamental technique in secure multi-
+party computation. Originally proposed by Yao [40], the garbled
+circuits method enables secure constant-round computation of any
+two-party functionality. We only give a brief overview here; a de-
+tailed explanation can be found in [23].
+
+Let C be a boolean circuit which receives two n-bit inputs x =
+x 1  . . . xn  and  y  =  y 1  . . . yn ,  a nd  out put s  bi t  C (x, y )  ∈ {0,  1}.  (If
+t he  c i r cui t  t a ke s  onl y  one  i nput ,  w e  denot e  t he  ot her  i nput  as  ⊥ .)
+Consider Alice and Bob who wish to securely compute C(x, y),
+where x is Alice’s input, y is Bob’s input. Yao’s method transforms
+any C into a secure garbled circuit C (cid:2), which enables computation
+of C(x, y) without revealing x to Bob or y to Alice.
+
+i and w1
+
+For each wire i of the circuit, Alice generates two random wire
+keys w0
+i . These wire keys are used as labels encoding,
+respectively, 0 and 1 on that wire. Now consider a single gate g
+in C, described by some boolean function g : {0, 1} × {0, 1} →
+{0, 1}. Let the two input wires to g be labeled A and B, and let
+the output wire be labeled C. The corresponding wire keys are
+w0
+
+A, w0
+
+A, w1
+B, w0
+The garbled gate g(cid:2)
+
+B, w1
+
+C, w1
+C.
+of circuit C (cid:2)
+
+is deﬁned by a random permuta-
+tion of the following four ciphertexts, where {x}κ is a symmetric-
+key encryption of plaintext x under key κ (see [23] for the proper-
+ties that the encryption scheme must satisfy).
+
+c00 = {{wg(0,0)
+c10 = {{wg(1,0)
+
+C
+
+}
+
+}
+
+C
+
+}
+
+}
+
+w0
+A
+
+w0
+A
+
+w0
+B
+
+w1
+B
+
+c01 = {{wg(0,1)
+c11 = {{wg(1,1)
+
+C
+
+}
+
+}
+
+C
+
+}
+
+}
+
+w1
+A
+
+w1
+A
+
+w0
+B
+
+w1
+B
+
+Alice garbles all gates of the circuit in this manner, and sends the
+entire garbled circuit to Bob.
+
+i
+
+Garbled circuit evaluation proceeds as follows. For each input
+wire i associated with Alice, Alice simply sends to Bob the wire
+key wbA
+encoding Alice’s input bit bA on that wire. This leaks
+no information about the value of bA because the wire keys are
+random. For each input wire j associated with Bob, Alice and Bob
+engage in OT 1
+2 protocol. Alice’s inputs as the sender are the two
+wire keys w0
+j , and Bob’s input as the chooser is his bit bB
+on that wire. As a result of the OT protocol, Bob learns the wire
+key wbB
+j
+
+encoding his input without revealing bB to Alice.
+
+j and w1
+
+Bob evaluates the circuit starting from the gates where he has a
+wire key for each input wire. For each such gate, Bob can decrypt
+exactly one of the four ciphertexts, and learn the key wC encoding
+the value of the gate’s output wire. If the output wire is used as an
+input into another gate, Bob continues the process. This evaluation
+procedure maintains the invariant that, for each circuit wire i, Bob
+learns exactly one wire key wb
+i . This wire key is random and thus
+leaks no information about the bit b it “represents.”
+
+In the standard Yao’s method, Alice provides a mapping for the
+out of each circuit output wire out to 0 and
+
+out and w1
+
+wire keys w0
+
+1, respectively. This allows circuits transformed by Yao’s method
+to be used as “black boxes” which have the same functionality as
+normal circuits, but hide the parties’ respective inputs.
+
+out and w1
+
+out to 0 and 1; instead, we consider w0
+
+In our constructions, we use Yao’s garbled circuits to implement
+secure integer comparison (see Section 3.4). In contrast to the stan-
+dard black-box functionality, Alice does not provide a mapping
+from w0
+out or w1
+out
+to be Bob’s ﬁnal output from evaluating the circuit. Furthermore,
+w0
+out can be arbitrary strings of our choosing rather than
+random strings. Using Yao’s method in this non-standard way al-
+lows us to implement a conditional oblivious transfer, in which
+Bob learns exactly one of two values depending on the output of
+the function encoded by the circuit.
+
+out and w1
+
+Our prototype implementation uses the Fairplay implementation
+of Yao’s method [24] to construct the integer comparison circuits,
+which are described in detail in Section 3.4. We refer to it as the
+YAO subroutine, which, on input of a two-party functionality, pro-
+duces its garbled-circuit implementation.
+
+To achieve security against malicious (as opposed to semi-
+honest) participants, it is necessary to use an implementation of
+Yao’s method which is secure in the malicious model and operates
+on committed inputs [20].
+
+3.4  Privacy-Preserving Offset Integer
+
+Comparison
+
+O ur  pr ot ocol  f or  t he  eva l uat i on  of  br a nchi ng  pr ogr ams  r equi r e s
+a secure sub-protocol for the comparison of integer values. The
+Privacy-Preserving Offset Integer Comparison protocol takes place
+between two parties, Alice and Bob. Bob has an (cid:3)-bit integer x,
+while Alice has (cid:3)-bit integers b and t, and output keys h0
+. At
+the end of the protocol execution, Bob learns h0
+if x−b mod 2(cid:3) <
+t and h1
+otherwise, while Alice learns nothing. We denote this
+functionality as COMPARE(x, b, t, h0, h1). Note that in the special
+case where b = 0, and h0
+are the single bits 0 and 1, this is
+the same as Yao’s millionaires’ problem.
+
+and h1
+
+and h1
+
+This problem is also known as conditional oblivious transfer
+with a “greater than” predicate [3]. We assume that participants
+are computationally bounded, since the encryption scheme used in
+our protocol is only computationally secure.
+In this case, Yao’s
+method is the most efﬁcient currently known approach [3].
+
+Yao’s garbled circuits provide a relatively efﬁcient protocol for
+integer comparison because the circuit needed to compare two (cid:3)-
+bit integers is relatively small. As described in Section 3.3, in our
+protocol the circuit creator does not provide the mappings from
+output-wire keys to actual output-wire bits, so that Bob learns one
+of the two keys, but not the actual result of the comparison.
+
+4.    SECURE EVALUATION OF
+BRANCHING  PROGRAMS
+
+We now describe our protocol for the secure evaluation of binary
+branching programs. The protocol is executed between a Server,
+in possession of a branching program (formally deﬁned in Sec-
+tion 4.1), and a User, in possession of an attribute vector. Let k
+be the number of nodes in the branching program, and n be the
+number of attributes.
+
+In most practical scenarios, n is signiﬁcantly larger than k; our
+In particular, the size of the
+
+protocol is optimized for this case.
+securely transformed branching program is independent of n.
+
+4.1 Branching programs
+
+In this section, we formally deﬁne branching programs, which
+include binary classiﬁcation or decision trees as a special case. Let
+
+500V = v1, . . . , vn be the vector of User’s attributes. Each attribute
+value is an (cid:3)-bit integer. (In our experiments, (cid:3) = 32, which ap-
+pears to be sufﬁcient for most practical scenarios.)
+
+A binary branching program T is a triple (cid:5){P1, . . . , Pk}, L, R(cid:6).
+The ﬁrst element is a set of nodes. For i ≤ l, Pi are decision nodes.
+For i > l, Pi are classiﬁcation nodes.
+
+Decision nodes are the internal nodes of the program. Each de-
+cision node is a pair (cid:5)ti, αi(cid:6), where αi is the index of an attribute,
+and ti is the threshold value with which vαi is compared in this
+node. The same value of α may occur in many nodes, i.e., the same
+attribute may be evaluated more than once. For each decision node
+i, L(i) is the index of the next node if vαi ≤ ti; R(i) is the index
+of the next node if vαi > ti. Functions L and R are such that the
+resulting directed graph is acyclic.
+
+Classiﬁcation or diagnosis nodes are the leaf nodes of the pro-
+gram. Each leaf node consists of a single classiﬁcation label (cid:5)di(cid:6).
+To evaluate the branching program on some attribute vector V,
+start at P1. If vα1 ≤ t1, set h = L(1), else h = R(1). Repeat the
+process recursively for Ph, and so on, until reaching one of the leaf
+nodes and obtaining the classiﬁcation.
+
+4.2 Security requirements
+
+The objective of our protocol is to securely evaluate T on V. The
+protocol should reveal nothing to the Server. The User should learn
+T (V), which is a classiﬁcation label contained in one of the leaves
+of the branching program T . The User is also permitted to learn the
+total number of nodes of T (see the discussion in Section 4.6) and
+the length of the path from the root node of T to the leaf containing
+the result of evaluation, i.e., the label assigned by T to V.
+
+The User should not learn anything else about T . In particular,
+the User should not learn which attributes from V have been con-
+sidered by T , with what threshold values they have been compared,
+the outcome of any comparison, and so on.
+
+The requirement that attribute selection be oblivious precludes a
+na¨ıve application of secure multi-party computation (SMC) tech-
+niques. In standard SMC, each participant knows which of his in-
+puts have been used in the computation. While it is possible to
+create a circuit that takes all of the User’s attributes as inputs and
+ignores those not used by T , this circuit would be impractically
+large (V may contains tens of thousands of attributes). A detailed
+discussion can be found in Section 4.5.
+
+4.3 Secure branching program protocol
+
+The protocol runs in three phases.
+
+Phase I (ofﬂine): Creation of the secure branching program.
+This is an ofﬂine pre-computation executed by the Server. Using
+Algorithm 1, the Server converts the original branching program
+T into its secure equivalent T (cid:2)
+. Algorithm 1 does not require any
+interaction with the User or knowledge of the User’s identity. For
+example, the Server may maintain a large store of secure branching
+programs (all representing differently randomized transformations
+of the same T ), which is replenished during idle periods when the
+Server’s machines have many spare cycles.
+
+Algorithm 1 converts the nodes in the branching program T into
+secure nodes in the branching program T (cid:2)
+. Each classiﬁcation node
+is replaced by an encryption of its classiﬁcation label so that its
+contents will remain unknown to the User unless the appropriate
+decryption key is obtained. Each decision node is replaced by a
+small garbled circuit implementing offset integer comparison (see
+Section 3.4). This circuit enables the User to learn one of two keys,
+depending on the comparison between the User’s attribute value
+(offset by a blinding value) and the decision node’s threshold value.
+The revealed key decrypts the next node on the evaluation path.
+
+Input: Branching program T = (cid:5){P1, . . . , Pk}, L, R(cid:6) (see Sec-
+tion 4.1). For i ≤ l, Pi is a decision node (cid:5)ti, αi(cid:6). For i > l, Pi is
+a classiﬁcation node containing label (cid:5)di(cid:6).
+Outputs:
+(i) Secure branching program T (cid:2)
+(ii) k random (cid:3) + (cid:3)(cid:2)-bit blinding values b1, . . . , bk
+(iii) 2 · k · (cid:3) random wire keys w0
+CREATESECUREPROGRAM
+1: let Q be a random permutation of the set 1, ..., k with Q[1] = 1
+2: Generate random keys κ1, ..., κk to be used for encrypting the
+
+ij for 1 ≤ i ≤ k, 1 ≤ j ≤ (cid:3)
+
+ij , w1
+
+decision nodes.
+
+3: for i = 1 to k do
+4:
+
+5:
+
+6:
+7:
+8:
+
+9:
+10:
+
+ij , w1
+
+Generate 2 · (cid:3) random wire keys w0
+ij for 1 ≤ j ≤ (cid:3)
+(to be used for encoding the User’s input into the garbled
+threshold comparison circuit).
+Generate a random (cid:3) + (cid:3)(cid:2)
+b(cid:2)
+i = bi mod 2(cid:3).
+let ˜i = Q[i]
+if Pi is a classiﬁcation node (cid:5)di(cid:6) then
+
+-bit blinding value bi; store bi and
+
+let S˜i = {“label”, di}κ˜i , where {y}κ is the encryption
+of y under key κ using a semantically secure symmetric-
+key encryption scheme.
+(We assume that all plaintexts
+are padded so that the ciphertexts of decision nodes and
+classiﬁcation nodes have the same size.)
+
+else if Pi is a decision node (cid:5)ti, αi(cid:6) then
+
+Use the subroutine YAO for generating garbled circuits
+(see Section 3.3) to generate a secure circuit Ci for the
+offset integer comparison functionality (see Section 3.4)
+COMPARE(x, b(cid:2)
+˜i mod 2(cid:3) <
+ti then return L else return R
+where L = (Q[L(i)], κQ[L(i)]),
+R = (Q[R(i)], κQ[R(i)]))
+˜ij, w1
+
+˜ij (1 ≤ j ≤ (cid:3)) to encode, respectively, 0 and
+
+˜i, ti, L, R) = if x − b(cid:2)
+
+Use w0
+1 on the (cid:3) wires corresponding to input x.
+let S˜i = {Ci}κ˜i
+
+11:
+12:
+end if
+13: end for
+14: return T (cid:2) = (cid:5){S1, ..., Sk}, κ1(cid:6)
+
+Algorithm 1: Convert a branching program into a secure branching
+program
+
+Because the User should not know which attribute is being
+compared to a threshold, the User’s input to the garbled circuit is
+blinded by the Server (in phase II, described below) by adding a
+random ((cid:3) + (cid:3)(cid:2))-bit value that the User does not know. Here (cid:3)(cid:2) is
+the statistical security parameter, set to 80 bits in our implementa-
+tion. The blinding values b1, . . . , bk are generated randomly by the
+Server in Phase I. They will be subtracted from the User’s input to
+the circuit before it is compared to the threshold.
+
+Phase II: Oblivious attribute selection. In this phase, the User
+obtains the blinded attribute values which will be used as inputs to
+the COMPARE circuits in the secure decision nodes created in Phase
+I. First, the User creates an instance of the additively homomorphic
+public-key encryption scheme, and encrypts each attribute in his
+attribute vector with the public key (this can take place ofﬂine).
+The User sends the entire encrypted attribute vector to the Server
+along with the public key.
+
+For node i, the blinding value chosen in Phase I is bi, and the at-
+tribute to be compared is αi. Thus, the User needs to learn vαi +bi.
+The Server cannot compute this value directly without learning vαi
+
+User’s input: Attribute vector v1, . . . , vn with (cid:3)-bit attribute val-
+ues
+Server’s input: For each node ti of T (cid:2)
+, αi is the index of the User’s
+attribute which is being compared in this node (if ti is not a deci-
+sion node, αi is chosen randomly); bi is the random ((cid:3) + (cid:3)(cid:2))-bit
+value generated as part of CREATESECUREPROGRAM.
+Outputs for the User:
+(i) s1, . . . , sk where ∀i si = vαi + bi mod 2(cid:3)
+(ii) For each i, wire keys wi1, . . . , wi(cid:3) encoding si = vαi + b(cid:2)
+mod 2(cid:3) on the input wires of circuit Ci (see Algorithm 1).
+Output for the Server: ⊥
+OBLIVIOUSATTRIBUTESELECTION
+1: The User generates a public/private key pair of a homomorphic
+
+i
+
+encryption scheme, and sends the public key to the Server.
+
+Inputs: Secure program T (cid:2)
+, node index h with corresponding node
+encryption key κh, and, for each i such that 1 ≤ i ≤ k, wire keys
+wi1, . . . , wi(cid:3).
+Output: Classiﬁcation label c such that c = T (V)
+EVALUATESECUREPROGRAM(T (cid:2), h, κh)
+1: Use key κh to decrypt node Sh of T (cid:2) and obtain Ch.
+2: if Ch = (cid:5)“label”, d(cid:6) then
+3:
+
+Ch is a classiﬁcation node.
+return label d.
+
+4: else if Ch is a garbled circuit then
+5:
+6:
+
+Evaluate Ch on inputs wh1, . . . , wh(cid:3).
+As the result of evaluation, obtain the pair (h(cid:2), κh(cid:2) ) encod-
+ing the output wire value.
+return EVALUATESECUREPROGRAM(h(cid:2), κh(cid:2) ).
+
+The User sends E[vi] to the Server.
+
+error “Secure program is not properly formed!”
+
+7:
+8: else
+9:
+10: end if
+
+Algorithm 3: Evaluation of secure branching program
+
+2: for i = 1 to n do
+3:
+4: end for
+5: for i = 1 to k do
+6:
+
+7:
+
+8:
+9:
+
+10:
+11:
+
+Server computes E[vαi + bi] from E[vαi ] and bi using the
+homomorphic property of the encryption scheme, and sends
+this value to the User.
+The User decrypts to ﬁnd vαi + bi and then computes si =
+vαi + bi mod 2(cid:3) = vαi + b(cid:2)
+for j = 1 to (cid:3) do
+
+i mod 2(cid:3)
+
+2 oblivious transfer
+
+The Server and the User execute OT 1
+protocol.
+The User acts as the chooser; his input is si[j], i.e., the
+jth bit of si.
+The Server acts as the sender; his inputs are wire keys
+w0
+ij , encoding, respectively, 0 and 1 on the jth
+input wire of threshold comparison circuit Ci (see Algo-
+rithm 1).
+
+ij and w1
+
+end for
+As the result of (cid:3) oblivious transfers, the User learns wire
+keys wi1, . . . , wi(cid:3) encoding his input si into the circuit Ci.
+Note that the User cannot yet evaluate Ci because he does
+not know the key κi under which Ci is encrypted.
+
+12: end for
+
+Algorithm 2: Oblivious attribute selection
+
+(which violates the User’s privacy), but he can compute E[vαi +bi]
+since he knows E[vαi ] and the encryption is homomorphic. He
+computes this encrypted value and sends it to the User.
+
+The random blinding value bi added by the Server to the en-
+crypted (cid:3)-bit attribute vαi is (cid:3)(cid:2)
+bits longer than vαi . Therefore, it
+statistically hides vαi (and thus does not reveal which attribute the
+Server chose) when (cid:3)(cid:2)
+is sufﬁciently large (80 bits in our imple-
+mentation). Note that 2(cid:3)+(cid:3)
+is much smaller than the order of the
+group in which plaintext addition is done under encryption.
+
+(cid:2)
+
+The User uses his private key to decrypt vαi +bi. By taking vαi +
+bi mod 2(cid:3), the User obtains si, his (cid:3)-bit input into the garbled
+offset integer comparison circuit.
+
+Next, the User acts as the chooser in (cid:3) instances of 1-out-of-2
+oblivious transfer with the Server to learn the garbled wire keys
+corresponding to his input value si. Note that this does not reveal
+si to the Server. Now the User has all the wire key values he needs
+to evaluate T (cid:2) in phase III.
+Phase III: Evaluation of the secure branching program. In the
+last phase, the User receives the secure branching program T (cid:2)
+from
+the Server along with κ1, and evaluates it locally by applying Al-
+gorithm 3 on inputs (T (cid:2), 1, κ1).
+
+Evaluation does not reveal anything to the User except the label
+at the end of the evaluation path. At each step, the User applies
+one of the comparison circuits Ch to the value sh (encoded as a set
+of wire keys—see Section 3.3), but he does not know which of his
+attributes is hidden in sh. The User thus learns the index of the next
+node and the decryption key, but not the result of the comparison.
+The only information leaked by the evaluation procedure is (i)
+the total number of nodes in the program T (cid:2)
+, (ii) the number of
+nodes that have been evaluated before reaching a classiﬁcation
+node (note that in a full decision tree this number does not depend
+on the path taken), and (iii) the classiﬁcation label d.
+
+If the usage scenario requires the Server to learn the classiﬁca-
+tion label, too, the User simply sends d to the Server. If the Server
+should learn the classiﬁcation label and the User should learn noth-
+ing, then the Server can replace the labels with ciphertexts encrypt-
+ing the labels under the Server’s public key; when the User obtains
+a ciphertext at the end of evaluation, he sends it to the Server.
+
+We emphasize that the User cannot simply re-run the program
+evaluation algorithm of Phase III on the same secure program T (cid:2)
+and a different attribute vector, thus learning more about the origi-
+nal branching program. After learning the wire keys corresponding
+to his (blinded) attributes during Phase II, the User can evaluate
+only a single path in the branching program—that corresponding
+to the attribute vector he used as his input into the protocol. There
+is no way for the User to learn the random wire keys encoding other
+possible inputs to the program.
+
+In order to evaluate T on a different attribute vector, the User
+must re-run the entire protocol starting from Phase I. He will then
+obtain a different secure program T (cid:2)(cid:2)
+and a different set of wire
+keys. Our protocol maintains the invariant that, for every secure
+branching program, there is only one path that can be evaluated by
+the User, and this path appears random to the User.
+
+4.4 Security properties
+
+The protocol presented in Section 4.3 is secure in the semi-honest
+model, i.e., under the assumption that participants faithfully follow
+the protocol, but may attempt to learn extra information from the
+protocol transcript.
+(The proof is standard, and omitted to save
+space.) Even if the User is malicious rather than semi-honest, he
+cannot learn anything about the diagnostic program except the ﬁnal
+diagnostic label, since the underlying oblivious transfer protocol is
+secure against malicious choosers.
+
+The protocol of Section 4.3 can be transformed, at a constant
+cost, to achieve security in the malicious model. We only sketch
+the transformation here due to lack of space. Both parties must
+commit to their respective protocol inputs, including the Server’s
+branching program and blinding values, and the User’s attribute
+values. Each instance of oblivious transfer (OT) must be replaced
+with an instance of committed oblivious transfer, during which the
+parties prove in zero-knowledge that their inputs into OT are con-
+sistent with their previous commitments. Similarly, each instance
+of Yao’s protocol must be replaced with an instance of secure two-
+party computation on committed inputs, during which the Server
+proves in zero-knowledge that the offset integer comparison cir-
+cuits have been formed correctly, and both parties prove that their
+inputs are consistent with their commitments. The homomorphic
+encryption scheme must be veriﬁable, i.e., it must enable the en-
+cryptor to prove that the plaintext is consistent with a previous
+commitment. Finally, the commitment scheme must enable efﬁ-
+cient proofs of certain relationships between committed values.
+
+The cryptographic tools which satisfy the above requirements,
+i.e., (1) homomorphic, veriﬁable encryption scheme, (2) commit-
+ment scheme, (3) committed oblivious transfer protocol, (4) secure
+two-party computation protocol on committed inputs, and (5) efﬁ-
+cient zero-knowledge proof systems for the required relationships
+between protocol components can be found in [20].
+
+Even security in the malicious model does not prevent a mali-
+cious User from claiming that his attribute vector has changed and
+repeatedly re-running the protocol on different committed inputs
+in an attempt to learn the entire diagnostic program. To prevent
+this, the Server can rate-limit the number of protocol invocations
+with each User. This is easy to enforce by refusing to accept new
+commitments from the User until a speciﬁed period expires.
+
+4.5 Efﬁciency and comparison with generic
+
+techniques
+
+In the secure branching program created by Algorithm 1, each
+of the decision nodes of the original program is replaced by a gar-
+bled Yao circuit for comparing two (offset) (cid:3)-bit integers. Each
+such circuit requires log (cid:3) gates, for a total of k · log (cid:3) gates (this
+is a conservative estimate, since some of the nodes are classiﬁca-
+tion nodes). Note that the size of the circuit is independent of the
+number of the User’s attributes n. Algorithm 2 requires k · (cid:3) OT 1
+2
+oblivious transfers to transfer the wire keys corresponding to the
+User’s (blinded) inputs into each of the k nodes.
+
+An alternative to using our protocol from Section 4.3 is to use
+generic techniques that enable secure computation of any two-party
+functionality, represented either as a boolean circuit [23, 40] or a
+binary decision diagram [14] (the latter may be a better choice for
+branching diagnostic programs).
+
+A na¨ıve way to implement the secure evaluation of binary
+branching programs using generic techniques would be to have
+the Server take his speciﬁc branching program, transform it into
+an equivalent secure program using, say,
+the standard garbled
+circuit techniques (see Section 3.3), and have the User evaluate the
+garbled circuit on his attribute vector.
+
+This does not satisfy our security requirements. First of all, the
+topology of the program is revealed to the User.
+In generic se-
+cure multi-party computation (SMC), it is usually assumed that the
+function to be computed is known to both parties. Yao’s garbled
+circuit technique works even if the circuit evaluator does not know
+the truth tables associated with the individual gates, but it reveals
+the topology of the circuit being evaluated. By contrast, our pro-
+tocol only reveals the length of the evaluation path and the total
+number of nodes; it leaks no other information about the rest of the
+
+branching program. Even worse, with the na¨ıve approach the User
+learns on which of his attributes the program was evaluated, thus
+violating one of our core security requirements (see Section 4.2).
+
+To ensure obliviousness of the User’s input selection, the SMC
+functionality must be deﬁned so that it takes any branching program
+of a given size (as opposed to the speciﬁc Server’s program) and
+securely applies it to any attribute vector of a given length.
+
+We have attempted to implement such a functionality using the
+Fairplay compiler [24], which converts any two-party functional-
+ity into an equivalent garbled circuit. Unfortunately, the Fairplay
+compiler is memory-bound, and in our experiments it was unable
+to compile functionalities that would allow us to apply branching
+programs of realistic size to realistic attribute vectors. On a ma-
+chine with 4 Gigabytes of RAM, the compiler runs out of memory
+when attempting to compile the functionality that applies a 63-node
+branching program to a 400-attribute vector.
+
+Table 1 gives comparative measurements of online computation
+and communication for a few sample conﬁgurations. Our experi-
+mental setup, along with the detailed performance analysis of our
+protocol, can be found in Section 6.
+
+Some of the negative aspects of Fairplay, such as running out of
+memory even on relatively small conﬁgurations, may be due to the
+particular compiler implementation rather than the inherent ﬂaws
+of the generic approach. Nevertheless, our protocol described in
+Section 4.3 provides a superior solution for the speciﬁc task of se-
+cure branching program evaluation.
+
+4.6 Achieving complete privacy
+
+The protocol of Section 4.3 reveals the total number of nodes in
+the branching program and the length of the evaluation path corre-
+sponding to the User’s attribute vector. This information appears
+harmless in practice, but, if necessary, it can be hidden, provided
+that there exist upper bounds B on the number of nodes and P on
+the length of the longest evaluation path.
+
+To hide the size of the branching program, the Server can create
+B − k random ciphertexts (which will never be decrypted by the
+User), and mix them randomly with the real encrypted nodes of the
+secure program T (cid:2). Semantic security of the encryption scheme
+used to encrypt individual nodes guarantees that the User cannot
+tell the difference between an encryption of a real node that he did
+not reach in his evaluation, and a random ciphertext of the same
+size. When padded in this way, secure versions of all branching
+programs will contain exactly B ciphertexts.
+
+To hide the length of evaluation paths, ﬁrst transform the branch-
+ing program into a decision tree, so that each node has a ﬁxed depth.
+Then transform it into a full tree of depth P by replacing classiﬁca-
+tion nodes at depth p < P with full trees of depth (P − p + 1), in
+which every leaf contains the original classiﬁcation. In the result-
+ing tree, every evaluation path has length P .
+
+5. REMOTE SOFTWARE DIAGNOSTICS
+
+In this section, we give a brief introduction to the problem of re-
+mote software fault diagnostics, and then use our protocol of Sec-
+tion 4 to implement a privacy-preserving version of Clarify, a prac-
+tical system for software fault diagnosis [17].
+
+Microsoft error reporting is an example of a remote software di-
+agnosis tool [28]. A Microsoft error report has two purposes. The
+ﬁrst purpose is to gather extensive information about a software
+failure to enable Microsoft engineers to ﬁx the software problem.
+We emphasize that we do not focus on this problem, since there ex-
+ist many standard techniques, both privacy-preserving and not, for
+creating decision trees (e.g., see [17] and Section 2).
+
+The second purpose is to improve the user’s experience by pro-
+
+Server
+
+User
+
+Nodes Attrib.
+100
+100
+1000
+1000
+
+15
+63
+15
+63
+
+Computation
+67 vs. 2 sec
+72 vs. 7 sec
+605 vs. 2 sec
+X vs. 7 sec
+
+Communication
+1,292 vs. 263 KB
+1,799 vs. 1121 KB
+11,388 vs. 263 KB
+X vs. 1121 KB
+
+Computation
+76 vs. 3 sec
+79 vs. 14 sec
+706 vs. 4 sec
+X vs. 12 sec
+
+Communication
+528 vs. 98 KB
+528 vs. 351 KB
+5,277 vs. 255 KB
+X vs. 508 KB
+
+Cursive - Fairplay, Bold - our protocol, X - failed to compile
+
+Table 1: Comparison of protocols for the evaluation of branching programs
+
+viding a message describing the user’s problem and how the user
+can avoid the problem in the future. Our case study addresses the
+second purpose, where a server provides feedback to the user about
+the user’s problem. Windows Vista includes a prominent item on
+the control panel called “Problem reports and solutions” [27] that
+allows users to get the latest information about a particular software
+problem from Microsoft’s web site. The Ubuntu Linux distribution
+also contains new features to generate more information about soft-
+ware failures to help users [39].
+
+Microsoft’s privacy statement about the information it collects
+for software problem diagnosis [26] acknowledges that problem re-
+ports can compromise users’ privacy. Problem reports contain the
+contents of memory for the program that failed, and this memory
+“might include your name, part of a document you were working
+on or data that you recently submitted to a website.” The policy
+says that users concerned about the release of personal or conﬁden-
+tial information should not send problem reports. Of course, users
+who do not send problem reports cannot beneﬁt from remote fault
+diagnostics. Corporate users in particular have expressed concern
+that remote diagnostics could reveal their intellectual property [32].
+Ubuntu’s documentation also acknowledges security and privacy
+risks associated with data-rich fault reports.
+
+The protocol presented in this paper enables the user to obtain a
+support message in a privacy-preserving fashion. The user does not
+reveal anything to the software manufacturer about his or her local
+data, and the software manufacturer does not reveal to the user how
+the user’s local data was mapped to a diagnostic message.
+
+Privacy of diagnostic programs.
+It may appear that the soft-
+ware manufacturer should simply send the diagnostic program to
+the user or, better yet, integrate it directly into the supported ap-
+plication. Many software manufacturers, however, view their diag-
+nostic programs as valuable intellectual property. They state this
+explicitly in the legal documents that accompany the diagnostic
+software [13] and sue competitors who obtain access to their di-
+agnostic programs [33]. Updating widely deployed software with
+new support messages and diagnostic tools is not always feasible,
+either, since many users simply don’t install patches.
+
+Moreover, diagnostic programs can reveal vulnerabilities in de-
+ployed software. For example, a single message from Microsoft’s
+Dr. Watson diagnostic tool was sufﬁcient to reveal to any user who
+experienced a particular fault an exploitable buffer overﬂow [25]
+(had the entire Dr. Watson diagnostic tree been shipped to every
+Windows user instead of being evaluated on Microsoft’s servers,
+even users who did not experience the fault could discover the
+vulnerability by analyzing the diagnostic tree). In the diagnostic
+trees produced by the Clarify toolkit for gzprintf, which is one
+of our benchmarks, the inner nodes of the diagnostic tree directly
+point to the function that contains a security vulnerability. With
+a lively, semi-legal market in information about software vulnera-
+bilities [37], software manufacturers have a strong disincentive to
+completely reveal all known faults and bugs in their applications.
+
+We emphasize that we do not promote “security by obscurity.”
+
+Software manufacturers should patch the bugs and vulnerabilities
+in their programs as soon as practicable. From a purely pragmatic
+perspective, however, they should not be forced to choose between
+not providing diagnostic support, or else revealing every internal
+detail of their applications and diagnostic tools. In reality, when
+faced with such a stark choice, many will decide to not provide
+support at all, resulting in a poorer experience for the users who are
+not willing to disclose their own local data.
+
+Runtime data collection and fault diagnosis. Typically, the run-
+time environment records some abstraction of the program’s behav-
+ior. Different abstractions have different cost and accuracy trade-
+offs (e.g., see [9, 17]). For instance, one abstraction counts how
+many times each function in the program was called, another counts
+function call sites that satisfy a certain predicate (e.g., equal to zero)
+on the function’s return value, and so on.
+
+For the purposes of this paper, we abstract from the details of the
+program behavior “dumps” generated by the runtime environment,
+and refer to individual data items simply as attributes. We assume
+that the vector of attributes has a ﬁxed maximum size, which can
+be quite large—for example, a vector of function callsite counters
+may include dozens of thousands of attributes. Note that the online
+computational complexity of the User’s algorithm in the protocol
+of Section 4 does not depend on the number of attributes.
+
+Diagnostic programs evaluate the data dump produced by the
+runtime environment and diagnose the problem. In this paper, we
+use diagnostic programs generated by the Clarify system [17]. We
+emphasize that Clarify is a “black-box” diagnostic system, and thus
+not simply an alternative to debugging. Commercial applications
+are often distributed as packed binaries, compiled without symbols
+and not accompanied by source code. Investigation of a fault in
+such a binary by manual debugging is a laborious process, whereas
+even an unsophisticated user can beneﬁt from fast diagnostics pro-
+vided by systems like Clarify.
+
+In general, the diagnostic program can be manually created by
+human experts, or constructed automatically by training a machine
+learning classiﬁer on previously labeled program behaviors (sup-
+plied, for example, by beta testers who are not concerned about
+privacy of their data). Clarify takes the latter approach.
+If nec-
+essary, standard methods for privacy-preserving decision tree con-
+struction can be used to protect data suppliers’ privacy [1, 22]. The
+number of users whose data are used in constructing the diagnostic
+program is typically orders of magnitude lower than the number of
+users who apply the resulting program to their data. Therefore, we
+focus on privacy-preserving evaluation of diagnostic programs.
+
+The diagnostic program usually has the form of a classiﬁcation
+tree or a branching program. In each internal node, one of the at-
+tributes is compared with some threshold value. Leaves contain di-
+agnostic labels. For example, Figure 1 shows a diagnostic branch-
+ing program created by Clarify using function counting for the mp3
+player mpg321. The application itself does not give any consistent
+error messages for any of these error cases. The model has four di-
+agnostic labels, including normal execution (no error), ﬁle format
+
+App.
+gcc
+latex
+mpg321
+nfs
+iptables
+
+Attributes Nodes
+37
+1,107
+9
+17
+9
+
+2,920
+395
+128
+292
+70
+
+# Errs Accuracy
+89.2%
+85.1%
+87.5%
+93.3%
+98.5%
+
+5
+81
+4
+5
+5
+
+Table 2: For each benchmark, we give the length of the at-
+tribute vector, number of nodes in the diagnostic tree, number
+of errors distinguished by the decision tree, and the tree’s clas-
+siﬁcation accuracy.
+
+Application
+foxpro
+(7 nodes, 224 attrs)
+iptables
+(9 nodes, 70 attrs)
+mpg321
+(9 nodes, 128 attrs)
+nfs
+(17 nodes, 292 attrs)
+gzprintf
+(23 nodes, 60 attrs)
+gcc
+(37 nodes, 2920 attrs)
+latex
+(1107 nodes, 395 attrs)
+
+Server
+
+User
+
+Time
+1s
+
+Bytes
+119 KB
+
+Time
+2s
+
+2s
+
+2s
+
+2s
+
+3s
+
+5s
+
+155 KB
+
+155 KB
+
+298 KB
+
+506 KB
+
+656 KB
+
+2s
+
+2s
+
+4s
+
+5s
+
+7s
+
+Bytes
+78 KB
+
+61 KB
+
+71 KB
+
+142 KB
+
+133 KB
+
+707 KB
+
+113s
+
+19,793 KB
+
+189s
+
+5,908 KB
+
+Table 3: Privacy-preserving evaluation of Clarify diagnostic
+programs: computation and communication costs.
+
+while online time includes the calculations that depend on the in-
+formation sent by the other party earlier in the protocol. Online
+time is the more important metric, since it dictates how long the
+two parties must maintain a connection. Ofﬂine calculations can be
+performed during idle times when the CPU is in low demand.
+
+We ﬁrst analyze the scaling behavior of the Server algorithm,
+as presented in Figures 2 and 3. Here we see that the Server’s
+computation and bandwidth requirements are independent of the
+number of attributes, which is an attractive property in the software
+diagnostic scenario where the attribute vector can be quite large and
+contain a lot of information which is not relevant for all diagnostic
+programs. Furthermore, the Server’s algorithm scales linearly with
+the number of nodes in the branching program, which is as good as
+one can realistically hope to achieve.
+
+Scaling behavior of the User’s algorithm is shown in Figures 4
+and 5. As is the case with the Server, the User’s online computation
+time depends linearly on the size of the branching program, but is
+independent of the number of attributes in the attribute vector. Un-
+like the Server, the User’s ofﬂine computation time and bandwidth
+requirements do depend on the number of attributes. This is be-
+cause the User must encrypt the entire attribute vector ofﬂine, and
+then transmit it as part of the protocol.
+
+We also evaluate our prototype implementation on several real
+applications, as shown in Table 3. These benchmarks have been
+chosen because they are common, heavily-used programs that ei-
+ther contain security vulnerabilities which would be revealed by
+the diagnostic program (e.g., gzprintf), or report misleading er-
+ror messages (or none at all) for non-exotic error conditions, and
+therefore would beneﬁt the most from remote diagnosis. As our di-
+agnostic programs, we used classiﬁcation trees generated by Clar-
+
+Figure 1: Diagnostic branching program for the mpg321
+benchmark. Dotted lines are taken when the attribute (nor-
+malized count of the feature value) is less than or equal to the
+threshold listed in the box, while the solid line is taken when it
+is greater than the threshold. The threshold is determined au-
+tomatically for each benchmark by the decision tree algorithm,
+and can be different for each node in the tree. Clear boxes are
+decision nodes. Shaded boxes are classiﬁcation nodes.
+
+At the root,
+
+error (trying to play a wav ﬁle as if it were an mp3), corrupted tag
+(mp3 metadata, e.g., artist name is stored in ID3 format tags), and
+corrupted mp3 frame data. The diagnostic branching program dis-
+tinguishes between these three failure modes and normal execution.
+the function mad layer III provides almost
+perfect discriminative information for the wav error class (trying
+to play a wav as if it were an mp3): the mad layer III routine
+is part of the libmad library and is called when the audio frame
+decoder runs. Since the wav format is among the formats not
+supported by mpg321, it will not successfully decode any audio
+frames, and the libmad library will never call mad layer III.
+The id3 tag delete routine differentiates between the
+corrupted tag and and other classes. The ID3 tag parser in the
+libid3tag library dynamically allocates memory to represent
+tags and frees them with id3 tag delete. If tag parsing fails,
+the memory for a tag is not allocated. Since no tag parsing suc-
+ceeds in the corrupted frames case, id3 tag delete is never
+called to free the tag memory, making its absence discriminative
+for that class. The libmad audio library’s default error handler
+error default is used if the application does not specify one.
+mpg321 does not specify its own error handler, so the presence
+of the function indicates corrupted audio frames, and its absence
+indicates corrupted id3 tags. Finally, III freqinver, which
+performs subband frequency inversion for odd sample lines, is
+called very frequently as part of normal decoding of audio frame
+data. When there are corrupted frames, this function is called less
+frequently, and the decision tree algorithm ﬁnds an appropriate
+threshold value to separate the normal from the corrupted case.
+
+Table 2 shows the parameters of diagnostic programs for several
+
+benchmark applications.
+
+6. PERFORMANCE
+
+We evaluated our prototype implementation using PCs with an
+Intel Pentium D 3 GHz processor, 2 GB of RAM, and 2MB cache.
+This is a realistic approximation of what the User might use, but we
+expect that the Server would maintain a more powerful dedicated
+server to process remote diagnostics requests.
+
+In our analysis of scaling behavior, we created artiﬁcial data sets
+with varying numbers of nodes and attributes, and measured the
+ofﬂine and online time separately. Ofﬂine time includes all cal-
+culations that can be performed independently of the other party,
+
+Server's bandwidth and computation time
+
+ (63-node diagnostic program)
+
+Server's bandwidth and computation time
+
+ (1000-attribute User vector)
+
+Seconds
+
+Online Time
+
+Offline Time
+
+Bandwidth
+
+MB
+
+Seconds
+
+Online Time
+
+Offline Time
+
+Bandwidth
+
+10
+
+20
+
+50
+
+100
+
+200
+
+500
+
+1000
+
+2000
+
+5000
+
+7
+
+15
+
+31
+
+63
+
+127
+
+255
+
+511
+
+Number of attributes in User's vector
+
+Number of nodes in diagnostic program
+
+Figure 2: Server algorithm: scaling with the number of at-
+tributes.
+
+Figure 3: Server algorithm: scaling with the size of the diag-
+nostic program.
+
+User's bandwidth and computation time
+
+ (63-node diagnostic program)
+
+User's bandwidth and computation time
+
+ (1000-attribute User vector)
+
+Seconds
+
+Online Time
+
+Offline Time
+
+Bandwidth
+
+MB
+
+Seconds
+
+Online Time
+
+Offline Time
+
+Bandwidth
+
+MB
+
+1.2
+
+1.0
+
+0.8
+
+0.6
+
+0.4
+
+0.2
+
+0.0
+
+1.4
+
+1.2
+
+1.0
+
+0.8
+
+0.6
+
+0.4
+
+0.2
+
+0.0
+
+70
+
+60
+
+50
+
+40
+
+30
+
+20
+
+10
+
+0
+
+120
+
+100
+
+80
+
+60
+
+40
+
+20
+
+0
+
+MB
+
+10.0
+
+9.0
+
+8.0
+
+7.0
+
+6.0
+
+5.0
+
+4.0
+
+3.0
+
+2.0
+
+1.0
+
+0.0
+
+3.5
+
+3.0
+
+2.5
+
+2.0
+
+1.5
+
+1.0
+
+0.5
+
+0.0
+
+12
+
+10
+
+8
+
+6
+
+4
+
+2
+
+0
+
+45
+
+40
+
+35
+
+30
+
+25
+
+20
+
+15
+
+10
+
+5
+
+0
+
+10
+
+20
+
+50
+
+100
+
+200
+
+500
+
+1000
+
+2000
+
+5000
+
+7
+
+15
+
+31
+
+63
+
+127
+
+255
+
+511
+
+Number of attributes in User's vector
+
+Number of nodes in diagnostic program
+
+Figure 4: User algorithm: scaling with the number of at-
+tributes.
+
+Figure 5: User algorithm: scaling with the size of the diagnos-
+tic program.
+
+ify [9, 17], and as attribute vectors 32-bit invocation counters for
+each function of the application.
+
+For all applications, the computation and communication cost
+of executing our privacy-preserving protocol is acceptable in many
+practical scenarios.
+
+7. CONCLUSIONS
+
+We presented a practical, provably secure protocol which enables
+a User to evaluate the Server’s branching program on the User’s lo-
+cal data without revealing any information except the diagnostic
+label. We applied our prototype implementation to several real-
+istic benchmarks, using diagnostic decision trees produced by the
+Clarify system as our branching programs, and demonstrated that
+it performs well in many practical scenarios.
+
+An interesting topic of future research is applying the techniques
+for oblivious evaluation of branching programs developed in this
+paper to other problems in privacy-preserving computation.
+
+Acknowledgements. This material is based upon work supported
+by the National Science Foundation under grants CNS-0509033,
+IIS-0534198 and CNS-0615104, and the ARO grant W911NF-06-
+1-0316.
+
+8. REFERENCES
+[1] R. Agrawal and R. Srikant. Privacy-preserving data mining.
+
+In Proc. ACM SIGMOD International Conference on
+Management of Data, pages 439–450. ACM, 2000.
+
+[2] D. Beaver. Foundations of secure interactive computing. In
+Proc. Advances in Cryptology - CRYPTO 1991, volume 576
+of LNCS, pages 377–391. Springer, 1992.
+
+[3] I. Blake and V. Kolesnikov. Strong conditional oblivious
+
+transfer and computing on intervals. In Proc. Advances in
+Cryptology - ASIACRYPT 2004, volume 3329 of LNCS,
+pages 515–529. Springer, 2004.
+
+[4] A. Blum, C. Dwork, F. McSherry, and K. Nissim. Practical
+
+privacy: the SuLQ framework. In Proc. 24th ACM
+SIGMOD-SIGACT-SIGART Symposium on Principles of
+Database Systems (PODS), pages 128–138. ACM, 2005.
+
+[5] P. Broadwell, M. Harren, and N. Sastry. Scrash: A system for
+
+generating secure crash information. In Proc. 12th USENIX
+Security Symposium, pages 273–284. USENIX, 2003.
+
+[6] J. Camenisch and V. Shoup. Practical veriﬁable encryption
+and decryption of discrete logarithms. In Proc. Advances in
+Cryptology - CRYPTO 2003, volume 2729 of LNCS, pages
+126–144. Springer, 2003.
+
+[7] R. Canetti. Security and composition of multiparty
+
+[23] Y. Lindell and B. Pinkas. A proof of Yao’s protocol for
+
+cryptograpic protocols. J. Cryptology, 13(1):143–202, 2000.
+[8] R. Canetti, Y. Ishai, R. Kumar, M. Reiter, R. Rubinfeld, and
+
+R. Wright. Selective private function evaluation with
+applications to private statistics. In Proc. 20th ACM
+Symposium on Principles of Distributed Computing
+(PODC), pages 293–304. ACM, 2001.
+
+[9] J. Davis, J. Ha, C. Rossbach, H. Ramadan, and E. Witchel.
+
+Cost-sensitive decision tree learning for forensic
+classiﬁcation. In Proc. 17th European Conference on
+Machine Learning (ECML), volume 4212 of LNCS, pages
+622–629. Springer, 2006.
+
+[10] J. Feigenbaum, Y. Ishai, T. Malkin, K. Nissim, M. Strauss,
+
+and R. Wright. Secure multiparty computation of
+approximations. In Proc. 28th International Colloquium on
+Automata, Languages and Programming (ICALP), volume
+2076 of LNCS, pages 927–938. Springer, 2001.
+
+secure two-party computation.
+http://eprint.iacr.org/2004/175, 2004.
+
+[24] D. Malkhi, N. Nisan, B. Pinkas, and Y. Sella. Fairplay – a
+
+secure two-party computation system. In Proc. 13th USENIX
+Security Symposium, pages 287–302. USENIX, 2004.
+
+[25] G. McGraw and J. Viega. Making your software behave:
+
+Security by obscurity. http://www.ibm.com/
+developerworks/java/library/s-obs.html,
+2000.
+
+[26] Microsoft. Privacy statement for the Microsoft error
+
+reporting service. http://oca.microsoft.com/
+en/dcp20.asp, 2006.
+
+[27] Microsoft. Reporting and solving computer problems.
+
+http://windowshelp.microsoft.com/
+Windows/en-US/Help/d97ba15e-9806-
+4ff3-8ead-71b8d62123fe1033.mspx, 2006.
+
+[11] J. Feigenbaum, B. Pinkas, R. Ryger, and F. Saint-Jean.
+
+[28] Microsoft. How to: Conﬁgure microsoft error reporting.
+
+Secure computation of surveys. In Proc. EU Workshop on
+Secure Multiparty Protocols, 2004.
+
+http://msdn2.microsoft.com/en-us/
+library/bb219076.aspx, 2007.
+
+[12] M. Freedman, K. Nissim, and B. Pinkas. Efﬁcient private
+
+[29] M. Naor and K. Nissim. Communication preserving
+
+matching and set intersection. In Proc. Advances in
+Cryptology - EUROCRYPT 2004, volume 3027 of LNCS,
+pages 1–19. Springer, 2004.
+
+[13] Gateway. System management services agreement.
+
+http://www.gateway.com/about/legal/
+warranties/20461r10.pdf, 1999.
+
+protocols for secure function evaluation. In Proc. 33rd ACM
+Symposium on Theory of Computing (STOC), pages
+590–599. ACM, 2001.
+
+[30] M. Naor and B. Pinkas. Efﬁcient oblivious transfer protocols.
+
+In Proc. 12th Annual ACM-SIAM Symposium on Discrete
+Algorithms (SODA), pages 448–457. SIAM, 2001.
+
+[14] E. Goh, L. Kruger, D. Boneh, and S. Jha. Secure function
+
+[31] M. Naor, B. Pinkas, and R. Sumner. Privacy preserving
+
+evaluation with ordered binary decision diagrams. In Proc.
+13th ACM Conference on Computer and Communications
+Security (CCS), pages 410–420. ACM, 2006.
+
+[15] O. Goldreich. Foundations of Cryptography: Volume II
+
+(Basic Applications). Cambridge University Press, 2004.
+
+[16] O. Goldreich, S. Micali, and A. Wigderson. How to play any
+
+mental game. In Proc. 19th Annual ACM Symposium on
+Theory of Computing (STOC), pages 218–229. ACM, 1987.
+[17] J. Ha, C. Rossbach, J. Davis, I. Roy, H. Ramadan, D. Porter,
+
+D. Chen, and E. Witchel. Improved error reporting for
+software that uses black box components. In Proc. ACM
+SIGPLAN Conference on Programming Language Design
+and Implementation (PLDI), pages 101–111. ACM, 2007.
+
+[18] Q. Huang, D. Jao, and H. Wang. Applications of secure
+
+electronic voting to automated privacy-preserving
+troubleshooting. In Proc. 12th ACM Conference on
+Computer and Communications Security (CCS), pages
+68–80. ACM, 2005.
+
+[19] Y. Ishai and A. Paskin. Evaluating branching programs on
+
+encrypted data. In Proc. 4th Theory of Cryptography
+Conference (TCC), volume 4392 of LNCS, pages 575–594.
+Springer, 2007.
+
+[20] S. Jarecki and V. Shmatikov. Efﬁcient two-party secure
+computation on committed inputs. In Proc. Advances in
+Cryptology - EUROCRYPT 2007, volume 4515 of LNCS,
+pages 97–114. Springer, 2007.
+
+auctions and mechanism design. In Proc. 1st ACM
+Conference on Electronic Commerce, pages 129–139. ACM,
+1999.
+
+[32] R. Naraine. Dr. Watson’s Longhorn makeover raises
+
+eyebrows. http://www.eweek.com/article2/0,
+1759,1822142,00.asp, 2005.
+
+[33] Oracle. Oracle sues SAP. http://www.oracle.com/
+
+sapsuit/index.html, 2007.
+
+[34] P. Paillier. Public-key cryptosystems based on composite
+
+degree residuosity classes. In Proc. Advances in Cryptology -
+EUROCRYPT 1999, volume 1592 of LNCS, pages 223–238.
+Springer, 1999.
+
+[35] M. Rabin. How to exchange secrets by oblivious transfer.
+Technical Report TR-81, Aiken Computation Laboratory,
+Harvard University, 1981.
+
+[36] T. Sander, A. Young, and M. Yung. Non-interactive
+
+CryptoComputing for NC1. In Proc. 40th Annual IEEE
+Symposium on Foundations of Computer Science (FOCS),
+pages 554–566. IEEE, 1999.
+
+[37] B. Stone. A lively market, legal and not, for software bugs.
+
+New York Times, Jan 30 2007.
+
+[38] H. Wang, Y.-C. Hu, C. Yuan, Z. Zhang, and Y.-M. Wang.
+
+Friends troubleshooting network: Towards
+privacy-preserving, automatic troubleshooting. In 3rd
+International Workshop on Peer-to-Peer Systems (IPTPS),
+volume 3279 of LNCS, pages 184–194. Springer, 2004.
+
+[21] J. Kilian. Founding cryptography on oblivious transfer. In
+
+[39] J. Weideman. Automated problem reports. https://wiki
+
+Proc. 20th Annual ACM Symposium on Theory of Computing
+(STOC), pages 20–31. ACM, 1988.
+
+.ubuntu.com/AutomatedProblemReports, 2006.
+
+[40] A. Yao. How to generate and exchange secrets. In Proc. 27th
+
+[22] Y. Lindell and B. Pinkas. Privacy preserving data mining. J.
+
+Cryptology, 15(3):177–206, 2002.
+
+Annual IEEE Symposium on Foundations of Computer
+Science (FOCS), pages 162–167. IEEE, 1986.
+
+

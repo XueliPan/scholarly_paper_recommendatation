@@ -1,0 +1,2130 @@
+FUSE: Lightweight Guaranteed  Distributed  Failure Notification
+
+John Dunagan*
+
+Nicholas J. A. Harveyl
+
+Marvin  Theimer*
+
+Michael  B. Jones*  Dejan Kostiit
+Alec Wolman*
+
+"I  am not discouraged,  because  every  failure is
+
+another step forutard." - Thomas Edison
+
+Abstract
+
+FUSE  is a lightweight failure notification  service for
+building  distributed  systems. Distributed  systems  built
+with FUSE  are guaranteed  that failure notifications  never
+fail.  Whenever  a faihtre  notification  is triggered,  all
+live members  of the  FUSE  group will lrcar  a rtotifica-
+tion within  a bounded  period  of time,  inespective of node
+or communication  failures. In contrast  to previttus work
+onfailure  detection,  the responsibility  for  deciding thdt a
+failure  has occurred is shared  between the FUSE service
+emd  the distributed  application.  This  allows  applications
+to implement  their own definitiorts  of failure.  Our  expe'
+rience building  a scalable distributed  event delivery  sys-
+tem on an overlay  network  has  convinced  us of the use-
+fulness  of this senice.  Our results  demonstrate  that the
+network costs of each FUSE  group can  be small; in par'
+ticulati  our overlay  network  implementation  recluires  no
+additional liveness-verifying  ping taffic  beyond  that al-
+ready  needed to maintain  the overlay, making the steady
+state  neht)ork load irulependent  of the number of active
+FUSE  gruups.
+
+I  Introduction
+
+This paper  describes FUSE, a lightweight  failure  noti-
+flcation  servicc.  When  building  distributed  systcms, man-
+aging  failures is an  important and often complex  task.
+Many  different architectures,  abstractions,  and  services
+have  been  proposed  to address  this  [5,  10,  13, 28,  30,  38,
+42, 43,441.  FUSE provides  a new programming  model
+for  failure  management  that simplifies  the  task of  agree-
+ing when failures  have  occumed  in a distributed  system,
+thereby  reducing  the complexity  faced by application de-
+velopers.  The most  closeiy related  prior work  on coping
+with  failures  has centered  around  failure  detection  ser-
+vices.  FUSE takes  a somewhat  different  approach,  where
+
+*Microsoft Research,  Microsoft  Corporation,  Redmond, WA.
+
+{jdunagan,  mbj,  theimer,  alecw}@microsoft.com
+
+tDepartment of Computer  Science, Duke  University,  Durham,  NC.
+
+dkostic@cs.duke.edu
+
+tComputer Science and  Artiflcial  lntelligence  Laboratory,  Mas-
+
+sachusetts  Institute  of  Technology,  Cambridge,  MA.  nickh@mit.edu
+
+detecting  failures  is  a shared responsibility  between  FUSE
+and the application.  Applications  create  a FUSE  group
+with an immutable  list of participants.  FUSE  monitors
+this group  until either  FUSE  or the application decides to
+terminate  the group,  at which point all  live  participants  are
+guaranteed to leam of a "group  failure" within a bounded
+period of time.  This  focus on delivering  failure  notiflca-
+tions  leads  us to refer  to FUSE  as a failure notiJicarion
+service.  This is a very different  approach  than  prior  sys-
+tems have  adopted, and we will argue  that it is a good
+approach for  wide-area  Internet applications.
+
+Applications  make use of the FUSE  abstraction  as fol-
+lows:  the application  asks FUSE to create  a new group,
+specifying the other parlicipating  nodes. Whcn FUSE  fln-
+ishes constructing the group,  it returns  a unique  identifier
+for this group to the creator. The application then  passes
+this FUSE ID to the applications  on  all the other nodes
+in this group,  each of which registers  a callback  associ-
+ated with  the  given  FUSE  ID. FUSE  guarantees  that every
+group member will be reliably notifled  via this  callback
+whenever  a failure  condition  affects  the group.  This  fail-
+ure  notification  may be triggered either explicitly,  by  the
+application,  or implicitly, when FUSE  detects that com-
+munication  among  group  members  is impaired.
+
+Applications  can  create  multiple  FUSE  groups  for  dif-
+ferent  purposes, even if those  FUSE  groups span the same
+set of nodes.  In the  event  that FUSE  detects  a low-level
+communication failure,  failure  wili be signalled  on all the
+FUSE  groups  using that path.  However,  on  any  individual
+FUSE group  the  application may signal a failure  without
+affecting any of the other  groups.
+
+FUSE  provides  the guarantee that notiflcations  will be
+delivered  within a bounded  period  of time, even  in the
+face of node  crashes  and  arbitrary  network  failures.  We
+refer to these  semantics  as "distributed  one-way  agree-
+ment". One-way refers  to the  fact that there  is only one
+transition any group member  can see: from "live"  to
+"failed".  After failure  notiflcation  on a group,  detecting
+future failures  requires  creating  a new  group.
+
+By providing  these  semantics, FUSE ensures  thatfail-
+ure notifications  never fail.  This greatly simplifies  failure
+handling  among  nodes  that have  state that they  want  to
+handle in a coordinated  fashion. FUSE  effrciently handles
+all the comer cases of guaranteeing  that  all members  will
+be notified of any failure condition affecting  the group.
+Applications  built  on  top of FUSE  do  not need to worry
+
+USENIX  Association OSDI  '04: 6th Symposium  on Operating  Systems Design and  Implementation
+
+151
+
+that a failure message  did  not get through  or that  orphaned
+state  remains  in the system.
+
+The  primary  target for  FUSE is wide-area  Internet ap-
+plications, such  as content delivery networks,  peer-to-peer
+applications,  web  services,  and grid computing.  FUSE
+is not targeted  at applications that require strong  consis-
+tency  on replicated  data,  such as stock  exchanges  and
+missile  control  systems.  Techniques  such as virtual  syn-
+chrony [6], Paxos [29], and BFT [10] have  already proven
+to be effective  in such environments.  However,  these tech-
+niques  incur  significant overhead  and therefore  have lim-
+ited  scalability.  Fufthermore, FUSE does  not provide re-
+silience to malicious  participants, though  it also does  not
+preclude  solving this  problem at  a higher  layer.
+
+Previous  work on failure detection  services uses
+"membership"  as the fundamental abstraction: these ser-
+vices  typically  provide  a list of each  component in the
+system, and whether  it is currently  up or down.  Member-
+ship services  have seen widespread  success  as a building
+block for implementing  higher level distributed  services,
+such as consensus, and have even  been deployed  in such
+commercially  important  systems  as the New  York  Stock
+Exchange [5]. However, one disadvantage  of the  mem-
+bership  abstraction  is that it does  not allow  application
+components  to have  failed  with  respect to one action,  but
+not  with respect to another.  For example,  suppose  a node
+is engaged in an  operation  with a peer and at some point
+fails  to receive  a timely  response.  The failure manage-
+ment service  should  support  declaring that this operation
+has failed  without  requiring  that  a node or process  be  de-
+clared  to have  failed.  The FUSE abstraction  provides  this
+flexibility:  FUSE  tracks  whether  individual  application
+communication  paths  are curently working in a manner
+that  is acceptable to the application.
+
+The  scenario described  above is more likely to oc-
+cur  with  wide-area  Intemet applications,  which  face  a
+demanding operating  environment: network  congestion
+leads to variations  in network  loss rate and delay; intran-
+sitive connectivity  failures (sometimes  called  partial  con-
+nectivity  failures)  occur  due to router or f,rewall  miscon-
+figuration  l27,3ll; and individuals  nctwork  components
+such as links  and routers  can  also fail. Under these con-
+ditions,  it is dithcult for  applications to makc good  deci-
+sions  based solely  on  the  information  provided  by  a mem-
+bership  service. A particular scenario  illustrating  why
+applications need to participate  in deciding  when failure
+has occurred  is delivery  of streaming  content  over  the In-
+temet:  failure to achieve  a cerlain  threshold bandwidth
+may be unacceptable  to such an application  even though
+other  applications  are perfectly  happy  with  the connectiv-
+ity provided by that  same network path.
+
+Our  FUSE  implementation  is scalable,  where scaling
+is with respect  to the number of groups:  muitiple failure
+notification  groups can  share liveness checking  messages.
+Other  implementations  of the FUSE abstraction  may sac-
+riflce scalability  in favor  of increased  security.  Our  FUSE
+implementation  is designed  to suppoft large numbers  of
+
+small to moderate  size groups. We do not attempt  to effr-
+ciently  support  very  large groups because  we believe  very
+large  groups  will tend  to suffer from too-frequent failure
+notiiication,  making them  less  useful.
+
+Our  FUSE  implementation  is particularly well-suited
+to applications using  scalable overlay  networks.  Scalable
+overlay  networks  already  do liveness  checking to main-
+tain their routing tables  and FUSE  can re-use  this live-
+ness  checking traffic.  ln such a deployment,  the network
+trafflc  required  to implement FUSE is independent  of the
+number  of groups until  a failure  occurs;  only creation
+and teardown  of a group  introduce a per-group  overhead.
+FUSE  can be implemented  in the  absence of a pre-existing
+overlay  network  -  the implementation  can construct  its
+own  overlay,  or it can  use an altemative  liveness checking
+topology.
+
+We  have  implemented  FUSE  on top of the  Skip-
+Net [25]  scalable  overlay  network, and  we have  built a
+scalable event delivery  application using  FUSE.  We eval-
+uated  our implementation  using two main techniques:  a
+discrete  event  simulator  to evaluate  its scalability,  and a
+live system  with 400 overlay  participants  (each  running
+in its own  process)  running  on a cluster of 40  worksta-
+tions to evaluate  correctness  and performance.  Both  the
+simulator  and the  live system  use  an identical  code  base
+except for the base  messaging layer.  Our live system eval-
+uation shows that our FUSE implementation  is indeed
+lightweight;  the latency  of FUSE  group  creation  is the la-
+tency of an  RPC call to the  furthest  group  member;  the  la-
+tency of explicit  failure notiflcation  is similarly  dominated
+by network latency;  and we show that our implementation
+is robust  to false positives  caused  by network packet  loss.
+
+In summary,  the  key  contributions of this  paper are:
+
+r  We  present a novel  abstraction,  the  FUSE  failure notifl-
+cation  group,  that provides  the  semantics of distributed
+one-way agreement. These  are desirable  semantics  in
+our  chosen setting  of wide-area  Intemet applications.
+
+r  We  used FUSE  in building  a scalable  event  delivery ser-
+vice  and we describe  how  it signiflcantly  reduced  the
+complexity  oI this task.
+
+o We  implemented  FUSE  on top of  a scalable  overlay  net-
+work.  This allowed  us to support  FUSE  without  adding
+additional  liveness  checking.  We experimentally  eval-
+uated the performance  of our  implementation  on  a live
+system with  400 virtual  nodes.
+
+2  Related Work
+
+Failure  detection  has  been  the  subject of more than two
+decades  of research.  This  work  can  bc broadly  classiflcd
+into unreliable  failure  detectors,  weakly  consistent  mem-
+bership  services, and  strongly consistent  membership  ser-
+vices.  Unreliable  failure  detectors  provide  the  weakest
+semantics  directly,  but  they  are  a standard building  block
+in constructing  membership  services with stronger  se-
+mantics.  Both  weakly-consistent and strongly-consistent
+
+t52
+
+OSDI  '04: 6th  Symposium on Operating  Systems Design and  Implementation  USENIX  Association
+
+membership  services are based  on the abstraction of a
+list of available  or unavailable  components  (typically  pro-
+cesses or machines).  In contrast,  a FUSE  group  ID is not
+bound to a process or machine  and  hence  can be used in
+many contexts. For  example, it can  correspond  to a set
+of several processes, or to related  data  stored  on several
+different  machines.  This abstraction  allows  FUSE  to pro-
+vide novel  semantics  for  distributed  agreement,  a subject
+we will elaborate  on in our discussion  of weakly  consis-
+tent membership  services.
+
+Chandra et al. formalized the concept of unreliable
+failure  detectors,  and showed  that one such  detector  was
+the weakest failure detector  for solving consensus  [i1,
+121.  Such  detectors  typically provide periodic  heartbeat-
+ing and callbacks saying whether the  component  is "re-
+sponding"  or "not responding."  These callbacks may be
+aggregate  judgments  based on  sets  of pings. Unreliable
+failure detectors  provide  the following  semantic  guaran-
+tee: fail-stop crashes will be identif,ed  as such  within  a
+bounded  amount  of time. There  has been  extensive  work
+on such  detectors,  focusing  on  such  aspects  as interface
+design,  scalability, rapidity  offailure  detection,  and  mini-
+mizing  network  load [1,  17,21,23,38].
+
+FUSE uses a similar  lightweight  mechanism  (periodic
+heartbeats)  to unreliable  failure  detectors, but  provides
+stronger  distributed  agreement semantics. Unreliable fail-
+ure detectors  are typically  used  as a component  in a mem-
+bership  service,  and the  membership  service  is responsi-
+ble for  implementing  distributed agreement semantics.
+
+Weakly  consistent membership  services  have  also been
+the  subject  of an extensive  body of work [2,  19,42,44].
+This  work  can be broadly  classifled as differing in speed
+of failure  detection,  accuracy  (low rate of false positives),
+message  load,  and completeness  (failed  nodes are  agreed
+to have failed  by everyone  in the  system). Epidemic  and
+gossip-style  algorithms  have been  used to build  highly
+scalable  implementations  of this service ll9, 421.  Pre-
+vious application  areas that have been  proposed  for such
+membership services  are distributed  collaborative  appli-
+cations,  online  games, large-scale  publish-subscribe sys-
+tems, and multiple  varieties  of Web Services  t5, 191.
+These are  the same  application  domains targeted  by
+FUSE, and FUSE has  similar  overhead  to a weakly  con-
+sistent  membership  service in these  settings.  Typical char-
+acteristics  of such  applications  are that many operations
+are idempotent  or can be  straightforwardly  undone,  oper-
+ations  can be re-attempted  with  a different  set of partici-
+pants,  or the decision to retry  can be deferred  to the user
+(as in an instant  messaging  service).
+
+One  novel  aspect  of the FUSE  abstraction  is the ability
+to handle  arbitrary  network  failures. In contrast,  weakly
+consistent  membership  seruices  provide semantic  guaran-
+tees assuming  only  a fail-stop  model. One  kind  of net-
+work failure where  the  FUSE  abstraction  is useful is an
+intransitive  connectivity  faiiure:  A can reach B, B can
+reach C,  but A ca-nnot  reach C. This  class  of network fail-
+ures is hard for a weakly  consistent  membership  service to
+
+handle  because  the  abstraction  of a membership  list lim-
+its the  service  to one of three choices,  each  of which  has
+drawbacks:
+
+o Declare one of the  nodes  experiencing  the  intransitive
+connectivity  failure to have  failed. This prevents  the
+use ofthat  node by any  node thatcan  reach it.
+
+r  Declare  all of the nodes  experiencing the intransitive
+failure to be alive  because  other nodes  in the  system can
+reach  them.  This  may  cause the application  to block for
+the duration ofthe  connectivity  failure.
+
+o Allow a persistent  inconsistency  among  different
+nodes'  views  of the  membership list. This forces the
+application  to deal with  inconsistency explicitly,  and
+therefore  the  membership  service  is no longer  reducing
+the complexity  burden on the application developer.
+
+FUSE  appropriately  handles  intransitive  connectivity
+failures by  allowing  the  application  on  a node  experienc-
+ing a failure to declare  the  corresponding FUSE  group
+to have  failed. Other  FUSE  groups involving  the  same
+node but not utilizing a failed communication  path  can
+continue  to operate.  Application  participation  is required
+to achieve  this because  FUSE may not have detected  the
+failure  itself; like  most weakly  consistent membership
+services, FUSE typically  monitors  only a subset  of all
+application-level  communication paths.
+
+FUSE  would  require  application  involvement  in failure
+detection even if it monitored  all communication  paths.
+Consider  a multi-tier  service  composed  of a front-end,
+middle-tier,  and back-end. Suppose the middle-tier  com-
+poncnt is availahle  but misconfigured.  FUSE allows  the
+front-end to declare  a failure,  and to then perform  appro-
+priate  failure recovery,  such  as flnding  anothermiddle-tier
+from  some  pool of available  machines.  This difference  in
+usage between membership  services  and FUSE  reflects
+a difference  in philosophy.  Membership  services  try to
+proactively  decide  at a system level whether  or not  nodes
+and processes  are available.  FUSE  provides  a mecha-
+nism  that applications  can use  to declare  failures  when
+applicationJevel  constraints  (such as conflguration)  are
+violated.
+,Another contrast between  the two  approaches  is that
+the  FUSE  abstraction  enables  "fate-sharing"  among  dis-
+tributed data  items.  By  associating  these  items  with  a sin-
+gle  FUSE group, application  developers  can enforce  that
+invalidating  any  one item  will cause all the remaining  data
+items to be invalidated.  Weakly  consistent  membership
+services  do  not explicitly  provide  this tying  together of
+distributed data.
+
+Strongly consistent  membership  services share  the ab-
+straction  of a membership  list, but they also  guarantee  that
+all  nodes  in the  system  always  see a consistent  list through
+the use of atomic  updates.  Such  membership  services  are
+an important  component  in building highly availabie  and
+reliable  systems using  virtual  synchrony.  Notable  exam-
+ples  of systems  built using this  approach are  the New  York
+
+USENIX  Association OSDI  '04: 6th Symposium on  Operating  Systems Design and  Implementation
+
+153
+
+and Swiss  Stock  Exchanges,  the  French  Air  Trafflc  Con-
+trol System,  and the AEGIS  Warship t2,5,61.  However,
+a limitation  of virtual  synchrony is that it has only been
+shown  to perform  well at small  scales,  such as flve node
+systems [6].
+
+Some network routing  protocols,  such  as IS-IS I8l,
+OSPF  [33], and  AutoNet [35],  use mechanisms  simi-
+lar to FUSE. One  similar  aspect  of AutoNet is its  use
+of teardown and recreate  to manage  failures.  Any  link-
+state  change  causes  all AutoNet  switches  to discard  their
+link-state  databases  and  rebuild  the g1obal  routing  table.
+OSPF and IS-IS  take local link observations  and prop-
+agate  them  throughout  the network using  link-state  an-
+nouncements. They tolerate  arbitrary network failures
+using timers  and  explicit  refreshes  to maintain  the link-
+state  databases.  FUSE  also uses timers  and  keep-alives  to
+tolerate arbitrary  network  failures. However,  FUSE uses
+them  to tie together  sets of links that provide  end-to-end
+connectivity  between  group members,  and to provide  an
+overall  yes/no  decision for  whether connectivity  is satis-
+factory.
+
+A more distantly  related area of prior work is black-
+box  techniques  for diagnosing failures.  Such  techniques
+use  statistics  or machine  leaming to distinguish successful
+and failed  requests  19,13,14,15,  161. In contrast,  FUSE,
+assumes  application developer  participation  and  provides
+semantic  guarantees  to the developer.  Another  signilicant
+distinction  is that black-box  techniques  typically  require
+data aggregatlon  in a central  location  for analysis;  FUSE
+has no  such  requirement.
+
+Distributed  transactions  are a well-known  abstrac-
+tion for simplifying  distributed  systems. Because FUSE
+provides  weaker  semantics  than distributed  transactions,
+FUSE  can  maintain  its semantic  guarantees  under  net-
+work  failures that  cause  distributed transactions  to block.
+Theoretical results  on consensus  show that the possibility
+ofblocking  is fundamental  to any  protocol for  distributed
+transactions  122,241.
+
+Two of the design  choices  we made in building  FUSE
+were also  recommended  by recent works  dealing  with  the
+architectural  design  of network  protocols.  Ji et al. [26]
+surveyed  hard-state  and  soft-state  signaling  mechanisms
+across  a broad  class of network protocols,  and recom-
+mended  a soft  state approach  combining  timers with  ex-
+plicit revocation:  FUSE  does this. Mogul et al. [32] ar-
+gued  that state  maintained  by network  protocol imple-
+mentations should be exposed  to clients  of those  proto-
+cols.  As described  in Section  6, we modifled  our  overlay
+routing  layer to expose a mechanism  for  FUSE to piggy-
+back content  on overlay  maintenance  traffic.
+
+3  FUSE Semantics  and  API
+
+We begin  by describing  one simple  approach  to im-
+plementing  the  FUSE  abstraction.  Suppose every group
+member  periodically  pings  every  other group member
+with an  "are you okay?" message. A group  member  that
+
+is not  okay for  any reason,  either  because  ofnode failure,
+network  disconnect,  network  partition,  or transient  over-
+load, will fail to respond  to some  ping. The  member  that
+initiated this  missed  ping will  ensure that a failure  noti-
+Iication  propagates  to the rest  of the  group  by  ceasing  to
+respond  itself to all pings for that FUSE group. Any  in-
+dividual observation  of a failure is thus  converted  into  a
+group  failure  notiflcation.  This mechanism  allows  failure
+notiflcations  to be delivered  despite any  pattcm  of discon-
+nections,  partitions,  or node failures.  This speciflc  FUSE
+implementation  guarantccs  that lailure  notilications  zLrc
+propagated  to every  party within twice  the periodic  ping-
+ing interval.  Our  implementation uses  a different liveness
+checking topology,  discussed in Section  5. It also uses  a
+different  ping  retry policy;  the retry  policy and the  guar-
+antees on failure notification  latency  are discussed  in Sec-
+tion  3.3.
+
+The name  FUSE  is derived  from the  analogy  to "laying
+a fuse"  between  the group  members.  Whenever  any  group
+member  wishes  to signal  failure  it can light the  fuse,  and
+this failure  notification will propagate  to all other group
+members as the fuse  burns. A connectivity failure  or
+node crash at any intermediate  location along  the fuse
+will cause the  fuse to be lit there as well, and the fuse
+will then start  burning  in every direction  away from the
+failure.  This ensures  that  communication failures will not
+stop the progress  of the failure notification.  Also,  once
+the fuse  has bumt, it cannot be relit, analogous to how  the
+FUSE  facility only notifles  the  application  once  per  FUSE
+group.
+
+Many  different FUSE implementations  are  possible.
+Ail implementations  of the FUSE  abstraction  must pro-
+vide  distributed one-way agreement:  failure  notifica-
+tions are  delivered  to all live group  members  under  node
+crashes and arbitrary  network  failures. Different FUSE
+implementations  may use different  strategies  for group
+creation,  liveness  checking  topology, retry, programming
+interface,  and persistence,  with  consequent  variations in
+performance.  In this section,  we describe  the choices  that
+we made  in our  FUSE implementation,  the  resulting  se-
+mantics  that application  developers  will need  to under-
+stand,  and  some of the alternative  strategies  that other
+FISE  implementations could  use.
+
+3.1  Programminglnterface
+
+We now  present  the FUSE  API  for our  implementation.
+FUSE  groups  are created  by calling CreateGroup with a
+desired  set of member  nodes.  This  generates  a FUSE ID
+unique  to this group,  communicates  it to the FUSE  layers
+on all the speciflcd  members,  and thcn returns  the ID  to
+the caller.  Applications  are subsequently  expected to ex-
+plicitly communicate  the  FUSE  ID from the creator to the
+other group  members. Applications  learning  about this
+FUSE  ID register  a handler  for  FUSE  notifications  us-
+ing the  RegisterFailureHandler  function.  In this  design,
+the FUSE layer  is not  responsible  for communicating the
+FUSE  ID to applications  on nodes  other  than the creator.
+
+t54
+
+OSDI  '04: 6th Symposium  on Operating  Systems Design and  Implementation  USENIX  Association
+
+/ /  Cteate3  a  FUSE  notification 
+// 
+Fuseld  Createcroup(Nodeldll 
+
+the  nodes  in  the  set
+
+set)
+
+group  containing
+
+//  Regisirers  a  cal-lback  funcLion 
+occurs  for 
+/ /  when  a  notification 
+void  RegisterFailurellandler
+
+(Callback  handler,  FuseId  id)
+
+to  be  invoked
+the  FUSE  group
+
+//  Allows  l:he  application 
+//  FUSE  failure  nolification
+void  SiqnalFailure 
+
+(FuseId  id)
+
+to  explicitly 
+
+cause
+
+Figure  1. The  FUSE API
+
+We  believe  the most  likely  use  of FUSE  is to allow
+fate-sharing  of distributed application  state. Applications
+should leam about  FUSE  lDs with sufficient  context  to
+know what  application  state to associate with  the FUSE
+ID. Though  failure  handlers  can  simply  perform  garbage
+collection  of the associated  application  state,  a handler  is
+also free  to attempt to re-establish the  application  state
+using  a new  FUSE  group,  or to  execute  arbitrary code. For
+brevity,  we refer  to all of these pennissible  application-
+level actions  using  the short-hand  "garbage  collection."
+
+The application  handler  is invoked  whenever  the FUSE
+layer believes a failure has occurred,  either  because  of
+a node  or communication  failure  or because  the appli-
+cation  explicitly signalled  a failure  event at one of the
+group  members.  lf RegisterFailureHandler  is called with
+a FUSE  ID parameter that does not  exist, perhaps  because
+it has already  been  signalled,  the  handler caliback  is in-
+voked immediately. Applications  that wish  to explicitly
+signal  failure  do so by caliing  the SignalFailure  function.
+
+3.2 Group Creation
+
+Group creation  can be  implemented  in one of two
+ways: it can  retum  immediately,  or it can block  until
+all nodes  in the group  have  been  contacted. Returning
+immediately  reduces latency, but because  FUSE  has not
+checked  that  all group  members  are alive, the application
+may  perform expensive  operations, only  to have  FUSE
+signal  failure  a short time later. In contrast, blocking  until
+all members  have  been  contacted  increases  creation  la-
+tency,  but decreases  the likelihood that the  FUSE  group
+will  immediately  fail.  We chose  to implement  blocking
+create;  this provides  application  developers  the seman-
+tic guarantee  that if group  creation retulxs successfully,
+all the group members  were  alive  and reachable.  A high
+enough  rate  of churn amongst  group members  couid  re-
+peatedly  prevent  FUSE  group creation from succeeding.
+However,  based on the  low  latency of FUSE  group  cre-
+ation (Section  7),  such  a high churn  rate is likely  to cause
+the  system  to fail in other ways  before  FUSE becomes  a
+bottleneck.
+
+When  CreateGroup  is cailed, FUSE generates  a glob-
+ally unique FUSE  ID for the group. Each  node is then
+contacted and asked  to join the new FUSE group.  If
+any group member  is unreachable,  all nodes that already
+leamed of the new FUSE  group  are then notifled  of the
+failure.  Group  members that learned of the  group  but  sub-
+
+sequently  become  unreachable  similarly detect  the group
+failure  through their  inability  to communicate  with other
+group members.  If the FUSE  layer is successfully  con-
+tacted on all members,  the  FUSE  ID is returned to the
+CreateGroup  caller.
+
+FUSE  state is never  orphaned  by failures,  even  when
+those failures occurjust after  group  creation.  An applica-
+tion may receive  a FUSE  ID from the  group  creator,  and
+then attempt  to associate  a failure  handler  with  this  FUSE
+group,  only  to find  out  that the group  no longer exists be-
+cause  a failure  has already  been  signalled.  This causes the
+failure handler  to  be invoked,  just  as if the notification  had
+arrived  after  the failure  handler  was  registered.
+
+3.3  Liveness  Monitoring  and Failure Notifica-
+
+tion
+
+Once  setup is complete,  our FUSE implementation
+monitors the liveness of the group  members  using  a span-
+ning  tree whose individual  branches  follow the  overlay
+routes between  the group  creator  and  the  group  members.
+Each  link in the  tree is monitored  from both  sides;  if either
+side decides  a link  has failed, it ceases  to acknowledge
+pings  for  the given  FUSE  group  along  all its links. When
+this  occurs,  one  could  immediately  signal group  failure,
+but our  implementation instead attempts repair,  as will be
+explained  in more  detail  in Section  6.
+
+This mechanism allows  FUSE  to guarantee  that any
+member of the group  can cause a failure notification to
+be  received  by every other  live  group  member.  FUSE in-
+vokes  the  failure notification handler  exactly  once on a
+node  before  tearing  down the  state  for that  FUSE group.
+A node hearing  the notif,cation  does  not know  whether  it
+was  due to crash,  network disconnect  or parlition,  or if the
+notification  was  cxplicitly  triggered  by some  group  mem-
+ber. Explicit triggering is  a necessary  component  of FUSE
+because FUSE  does not guarantee  that it will notice  all
+persistent  communication problems  between group  mem-
+bers automatically;  it only guarantees  that  a communica-
+tion failure noticed  by any group  member will soon  be
+detected  by all group  members.
+
+FUSE  only  guarantees  delivery of failure notifications,
+and only  to  nodes  that have  already  been  contacted  during
+group  creation.  Note  that FUSE  clients  cannot use this
+mechanism  to implement  general-purpose  reliable  com-
+munication.  Therefore, well-known  impossibility results
+for consensus  do not apply to FUSE 122,241.  A concrete
+example  illustrating  this limitation  is a network partition.
+FUSE  members  on both  sides  of the partition  will receive
+failure  notifications,  but it is not possible  to communicate
+additional  infomation,  such  as the cause of the failure,
+across  the partition.
+
+FUSE  will  sometimes  generate  a notification  to the en-
+tire group  even  though  all nodes  are alive  and  the next  at-
+tempted  communication  would  succeed.  We  refer to such
+a notilication  as a false positive. It is easy  to see  how
+false  positives can occur  - transient  communication  fail-
+ures  can trigger group notification.  The possibility  of false
+
+USENIX  Association OSDI  '04: 6th  Symposium on  Operating  Systems Design and Implementation
+
+155
+
+positives  is inherent  in building  distributed  systems  on top
+of unreliable  infrastructure.  One can  tune  the timeout and
+retry  policy  used by the  liveness checking  mechanism,  but
+there  is  a fundamental  tradeoff between  the  iatency  of fail-
+ure detection  and  the probability  that  timeouts  generate
+false positives. We do not  provide an API mechanism  for
+applications to modify  the FUSE  timeout  and retry pol-
+icy. Providing  such a mechanism  would  add complexity
+to our  implementation,  while providing  little  beneflt:  ap-
+plications  already  need  to implement their own timeouts,
+as dictated by their  choice of transport layer.  FUSE  re-
+quires  this participation  from  applications  because  FUSE
+does  not necessarily  monitor  every link.
+
+Because  we implement  liveness  checking using over-
+lay  routes, the maximum  notification latency  is propor-
+tional  to the  diameter  of the  overlay: successive failures
+at adversarially  chosen  times  could cause each link to faii
+exactly one failure  timeout  after the previous  link.  How-
+ever,  we expect  notif,cation  after  a failure to rarely  require
+more  than  a single  failure timeout  interval  because  our
+FUSE implementation  always  attempts to aggressively
+propagate failure notifications.  A1so,  application  develop-
+ers do not  need  to know the maximum  latency  in order  to
+specify  their timeouts.  As mentioned  above, sends should
+be monitored using whatever  timeout  is appropriate  to the
+transport  iayer  used by  the  application. If the  sender  times
+out, it can  signal the  FUSE  layer explicitly.  If a node  is
+waiting to receive  a message,  specifying a timeout is diffl-
+cult  because  only the  sender  knows  when the  transmission
+is initiated. In this case,  if the  sender  has  crashed, devel-
+opers should  rely on the  FUSE  layer  timeout to guarantee
+the failure  handler  will be called.
+
+FUSE  failure notifications  do  not necessarily  eliminate
+all the race conditions that  an  application developer  must
+handle.  For  example,  one  group member  might signal a
+failure notif,cation,  and  then initiate failure recovery by
+sending  a message  to another  group  member.  This failure
+recovery  message  might  arrive  at the  other group  member
+before it receives  the FUSE  failure notiflcation. In our
+experience,  version-stamping the data  associated  with a
+FUSE  group  was  a simple  and effective  means  of handling
+these  races.
+
+3.4  Fail-on-Send
+
+FUSE does  not guarantee that  ail communication  fail-
+ures between group members wili be proactively detected.
+For example,  in wireless  networks sometimes  link  condi-
+tions will al1ow only  small  messages  -  such  as liveness
+ping messages  -  to get through  while larger  messages
+cannot. In this case, the application  will detect  that the
+communication path  is not working,  and explicitly  signal
+FUSE.  We call this reason  for  explicitly  signalling  FUSE
+fail-on-send.
+
+There  are  two  categories  of failures  that require  fail-on-
+send.  The  flrst  is a communication path  that successfully
+transmits  FUSE liveness checking  messages but which
+does not  meet  the  needs of the application. The  second
+
+is a failed communication  path the application  is using,
+but which FUSE is not  monitoring.
+
+An  example  from this  second category  is an intransi-
+tive connectivity  failure. If two applications  cannot  com-
+municate  directly,  but  are both  responding  to FUSE  mes-
+sages from  a third  party,  they  may  only  experience  a fail-
+ure  upon attempting to exchange  a message.  FUSE  still
+guarantees  that if either  party  triggers  a notiflcation  at this
+point,  all live  group  members  will hear a notiflcation.
+
+Some applications  may  generate mixed acknowledged
+and un-acknowledged  traffic.  For example,  an application
+might  send  streaming  video  over UDP alongside  a control
+stream  over TCP.  In this case, it is up to the application to
+decide which delivery failures  warrant  a notiflcation.  Fail-
+on-send allows this failure  case to be handled  in the  same
+manner  as the previous  cases.
+
+3.5  Failure Model  and Security
+
+FUSE  is designed to handle node crashes  and  arbitrary
+network  failures,  but not malicious  behavior.  The appli-
+cation  we  built  using FUSE  handles  malicious  behavior
+through  redundancy  above  the FUSE  layer by using  mul-
+tiple content  distribution  trees  (see Section  4).
+
+FUSE, assumes  a network  failure  model consisting of
+any pattem  of packet loss,  duplication or re-ordering. This
+includes  simultaneous  network partitions  and  even  an  ad-
+versary  dropping packets based  on their content. For any
+network  failure,  FUSE  guarantees  that all parties agree
+whether  or not  a failure has occurred.  Our FUSE im-
+plementation routes  all FUSE and overlay  messages  over
+TCP connections.  Our implementation  handles  arbitrary
+packet  loss  and re-ordering, but  only  handles duplication
+to the  extent  that  TCP does. It would  be straightforward
+to extend  our  implementation to handle  arbitrary duplica-
+tion  by incorporating  digital  signatures  and  timestamps,
+though  we  have not  yet done so. This extension would
+also  prevent tampering with message contents.  FUSE's
+ability  to handle  packet  loss is not  dependent on using  a
+reliable  transport layeq such  as TCP.  Alternative  FUSE
+irnplementations  could  use unreliable  transport  layers,
+such  as UDP. Using a different transpoft  would  present
+different performance characteristics  that many  applica-
+tion developers  would  want  to be  aware  of.
+
+Our  model for  node failures is fail-stop.  Software  fail-
+ures that are recognized  by the application  (e.g., miscon-
+figuration  is detected)  can  be handled by explicitly  sig-
+nalling  the  FUSE group. FUSE also  handles software
+failures  that result  in a process  exit,  such  as unhandied
+exceptions.  FUSE  does  not  handle  nodes  that  behave  ma-
+liciously,  either  due  to explicit  compromise  or due to soft-
+ware faults that  are not  appropriately contained.
+
+Malicious  nodes  can attack  FUSE  in one of two ways:
+by  dropping  legitimate  failure notilications  or by umreces-
+sarily  generating  failure  notiflcations.  Dropping  a failure
+notiiication,  and thcn  continuing  to generatc  ping mes-
+sages  for the failed group,  can delay the  notiflcation  indef-
+initely  for certain  group members.  This  violates  the FUSE
+
+156
+
+OSDI  '04: 6th Symposium on  Operating  Systems Design and  Implementation  USENIX  Association
+
+notilication  semantics.  Cenerating  unnecessary  failure
+notifications  can prevent  the  use of otherwise functional
+FUSE groups,  thus  leading  to a Denial-of-Service  (DoS)
+attack.  Of course,  if the application  response to failure
+notification  is to re-attempt  the  failed operation  with  a dif-
+ferent set of nodes, sustaining  a DoS attack  may  be quite
+difficult.
+
+3.6  Crash  Recovery
+
+Our implementation of FUSE  does  not  use stable stor-
+age,  and so crash recovery  is trivial.  The  implementation
+performs  the  same  actions during  crash recovery  as during
+any other  initialization.
+
+A recovering  node  does not know whether  a failure no-
+tification  was propagated  to other  group  members.  FUSE
+handles this  case and  several  other comer  cases  by  having
+nodes  actively  compare  their lists of live  FUSE  groups
+as part of liveness  checking. We will discuss  the  details
+of our implementation  more in Section 6, but  the effect
+is that disagreements  about  the curent  set of live FUSE
+groups are  detected  within one failure timeout  interval.
+Disagreements  are  resolved by triggering a notif,cation
+on  any groups  already  considered  to have failed  by some
+group  member.
+
+An alternative  FUSE implementation  could use  stable
+storage  to attempt to mask brief node  crashes.  A node
+recovering from a crash could  assume  that all the FUSE
+groups in which it participates are  still  alive; the  active
+comparison of FUSE  IDs  would  suffice to reliably  rec-
+oncile  this node  with the rest  of the  world.  Furthermore,
+there  is no compatibility issue:  Nodes  employing  stable
+storage  could  co-exist  with nodes  not employing  stable
+storage  without  any change  to the FUSE  semantics. It
+is still the  case that a persistent communication  failure
+on the node recovering  from  crash  would  cause all  the
+FUSE  groups it participates  in to  be notified.  Applications
+can  also  make  use of volatile-state  FUSE  groups  to guard
+state stored  in stable  storage,  but this requires  additional
+appl ication-level complexity.
+4  Applications
+
+As  part  of the Herald [7] project  to build  a scalable
+event notilication  service,  we  have been exploring the
+construction of scalable,  reliable  application-1evel  multi
+cast groups using  a scalable  peer-to-peer  overlay  network.
+Grappling  with  the complexities  of implementing  failure
+handling and automatic  re-conf,guration led us to invcnt  a
+new  abstraction  for failure  notiflcation.
+
+The  deciding  factor  for inventing  FUSE  was our de-
+sign of multicast groups.  A well-known  technique  for im-
+plementing application-level  multicast on an overlay  is to
+construct the  multicast  trees using reverse path forward-
+ing  (e.g., Scribe  [37]). One  major  drawback of this ap-
+proach  is that nodes on an overlay routing  path between
+a subscriber  and the root node must  forward  a potentially
+large amount  of traffic for  thc multicast  group,  even if thcy
+
+have no  interest in it. To remove this  potential  obstacle
+to deployment,  we designed Subscriber/Volunteer (SV)
+trees  [20].  SV trees route content around  non-interested
+parties  by establishing  separate  content-forwarding  links
+among subscribers and volunteers.  This  leads  to two  inter-
+related  data structures:  a content  forwarding  tree overlaid
+on a reverse  path  forwarding  (RPF)  tree.
+
+The  content-forwarding  tree is straightforward  to con-
+struct in the absence  of failure.  However,  repairing  the
+tree without  introducing  distributed  routing cycles proved
+difficult in the face of arbitrary  and  possibly  simultane-
+ous  node failures, link failures, message  1oss, and routing
+changes in the overlay.  To manage  this  complexity,  we
+adopted  a simple design  pattem: garbage collect  out-of-
+date state  using  FUSE and retry by establishing  a new
+FUSE group  and  installing  new application-level  state.
+FUSE  allowed  us to tie together all the  distributed  state
+that  needed  to be  garbage  collected.
+
+This design  pattem  drasticaliy  reduced  the  state space
+that we had to consider  and  was instrumental  in achiev-
+ing  a working  SV tree  implementation.  For  example,
+a single FUSE group ties together  the endpoints  of a
+content-forwarding  link and all the RPF tree nodes  by-
+passed by that 1ink. Failure  notification  on this  group
+garbage  collects all the relevant  state. After failure  notili-
+cation,  the  subscriber  that  requested  creation  of the  now-
+failed  content-forwarding  link is responsible  for creating
+a replacement  FUSE  group  and  forwarding  link. If this
+subscriber is dead,  then  no replacement  is needed. Indeed,
+there was  a natural  choice  for  the FUSE  group  creator  ev-
+erywhere  we  used  FUSE,  obviating  the  need  for a voting
+mechanism  to manage group  creation  or re-creation.
+
+As  mentioned  in Section  3.3, FUSE did not eliminate
+all race conditions  in SV  trees,  but the remaining  ones
+were  trivial  to handle. For example,  subscribers  add ver-
+sion stamps to each subscription request  to prevent  late-
+arriving  FUSE notiflcations  from acting on  new content-
+forwarding  links.
+
+FUSE  also  reduced the amount  of code  required  to im-
+plement SV trees.  Without  FUSE, we  would  have had to
+include  a large  amount  of additional  context  in each  mes-
+sage to allow  the recipient to garbage-collect  now-invalid
+state  and we found  it difflcult  to reason  about the correct-
+ness  of this non-FUSE  alternative  design.  We also  used
+FUSE  in one important non-failure case:  when  a multicast
+group palticipant  voluntarily  leaves  the tree, we explicitly
+signai the FUSE  group that would  have been  signaled  if
+the node  had  failed. This causes  the appropriate  repairs
+to occur,  removing  the node from  the content-forwarding
+tree.
+
+Our  desire to support  large multicast  trees  does  not  re-
+quire  that we support  individual  FUSE  groups with  a large
+number  of members.  We designed SV trees  to use  a large
+number of small  to medium  size FUSE  groups, and this
+determined  the scalability requirements  for  FUSE.  For ex-
+ample,  simulating  a 2000 subscriber tree  on a 16,000  node
+overlay  required  an average  of 2.9  members  per  FUSE
+
+USENIX  Association OSDI  '04: 6th Symposium  on Operating  Systems Design and  Implementation
+
+t57
+
+group with  a maximum  size of 13.  We  also  verified  that
+the maximum  and mean  FUSE  group  sizes depend  very
+little  on the size of the multicast tree, and  increase slow1y
+with  the  size  of the overlay.
+
+4.1 Other Applications
+
+From  our  experience  implementing  an event  delivery
+service  with  FUSE, we believe  that many  applications
+built on top of scalable overlay  networks  can benefit  from
+the  use  of FUSE. Many  of these applications construct a
+large number  of trees,  and  then  monitor parent-child links
+in these  trees  using  application-level  heartbeats.  Using
+FUSE for  these application-level  heartbeats would  allow
+liveness  checking  traffic  to be shared  across  all the trees.
+Another  type of application  where  FUSE would  be
+useful is a Content Delivery Network (CDN)  that repli-
+cates  a large number  of documents  and  pushes  updates to
+them.  If the replication topology varies  on  a per-document
+basis,  this will  entail  a large  number of replication  mul-
+ticast trees.  A common  strategy  for reliability  on  these
+trees  mimors the  approach  discussed  above  for peer-to-
+peer applications:  heartbeats ensure  that  each  replica  site
+for a given  object  can  track  whether  it is receiving all up-
+dates  correctly, or is instead  somehow  disconnected  from
+the tree.  FUSE  can replace  the per-fee  heartbeat  mes-
+sages with a more  efficient  and scalable means of detect-
+ing when  the trees  need  to be reconflgured  due  to node or
+network failures.
+
+Peer-to-peer  storage  systems  such  as TotalRecall  [4]
+and Om [45] could  also benefit  from  the efficiencies  of us-
+ing FUSE to implement  liveness  checking.  For example,
+TotalRecall relies  on  the overlay for  liveness-checking  of
+eager replicas,  but must  separately  implement  liveness-
+checking of lazy replicas. The substitution  of FUSE
+groups would be straightforward.  Om implements  its own
+failure  detection and timeout  scheme using leases;  these
+leases  could be replaced  by  FUSE groups.  FUSE would
+also be  a good fit for  Om  because every replica  in Om
+can  regenerate the entire  replica set,  and  therefore  should
+monitor  the  liveness  of all other  replicas. This symmet-
+ric responsibility exactly corresponds  to the  semantics
+of FUSE group  notifications.  Lastly,  the potential  for
+false positives  using FUSE  does not compromise  Om's
+consistency  guarantees;  Om's  failure-induced  reconfigu-
+ration protocol is already  designed  to be robust  to failure-
+detection  false positives.
+
+In addition,  FUSE may  also  be  useful in some of the
+application  areas  targeted by  weakly  consistent  member-
+ship  services.  For example,  Vogels  and Re [44] argue
+that  weakly  consistent  membership services  would ben-
+eflt  many  Web  Services,  ranging from scientific  comput-
+ing to federated  business  activities.  FUSE  may  be  a more
+suitable  choice  for some  of these  emerging  applications.
+
+y: Group(E,  A, D)
+
+x: Group(A,  D)
+
+Figure  2.  Two FUSE  groups  being  monitored  by overlay
+pings.  The black lines  denote  end-to-end  checking,  while
+dashed gray lines  denote active  overlay  pings.
+
+5  Liveness  Checking  Topologies
+
+Many  different  liveness checking  topologies  can be
+used  to implement  FUSE.  In this Section,  we  describe  in
+detail  the  topology we chose: per-group  spanning trees  on
+an overlay  network.  We then  discuss other topologies  and
+their security/scalability  tradeoffs.
+
+Our overlay  design requires a content-addressable
+overlay  (e.g., DHTs  such  as CAN,  Chord,  Pastry,  Skip-
+Ner,  or Tapestry 125,34,36,39,461).  Figure  2 depicrs
+an overlay topology with two live FUSE groups, r  and g.
+The  spanning  tree  for FUSE  group g contains  the  group
+members A, D, and E, and two additional  nodes,  B and
+C, that we refer to as delegates.  Deiegates  arise because
+the FUSE liveness  checks  are routed along  overlay paths
+between  members,  and these paths  may contain  nodes  that
+are not members.  If overlay  routes  change  or delegates
+fail, delegates may be  added to or deleted  from the  live-
+ness checking tree;  this repair  process  is explained  in de-
+tail  in Section  6.
+
+Building  liveness  checking  trees on  top of an overlay
+lets us reuse the  liveness  checks  that the  overiay uses  to
+maintain its routing  tables.  The liveness checking  tree for
+a given  FUSE  group  is the  union of the overlay  routes be-
+tween the  group  creator (the root)  and  the group  members.
+When  multiple  FUSE  groups have  overlapping  trees,  each
+overlay  ping message  monitors  all FUSE  groups whose
+liveness checking  trees  include  that overlay  link.  Figure  2
+illustrates  this sharing  for  the FUSE  groups z and g.
+
+In the absence  of failures,  our FUSE  implementation
+requires  no additional messages  beyond  the  overlay  pings
+to monitor FUSE  groups.  Only  group  setup,  teardown,
+and  repair  incur per-group  costs. This allows  one  to build
+systems  that require  very large numbers  of FUSE  groups.
+
+5.1  AlternativeTopologies
+
+In this section,  we present  three  altemative  topologies
+for FUSE  liveness monitoring  that provide  better  security
+guarantees  at the cost of worse  scalability.  Certain  imple-
+mentations  of these topologies  can  be simpler  and provide
+stronger  guarantees  for  worst-case  failure  notification  1a-
+tency.
+
+As mentioned  in Section  3.5,  malicious nodes  can
+mount  two  kinds of attacks  against  FUSE:  the  dropped
+
+158
+
+OSDI  '04: 6th  Symposium on  Operating Systems Design and Implementation  USENIX  Association
+
+notification  attack and  the unnecessary  noti{ication  attack.
+In the overlay  topology  used by our FUSE  implementa-
+tion, these  attacks  can be mounted  by malicious  group
+members  or delegates.  The  SV  tree application han-
+dles the  dropped  notif,cation  attack  above  the FUSE  layer
+by using redundant  content-distribution  trees. It handles
+the  unnecessary  notiflcation attack  by re-creating  FUSE
+groups  with different  sets of members.
+
+The first  alternative  topology  we consider  is per-group
+spanning trees  without an overlay. By routing liveness
+checking traffic  directly  between  members,  this topology
+eliminates  the threat  of delegates  iaunching  attacks on
+FUSE.  The scalability  tradeoff  for this additional  secu-
+dty is that the overhead  of livcncss checking traffic may
+be additive in the number  of FUSE groups - the opportu-
+nities  to share liveness checking  trafftc will depend  on  the
+degree  of overlap  in FUSE group  membership.
+
+The second  altemative  topology we consider is per-
+group all-to-all pinging  (again,  without  an  overlay).  This
+improves  security  even  fufther;  all-to-all  pinging  is robust
+to droppcd  notilication  attacks from members because  no
+member  relies  on any  other node to forward failure notifi-
+cations.  However,  this topology requires  rz2 messages  for
+a group of size  n - signiflcantiy  more  than  the per-group
+sp:rnning  tree topology.  An added bcnefit of the all-to-all
+topology  is that worst-case  failure  notification  latency is
+reduced to twice  the  pinging  inter"ral.
+
+The f,nal  topology we consider  is using  a central  server
+to ping all  nodes. This  may be an appropriate  topology for
+using  FUSE  within a data  center environment.  From a se-
+curity  standpoint,  this  server  represents a single point  of
+trust, which  may be easier  to secure  than  a larger collec-
+tion of machines.  If the server  is compromised,  attacks
+can  be launched  against  any  FUSE  group in the system.
+If not, the security guarantees are the  same as in the  all-
+to-all pinging topology.  For settings  than span multiple
+administrative domains,  the use  of a single  trusted  server
+may not  be appropriate.  The scalabiiity  of this  topology  is
+limited:  all FUSE  trafflc  passes through  the server,  which
+can be  a bottleneck for  a large  number of FUSE partici-
+pants. However,  the load on each group  member  is min-
+imal: each group  member only  pings the central  server
+during each  ping interval.
+
+6  Implementation
+
+Repair will succeed if the  members  of the group can
+still communicate  with  each  other directly,  and therefore
+repair routes  around  all failures  involving delegates.  We
+chose  to implement repair  by routing  repair  messages  di-
+rectly  from  the  root to the group  members.  The over-
+riding  factor for this choice  was rapidity  of failure  de-
+tection:  relying  solely  on overlay  routes would require
+waiting for the overlay  to attempt to repair itself  before
+signaling  a failure. Using direct root to member  com-
+munication  allows  failures  involving  group  members  to
+be  detected more rapidly. This direct  communication
+also results  in better  latencies  for group creation and
+application-signalled  failure  notifl cations.  When  overlay
+routing  paths are working,  we still get the scalability  ben-
+efits  of shared  spanning  trees  using  the overlay.  In the
+remainder  of this section,  we first describe the  functional-
+ity exposed by  the  SkipNet  overlay, and we then  discuss
+the details  of implementing  each  FUSE  operation.
+
+6.1 Overlay  Functionality
+
+Our implementation  of FUSE  on top of the  SkipNet
+overlay  required  two features that SkipNet  provides  to
+client applications:  messages  routed through the  overlay
+result  in a client upcall  on every intermediate  overlay  hop,
+and the overlay  routing  table  is visible  to the client. This
+functionality  is standard for many  overlays  [18].
+
+Our FUSE  implementation re-uses  the overlay  routing
+table maintenance  traffic by piggybacking  a SHA1  hash
+(20 bytes) on  ping requests.  This  hash  encodes  all the
+FUSE  groups that  use  this overlay  link.  FUSE  could  have
+sent its own messages  across  these same links, but the pig-
+gybacking  approach amortizes  the  messaging costs. Skip-
+Net  pings  cause  a client  upcall  at their  destination,  so
+the destination  FUSE  layer can  examine  the  piggybacked
+contents.  Because  all SkipNet  links  are  monitored  from
+both  sides,  we did not need to add  additional  pinging  at
+the  FUSE  layer  to ensure  this. Implementing  FUSE  on an
+overlay that  does  not  have these  propefties  would  require
+FUSE to perform  additional pinging  itself.
+
+Ali FUSE and overlay  messages  in our  system  are  de-
+Iivered  over TCP, and therefore inherit TCP's  retry and
+congestion control behaviors. When  a TCP  connection
+breaks,  or a liveness  checking  message  fails  to  get through
+before  the  timeout, we  interpret  that to  mean  that the node
+at the other  end is unavailable.
+
+The key architectural choice  we faced  in implement-
+ing FUSE was  whether  to route  all FUSE  messages  using
+the  overlay  paths, or to route  certain  messages  directly
+between  the  group members. In the topology  we used,
+spanning  trees along  overlay routes,  path  failures  involv-
+ing  delegates can be dealt  with in one of two ways.  One
+option is to signal  a failure  on all FUSE  groups  using  that
+path.  This  has  the advantage of implementation  simplic-
+ity, but can be a signiflcant  source of false  positives.  ln-
+stead, we chose  the  second  option:  to attempt  to repair  the
+liveness monitoring  topology  for  the group.
+
+6.2 Group Creation
+
+We implement  group creation as follows: Group cre-
+ation  docs  not  finish until cvcry member  node  has  a timcr
+installed  that will  signal  failure in the  event  of future  com-
+munication  failures.  These  timers  are only reset by the
+receipt of liveness  checking messages.  Thus, any future
+communication  failures will  be  converted  into  failure  no-
+tifications.
+
+To achieve low creation  latencies, the  creating  node
+directly  contacts every  other member  node  in parallel,
+
+USENIX  Association OSDI '04: 6th  Symposium on Operating  Systems Design and Implementation
+
+159
+
+CreateGroup(E,  A, D)
+
+Figure  3. Group Crecttion Example. Root node E sends
+GroupCreateRequest  messages directly to group  members
+A and D. Nodes  A and D reply directly with  GroupCre-
+ateReply  messages,  and also  route InstallChecking  mes-
+sages  though  the  overlay towards  E.
+
+declaring  creation  to have succeeded when  all of them
+have  replied. When CreateGroup  is called on a node, that
+node (referred to as the root) generates  a unique ID for
+the group.  The  root  also creates  an entry in its list of
+groups  being  created,  and associates a timeout  with  this
+group  creation  attempt.  The entry contains  the FUSE ID,
+the list of group members,  and  which  members  the  root
+has  received  a reply from.  The root then sends GrutupCre-
+ateRequest messages  to the other  member  nodes.  An ex-
+ample message  sequence  that could  result  from group  cre-
+ation is shown  in Figure 3.
+
+On receiving  a GroupCreateRequest,  a member  node
+installs  FUSE  member  state  for  the group: the unique  ID,
+a sequence  number  that is initially 0 (and which  is incre-
+mented by  group  repair),  and  the identity  of the root. Con-
+currently  to sending  the GroupCreateReply  directly  to the
+root, the member  node  routes  an InstallChecking message
+towards  the root using  overlay  routing.  The InstallCheck-
+ing message  will set a timer on  every  node it encounters
+to ensure  that liveness checks are  heard.
+
+If the  root  receives  a GroupCreateReply from  every
+member  within  the group creation attempt  timeout,  it in-
+stalls the  FUSE root state for the  group: the unique ID,
+the  sequence  number,  the identities  ofall the other  group
+members,  and a timer for  checking  that InstallChecking
+messages  have  arrived  from  every member.  The root then
+removes  this  group from its list of groups  being created
+and  returns  the unique  ID to the FUSE  client  application.
+If the GroupCreateReply is not received from  every
+node within  the  group  creation  attempt timeout, the  group
+creation  fails and the  root  retulxs  failure  to the  FUSE
+client application.  The root also attempts to send  a failure
+notiflcation  for  this FUSE  group to cach group member.
+This  notiflcation  is a HardNotification  - we  elaborate  on
+the different  types of notiflcations  in Section  6.4. Finally,
+the root  removes  this group from its list of groups  being
+created. This prevents  GroupCreateReply  messages  re-
+ceived later  from causing  installation  of state for the  failed
+group  creation.
+
+Whenan  InstallChecking  message  arrives at a delegate
+
+node, it installs  the  FUSE  delegate  state  for the  group: the
+FUSE  iD,  sequence  number,  and current  time  are  associ-
+ated with  both  the  previous hop  and the next hop of the
+InstallCheckinS  message, and timers  are associated with
+both hops  as well. The node  then forwards  the  message
+towards the root. If the  timer  for  receiving  all the In-
+stallChecking  messages  flres on the root, the root  attempts
+a repair.
+
+6.3 Steady-State  Operation
+
+Whenever  an  overlay  node initiates  a ping to  a routing
+table  neighbor, it piggybacks  a hash of the list of FUSE
+IDs  that  this node believes  it is jointly  monitoring with
+its  neighbor.  When the neighbor  receives this  message,  if
+the  hash matches, the  neighbor  resets  the  timers  for  all  the
+(FUSE  ID,  neighbor)  pairs represented  by the  hash. There
+can  be  more  than one timer  per FUSE ID because  a node
+may have  more than  one neighbor  in the  liveness  checking
+tree. If one of these timers  ever  flres,  the node sends a
+So;ftNotification  message  to every neighbor  in the  liveness
+checking tree for this FUSE group, and then it cleans  up
+the  FUSE  delegate  state for the  group. Additionally,  if the
+timer  is liring  on a member,  a repair  is initiated.
+
+If a node  receives  a non-matching  hash of FUSE IDs
+from a neighbor,  both  nodes attempt  to reconcile the dif-
+ference by exchanging  their lists of live FUSE  IDs.  If they
+can  communicate, they only remove the  liveness  check-
+ing  trees  on  which  they  disagree,  and the timers are  reset
+on the others.  If they cannot  communicate, the relevant
+checking state  is removed,  and SoftNotification  messages
+are  sent.
+
+During  group  creation,  a race  condition  exists  that  can
+cause  hash mismatches: a node  that has  just received  an
+InstallChecking message  may receive aping  from the next
+hop  of the  InstallChecking  message.  We resolve  this  race
+condition using  a brief grace  period. A node  only removes
+a liveness checking  tree that its  neighbor  does  not  believe
+exists if that tree has existed  for longer  than the grace  pe-
+riod;  in our  implementation, this  period is 5 seconds.
+
+6.4 Notifications
+
+To achicvc the simultancous  goals  of low notiflcation
+latency  and resilience  to delegate failures, our  FUSE im-
+plementation  distinguishes between different classes  of
+failures.  Failures  of the steady-state  liveness checking
+trigger  a SoftNotification.  This message  is distributed
+throughout  the liveness checking  tree,  which  alerts the
+root  that a repair is needed and prevents  a storm  of Soft-
+Notifications  from  being  sent to the  root by  the  rest of the
+tree.  Members  receiving  a SoftNotification  also initiate
+repair  directly  with  the root as described in Section  6.5.
+
+Failures  of group  creation  or group  repair trigger  a
+HardNotification.  Because both create and repair use  di-
+rect root-to-member communication,  delegate  failures do
+not incur false positives.  Note that SoftNotifications  do
+not  cause  failure  notifications  at the  application  layer. In-
+
+160
+
+OSDI  '04: 6th  Symposium on Operating  Systems Design and Implementation  USENIX  Association
+
+3. SoftNotifications
+
+Figure 4. Explicitll, Signalled  Notification  Example.  Sig-
+nalFailure0 is called  on  node  A. Node  A sends  a HardNo-
+tification  to  the  root, E.  E Jbr-wards  tlte HardNotifcatiotx to
+the remaining group member,  D. E also  generates  a Soft-
+Notification  to clean  up the liveness cltecking  tree.
+
+stead,  they  trigger repair actions. The  failure  of these  re-
+pair  actions  will lead to a HardNotification, which  is re-
+flected  at the application  layer.  To achieve  low latency  for
+explicitly  signalled  notiflcations, HardNotifications  are
+also used  to convey  them.
+
+A member generating a HardNotificallor  sends it to
+the  root, which in turn  forwards  it to all  other  group  mem-
+bers.  A node  receiving  a HardNotification  immediately
+invokes  the application-installed  failure  handler.  The root
+node  additionally sends  SoftNotffications  to proactively
+clean  up  the  liveness  checking tree.  An example  of such
+a message  sequence  is shown in Figure  4.
+
+A  node  receiving  a SoftNotificalion  message f,rst
+checks  to see  that the  sequence number is greater  than
+or equal to its recorded sequence number for the speci-
+Iied group;  recall  that  the  sequence  number  is incremented
+during the repair  process. If not,  the message  is discarded.
+If the  sequence  number  is current, the node  forwards the
+message  on to all neighbors  in the liveness  checking tree
+other than the  message  originator,  and removes  its dele-
+gate  state for  the  group. If the  node  is a member or the
+root, it also initiates repair.
+
+6.5 Group Repair
+
+When  a member  initiates  a repair, it sends  the  root a
+NeedRepair  message,  and installs  a timer  for hearing  back
+from the root. If the timer fires, it signals a failure notiflca-
+tion to the FUSE  client application,  serds a HardNotiJica-
+/ior?  message  to  the root, and cleans  up the  state associated
+with this  group.
+
+The root  can be signalled that a repair  is needed
+through  either  of two  paths:  a NeedRepair  drectly  from a
+member  or a SoftNotification  spreading through the  live-
+ness  checking  tree.  The NeedRepair message  is needed
+to remove a potential  source of variability  in the  latency
+of repair.  When  a member receives  a SoftNotification,
+it does not have  a good  estimate  for how soon  the root
+will  similarly  receive  a SoftNotification; these notifica-
+tions  are routed  through the  overlay, and breaks  in over-
+lay  routing require  a timeout on the other  side  to continue
+the progress  of the SoftNotification.  An example  of a se-
+
+Figure  5- Messages Triggering  Grcup Repair Example.
+Delegate  B sends  a ping  to delegate  C, and  the ping is not
+acknowledged.  B then  sends a SoftNotification  to mem-
+ber  A. A then  sends  a NeedRepair  to root E. Once E has
+been alerted,  E coordinates repair.just  as it coordinated
+creation.
+
+quence of messages  leading  to a NeedRepair  is shown in
+Figure 5.
+
+When  the root attempts  a repaiq  it sends  out  GroupRe-
+pairRequest  messages to every member.  Members  an-
+swer these with GroupRepairReply  messages,  and they
+send InstallChecking  messages just  as in group creation.
+State management  at the  root during  repair is similar to
+creation, involving a repair attempt  table  where  open  re-
+pairs  are recorded.  State management  at rnember  nodes
+is different:  if a repair message  ever encounters  a mem-
+ber that no longer  has  knowledge  of the group,  it fails and
+signals  a HardNotification.  This guarantees that repairs
+will not suppress  any HardNotification  that has  already
+reachcd  some members.  Such  notifications  garbage col-
+lect all group  state  at the node.
+
+Nodes receiving  a GroupRepairRequest  increment  the
+group  sequence  number  so that late-arriving  SoftNotifica-
+/io,?  messages  will  not  trigger  a redundant  repair. If the
+root  decides  that  repair  has  failed (using  the same criterion
+as for create failing),  the root  sends  HardNotifications  to
+all members,  and signals the application.
+
+As we discussed in Section 5, using overlay paths  al-
+lows  us to achieve  low  steady-state  message  overheads.
+We believe  a repair scheme  that better  localizes  repair
+trafflc  is possible,  but wc did not  consider this a case
+worth  optimizing.  During transient overlay routing  fail-
+ures, repairs  may  be quite frequent;  a node consulting  its
+routing  table may  learn that there is no next  hop for an
+InstallChecking  message.  To reduce the message  volume
+under such  circumstances,  we implement  per-group  expo-
+nential backoffs (capped at 40  seconds)  for  the frequency
+of repairs.  Although  repair generates additional  network
+trafflc shortly after a failure  has been detected, our  use of
+TCP serves  to regulate  this additional network load.
+
+7  ExperimentalEvaluation
+
+We evaluate FUSE  running on top  of the SkipNet  [25]
+overlay  network  using two main techniques:  a scalable
+discrete event  simulator  and a live  implementation  with  up
+to 400 virtual  nodes running  on a cluster  of 40 worksta-
+tions. Our  SkipNet  and FUSE  implementations running
+
+USENIX  Association OSDI  '04: 6th  Symposium on  Operating Systems Design and Implementation
+
+161
+
+on the live system  and in the simulator  use an  identical
+code  base,  except for  the  base messaging  layer.
+
+7.1  Methodology
+
+We  conligured  the  SkipNet overlay  to employ  a 60 sec-
+ond ping period, a base of size  8, and a leaf set of size  1 6.
+For a 400 node  overlay, this yielded  an  average of 32.3
+distinct neighbors  per node.
+
+For the cluster  evaluation  our router  uses Model-
+Net [41] to emulate  wide-area  Internet-1ike  network char-
+acteristics.  We  ran  10 processes  on each of the 40  physical
+nodes,  for a total  of 400 virtual  nodes. In order to emu-
+late nodes  running on  physically  separate  machines,  there
+is no explicit  state sharing  between  these processes, and
+all communication  between processes is forced  to pass
+through  ModelNet.
+
+The motivating  scenario for our  choice  of router  topol-
+ogy and our assignment  of link latencies  and bandwidths
+was  small  and  large  corporations on multiple continents
+with  direct  Intemet connections.  Both our  live  and simu-
+lator  experiments  were  run on a Mercator  topology  [40]
+with  102,639 nodes and  142,303 links. Each  node  is
+assigned  to one of 2,662  Afionomous  Systems (ASs).
+There are 4,851 links between  ASs in the  topology.  We
+assigned  9'77o  of links to be  OC3 and37o  to be T3. For
+each  OC3  link, we assigned  the link  latency  uniformly
+between  10 and 40 milliseconds,  and  we assigned  a band-
+width of 155 Mbps.  For  each T3 link,  we  assigned  the
+link latency  uniformly  between 300 and 500  milliseconds,
+and we assigned  a bandwidth  of 45 Mbps.  This led to
+round-trip  latencies  with a median  value  of 130  millisec-
+onds,  and a signiflcant  heavy-taiI.  In Figure 6, the  curve
+labeled Simulator  shows  a CDF of end-to-end  latencies;
+paths crossing  one  or more  T3 links  are in the heavy-tail.
+We also  used  this  topology in our  simulatoq where
+we ran experiments  with  both 400 and 16,000  nodes,  to
+model how our  system  would scale  to a much larger de-
+ployment.  The  simulator  used  the same latency values,
+but did not  model  bandwidth  constraints.
+
+Our event notif,cation  service  workload (Section  4)
+creates a large number of groups  with  an average group
+size of less than 3. Even scaling  up to a 16,000  node
+overlay  in our simulator,  the maximum  group  size  we ob-
+sen',ed was 13. Just as these results  informed  our FUSE
+design,  they also  determined  our  choice  of evaluation  pa-
+rameters:  we  evaluated  FUSE  on  a workload  of groups
+ranging from  2 to 32 members.
+
+7.2  Calibration  of Simulator  and ModelNet
+
+We used an experiment  that performed RPC message
+exchanges  between randomly chosen nodes on a 400-
+node  overlay network  to calibrate the  wide-area  network
+topoiogy model  used in our experiments  and  to make  sure
+that results  obtained  through simulation were  comparable
+to those  obtained  through  running on the live cluster  with
+ModelNet.
+
+o
+o
+o_
+E
+(u
+U)
+o
+c
+.9
+o
+(E
+
+LL
+
+1 00%
+
+B0%
+
+60%
+
+40%
+
+2O"/"
+
+o%
+
+'r 
+
+10 
+
+100  1000  10000
+
+RPC  Time in Milliseconds  (Log Scale)
+
+Figure  6. RPC  kttencies
+
+Towards that end,  we  measured  2400 RPCs  on both our
+cluster and our simulator.  Figure  6 shows  a Cumulative
+Distribution  Function  (CDF)  of the  RPC  times  measured
+for three sets  of RPCs:  those  obtained in the simulator,
+and two kinds of RPC  times  obtained  on the cluster. Be-
+cause  the  cluster code  caches TCP  connections  between
+pairs  of nodes, the flrst communication between  a pair of
+nodes takes  longer  than  subsequent  communications,  due
+to the additional  time  required  for  connection establish-
+ment. Our  experiment  performs two back-to-back  RPCs
+between  pairs of nodes  on  the  cluster  and  reports  the  du-
+rations  of both the first RPC,  which  is likely  to incur  con-
+nection  setup  overhead,  and  the second one, which will
+not.
+
+As can be  seen in Figure  6, the  values  for the second
+RPC on the  cluster  closely  track  those  for the simulator.
+This gives  us conf,dence  that both  the simulator  and Mod-
+elNet  are  faithfully  modeling  the  chosen Mercator topol-
+ogy'
+
+7,3 FUSE  Group Creation  Latencies
+
+We measured  the  time on the  cluster required to cre-
+ate  a FUSE group  as  a function  of group  size  when  group
+members are unifomly distributed  throughout  the  system.
+We used group  sizes 2,4,8,  16,  and 32 and created  20
+groups  of each  size. Figure  7 shows  the results. While
+group members were  contacted in paral1el,  the more mem-
+bers  there  are, the  greater  the  chance  of including  nodes
+at a signiflcant network distance from  the root node of the
+group.  Note,  for  instance,  that for groups  of size 8, the
+75th  percentile  time was significantly  larger  than the me-
+dian,  whereas  for  groups  of size 32, the 25th percentile,
+median,  and 75th percentile  are all relatively  close,  as
+with this many members  the  chance of encountering  one
+or more  slow communication paths is quite  high.
+
+In the simulator,  we  evaluated  both  a 400 node  and  a
+16,000  node system. The simulated  creation times  fol-
+lowed  the same patterx  as those  on the  cluster,  except that
+they tended to be about half  as long, for  the same reasons
+that the simuiated and  actual  RPC times in Figure  6 for
+new connections also  differed  by about a factor  of two.
+The  group  creation times for the simulated  16,000  node
+system were  essentially  identical to those  for  the  400 node
+
+t62
+
+OSDI  '04: 6th  Symposium on Operating  Systems Design and  Implementation  USENIX  Association
+
+@  25th  Percentile
+I  Median
+tr 75th  Percentile
+
+3000
+(/) 2500
+! zooo
+g 1500
+€ 
+rooo
+
+0
+
+@ 25th Percentile
+I  Median
+tr 75th Percentile
+
+400
+
+300
+
+200
+
+100
+
+0
+
+a
+E
+c
+o
+c)
+.9.
+
+=
+
+2481632
+
+Group Size
+
+2481632
+
+Group  Size
+
+Figure  T. kttency  of Group Creation
+
+Figure  8. Latency  of Signoled  Notification
+
+simuiated system.  This  is to be  expected,  since  creation
+messages  are  routed  directly  between  the root  and mem-
+bers, and therefore  are not affected  by the length  of over-
+lay routes.
+
+7.4  Failure Notification  Latencies
+
+The latency  of failure  notification  for an actual  failure
+is comprised  of two parts: the time for a node in the sys-
+tem to decide  that  a failure  has  occurred,  and  the time for
+FUSE  to propagate  that  information to all group  mem-
+bers. The time to detect  a failure  depends  on  the  type of
+failure,  and on how node  and link failures are monitored.
+We  perform  two experiments  to characterize  these costs:
+our first experiment  investigates  the  latency of explicitly
+signaled  failures,  and our second investigates  the latency
+of failure  notiflcation  when  nodes  crash.
+
+To  mcasurc  the notilication latency  oi explicitly  sig-
+naled failures, we  chose  a group  member  at random  from
+the same  set  of groups used  for  the  group  creation  ex-
+periments,  and  had it explicitly signal failure.  Figure  8
+shows  the notiflcation times  over  20 such create/notify
+cycles.  As expected,  the notification latencies  are sig-
+niflcantly  lower than the group  creation latencies. This
+improvement  is a result of three  factors. First, our mes-
+saging  layer  maintains  a cache  ofrecently used  TCP  con-
+nections  rather  than opening a new  TCP connection  each
+time a message  is sent.  During  this  experiment,  the  failure
+notiflcations  travel  over  cached  TCP connections  because
+these connections were recently  used  to perform group
+creation. Second, failure  notiflcations  only require  a one-
+way message,  not a round-trip. Third, creation blocks  at
+the root until  all members  have been contacted,  and  thus
+a single  node  in the group  that is far away  in the network
+will delay the  entire create  operation.  In contrast,  notiflca-
+tion  takes  effect  at each member  as soon  as the notif,cation
+has  arrived. The maximum  notification  time observed for
+any FUSE group was 1165 ms.  Our simulation  results  at
+400 nodes  matched the  results  obtained  on  the  cluster.  We
+also  investigated  scaling behavior  in the  simulator,  and we
+found  thc cxpected  result  that  notification  times did  not
+increase in a 16,000  node overlay.
+
+Even  though  failurc  notifications  take  effect at cach
+member  upon  arrival, in Figure 8 we see that the me-
+dian notif,cation  latency  shows  a dependence  on the  group
+size. The rise  in the  curve  at group  sizes  2, 4, and 8 is due
+
+to the extra forwarding  hop needed  when  notlf,cations are
+generated by a non-root  node. At size  2, these notifica-
+tions  just travel from  the  member  to the root, whereas  at
+sizes  4 and 8 notiflcations  travel from the member  to the
+root and then to all other members. The  additional  in-
+crease  in notif,cadon latency  for  groups  of size  16 and 32
+reflects the latency added by our messaging  layer at the
+root.  Our  implementation  uses an XMl-based  messaging
+system with high  message  serialization  overhead:  reduc-
+ing this  overhead  would  be straightforward  but this was
+not  the focus  of our  work.  We ran micro-benchmarks  and
+determined  that running  10 virtual  nodes  on  each physical
+machine  adds  approximately  1 .1 ms of overhead  per mes-
+sage,  and the base  overhead  of a message  send  including
+XML  serialization is 2.8 ms.
+
+To measure  the latency  of failure  notiflcation  when
+nodes  crash, we performed  the following  experiment:  we
+created  400 FUSE groups of size  5 and  then disconnected
+the network  on one of the 40  physical machines,  discon-
+necting 10 of the 400  virtual  nodes.  Of the 400  FUSE
+groups,  42 contained  one or more  disconnected  virtual
+nodes  as members.  All remaining members of these
+groups  received  failure  notifications  -  a total  of 163 no-
+tif,cations.
+
+Figure 9 shows  the distribution of these  notiflcation
+times.  These  times  have several  components:  the  time
+until a ping of the failed  node  is attempted,  the timeout
+for this ping, the time for a member  to learn of the failed
+ping, the time for the subsequent  repair  attempt to fail,
+and  the actual notification  time after  repair  has failed.  We
+used  a ping  interval  of one minute, and a ping  timeout
+of 20 seconds,  so the total ping timeout  latency  should
+be uniformly  distributed  between  20  and  80 seconds. If
+a member has failed, the root times  out  after  2 minutes
+with no repair  response. If a root has failed, the members
+time  out after 1 minute  with  no  repair  response,  leading  to
+shorler  overall  failure  notification  times.  Figure  8 shows
+that  the notification  times are  less  than a second.  We  de-
+duce from  this  that  the ping  and repair  timeouts  dominate
+the failure  notification  times  in the event of a node crash.
+
+7.5  Steady  State  Load  and Churn
+
+One  set of experiments we performed  measured  the
+amount  of background  network  trafflc  present  due to thc
+overlay  network  and due  to FUSE  groups  that are using
+
+USENIX  Association OSDI '04: 6th  Symposium on Operating  Systems Design and  Implementation
+
+t63
+
+01234
+
+Minutes
+
+Figure  9. Combined  Latency  of Ping  Timeout, Repair
+Timeout, and Failure Notification.  Ping and  Repair  Time-
+outs dominate  other.factors.
+
+bo
+53
+=E
+E3
+
+1OO"/"
+
+80"/"
+
+60%
+
+4O"/"
+
+20"/"
+
+O"/"
+
+E 600
+8 soo
+o
+? 4oo
+3 soo
+E zoo
+3 too
+og0
+
+5.8% lvledian Loss
+- 
+*11.4%  Median  Loss
++  21 .57.  lvledian Loss
+
+Oo/"  1O'/"  20%  30%  4OY"  50%
+
+Route Loss Rate
+
+Figure  11- CDFs  of Per-Route  Loss  Rates  for Three  Dif-
+ferent Per-Link Loss  Rates
+
+n0%  Median  Loss
+E 5.8%  Median  Loss
+m  11 .4%  Median Loss
+N 21.5%  Median Loss
+
+o 1OO"/.
+0)5  80"/.
+E  ao"t
+i  +o"r.
+E 20o/"
+(g
+tL 
+
+v-/o
+
+(g
+
+E 100%
+I  eoz
+\  aox
+=  4O"/"
+o6 zo"t"
+-oo\  o7o
+
+CL
+
+No Churn  With  Churn  Churn  With
+
+FUSE
+
+Figure  10. Cosrs  of Overlay Churn
+
+the  overlay  network  for  liveness  checking. On the  clus-
+ter,  we  obser"red  background  network tafflc loads  of 337
+messages  per second over a 10  minute  interval  when no
+FUSE  groups  were  present and  338  messages  per  sec-
+ond over a subsequent 10 minute  interval when 400 FUSE
+groups  of 10  members  each were  present. These experi-
+ments verifled that, in the absence  of node failures, FUSE
+groups imposed no  additional  messages  beyond that al-
+ready imposed by the overlay  itself; the  only  additional
+cost was  a20  byte hash  piggybacked  on each  ping.
+
+When nodes  are  entering and leaving the overlay  net-
+work  (often  referred  to as "churn"),  the overlay  paths  used
+for  liveness checking  between nodes  in a FUSE group
+may change, causing  the  liveness checking  state to  have  to
+be reconstructed.  Overlay churn  does  not cause  false pos-
+itives  in FUSE,  but it does  cause FUSE  to generate  higher
+network ioad.  We  experimentally  quantifled the network
+load  imposed  by a high churn  rate with  FUSE  groups.
+
+We designed  our  churn  experiment to use a very ag-
+gressive rate of arrivals  and departures.  We used  200 sta-
+ble nodes  that  remained  alive for the duration  of the exper-
+iment  and  200 nodes  that were  killed  and restarted  such
+that an  average of 100 of the  chuming  nodes  were alive
+at any given  time.  The rate of chum resulted  in a system-
+wide average half-life  of 30 minutes. This  is more than
+a factor of 7 higher  rate  of chum  than  was  observed  in a
+2003 study of the  OverNet peer-to-peer  system  [3]. We
+created a total of 100  FUSE  groups  of size 10 on the  200
+stable  nodes,  so that on  average each  stable  node was a
+member  of flve FUSE  groups.
+
+We measured  both  CPU loads  and  network  message
+traffic.  CPU  loads  did not show noticeable  increases dur-
+
+2 
+
+4 
+
+8 
+
+16 
+
+32
+
+Group Size
+
+Figure 12. Grcup  Failures  Due to Packet  Loss.  No fail-
+ures  occurredfor  OVo  and  5.8Vo  loss rates.
+
+ing overlay  churn.  As  a basis  of comparison,  a stable  300-
+node overlay  with  no  FUSE  groups generates a load  of
+238 messages  per second.  A 400-node  overlay  network
+with  churn as described  above  (which  results  in an aver-
+age of 300  live nodes at any given time)  generates  a load
+of 270 messages  per  second - a l37o increase  due to the
+costs  of repairing the overlay.  Adding  the  100 l0-member
+FUSE groups  to the churning overlay results  in a total of
+523  messages  per second  - a947o increase  over  the  cost
+of the chuming  overlay without  FUSE groups. These re-
+sults are displayed in Figure 10. This additional  load  is
+caused  by  the  group  repair traflic described  in Section  6,
+and is proportional  to the number  of groups  times  the av-
+erage  group  size.  While the  overlay  routes are  in flux, new
+liveness  checking  paths  cannot  be  installed  and  thus the
+repair  mechanism  will be  triggered  repeatedly.  One  could
+reduce  the FUSE overhead  during  chum by  employing  a
+more  proactive  repair  strategy  at the overlay  level.
+
+A high  enough rate of churn  may cause overlay  routing
+to fail entirely. In this case,  the FUSE liveness  checking
+trafflc will still be proportional  to the  number of groups
+times  the  average  group  size.  After reaching  steady state,
+each  root node wiil periodically  ping each  group  member
+directly with  a GrcupRepairRequest  message.
+
+7.6 False Positives
+
+We studied the  robustness  of our implementation  to
+false positives stemming  from  two  different  sources,  del-
+egate  failures and unreliable communication  links. In the
+previously  described  churn  and  node  crash experiments,
+many groups  experienced delegate failures and had to
+
+164
+
+OSDI  '04: 6th  Symposium on Operating  Systems Design and  Implementation  USENIX  Association
+
+perfom repairs.  In both thcsc  experiments,  notiflcations
+were  only  delivered  for  groups  where  a member  crashed:
+delegate failures  never led to a false positive.
+
+To understand the impact  of potentially  unreliable
+links on FUSE, we ran  a set of experiments  with Model-
+Net configurcd to probabilistically  drop  packets on a per-
+link basis. Routes  in our topology  ranged  from 2 to 43
+hops with a median  of 15. Figure  11  shows the  CDFs of
+per-route  loss rates for  three  different  experiments  where
+we varied  the  per-link  loss rates  over  0.47o,  0.8Vo,  and
+1.67o. The CDFs are  labeled  by their median  end-to-end
+loss  rates.  We created  20  FUSE  groups  each of sizes 2,
+4,8, 16, and 32.  We then  enabled losses,  and allowed the
+system to run  for  an additional  30  minutes.
+
+Figure 12  shows  the number of FUSE  group  failures
+we  observed  at each loss rate. No false positives  occur
+at the 0o/o or 5.87o per-route median  loss rates  because
+TCP masks  drops  at the lower  loss rates through retrans-
+missions. At higher loss rates some groups  did  fail;  TCP
+sockets  will break under such  adverse  network  conditions.
+If one desired  a FUSE  implementation  that continued to
+monitor  links under  these  conditions,  an  altemative  mes-
+saging layer should  be employed.
+
+8  Conclusions
+
+This  paper has presented  FUSE  -  a lightweight  dis-
+tributed failure  notif,cation facility. FUSE provides  a
+novel abstraction,  the FUSE group, that is targeted  at
+wide-area  Intemet applications. The FUSE  group  abstrac-
+tion provides  distributed  application  developers with a
+simple  programming  paradigm for handling failure:  fail-
+urc notiflcations  ncver  fail,  and failures  are with  respect
+to groups, not individual members.  One signiflcant  ad-
+vantage of the FUSE abstraction  is that  detecting  failures
+is a shared responsibility  between  FUSE  and the  appli-
+cation.  This allows  applications to implement  their  own
+deflnitions of failure, extending  the applicability  of failure
+management  services.
+
+We  implemented  FUSE  using  a peer-to-peer  overlay
+network  and evaluated its behavior on  a cluster  of work-
+stations  under a variety  of conditions, including  node
+failures,  packet  loss, and  overlay  churn.  Our evaluation
+showed that our  FUSE  implementation is iightweight  and
+can  scale  to  large  numbers of moderate  size FUSE  groups.
+Our  implementation  scales  by reusing  overlay mainte-
+nance traffic to also perform  liveness  checking of FUSE
+groups, thereby imposing  no additional  trafflc in the ab-
+sence of node failures.  Because  the  FUSE  abstraction  can
+be  implemented efflciently,  it may Iind  application in do-
+mains  where  consensus-style  protocols  have  proven  to be
+too  heavyweight.
+
+FUSE  simplif,es  the complex  task  of handling fail-
+ures in distributed  applications.  We described  our  expe-
+riences building  scalable, reliable application-level multi
+cast  groups  using FUSE,  and how  FUSE  made  this  task
+
+easier.  We  believe  that the  use  of FUSE  wiil likewise sim-
+plify the construction  of other  distributed systems.
+
+Acknowledgements
+
+We thank Ken  Birman,  Jon  Howell, Patricia  Jones,
+Keith Marzullo,  Stefan  Saroiu, Amin Vahdat  and Geoff
+Voelker  for  their comments  on earlier  drafts  of this  paper.
+We  thank  Ashwin  Bharambe  for his insight on  integrating
+ModelNet.  We  also  thank our  shepherd,  Greg  Ganger,  and
+the anonymous  reviewers  for  their insightful  feedback.
+
+References
+
+t1l M. K. Aguilera, W. Chen,  and  S. Toueg. Heartbeat: A
+timeout-free  failure  detector  for  quiescent  reliable commu-
+nication.  ln Workshop  on Distributed Algorithms,  pages
+t26-t40, t997.
+
+[2] T. Anker,  D. Breitgand,  D. Dolev,  andZ.Levy.  Congress:
+CONnection-oriented  Group-address  RESolution  Service.
+Technical Reporl  TR 96-23,  Hebrew University  of
+Jerusalem,  1996.
+
+[3] R. Bhagwan,  S. Savage,  and G. Voelker.  Understanding
+availability.  ln  2nd Intl. Workshop  on Peer-to-Peer  Systems
+UPrPS),2003.
+
+[4] R. Bhagwan,  K.  Tati,  Y.-C.  Cheng, S.  Savage,  and  G. M.
+Voelker.  TotalRecall: System  Support  for  Automated
+Availability  Management. ln lst N5D1,2004.
+
+[5] K.  Birman,  R. van  Renesse,  and  W. Vogels.  Adding high
+availability  and  autonomic  behavior  to web services.  In
+Intl. Conference  on Software  Engineering  (ICSE),2004.
+
+t6l K. P. Birman.  Reliable Distributed  Systems:  Technologies,
+Web  Sentices,  and  Applications.  Springer-Verlag,  Sched-
+uled for 2004.
+
+l7l L. F. Cabrera,  M. B. Jones,  and  M. Theimer.  Herald:
+Achieving a Global  Event Notification Service. In HotOS,
+200t.
+
+[8] R. Callon.  RFC  1195. Use of OSI IS-IS for Routing in
+
+TCP/IP  and Dual Environments.  Dec.  1990.
+
+[9] G.  Candea, M. Delgado,  M. Chen,  F. Sun,  and A. Fox.
+Automatic  Failure-Path  Inference:  A Generic  Introspec-
+tion Technique for Software  Systems.  ln IEEE  Workshop
+on Internet  Applications  (WIAPP  ), 2003.
+
+t10l  M. Castro and  B. Liskov. Practical  byzantine  fault toler-
+
+ance.  In 3rdOSDI,1999.
+
+[ 1]  T. D. Chandra,  V.  Hadzilacos,  and  S. Toueg.  The weakest
+
+failure  detector  for solving  consensus.  ln PODC,1992.
+
+[12] T. D. Chandra  and  S. Toueg.  Unreliable faiiure  detec-
+tors for reliable  distributed  systems.  Journal  of  the ACM,
+43(2):225-267 , 1996.
+
+t13l M.  Chen,  A.  Accardi,  E. Kiciman, J. Lloyd,  D. Patterson,
+A.  Fox,  and  E. Brewer. Path-based  Failure  and  Evolution
+Management.  ln lst N5D1,2004.
+
+tl4l  M. Chen,  E. Kiciman,  A.  Accardi,  A. Fox, and  E.  Brewer.
+Using  Runtime  Paths  for  Macroanalysis.  ln HotOS,2003.
+t15l  M. Chen,  E. Kiciman, E. Fratkin, A. Fox,  and  E. Brewer.
+Pinpoint: Problem Determination  in Large, Dynamic  Sys-
+tems. In DSN,2002.
+
+t16l  M. Chen, A. Zheng,  J. Lloyd,  M. Jordan, and  E. Brewer.
+A Statistical  Learning  Approach  to  Failure  Diagnosis. In
+Intl. Conference  on Autonomic  Computing (ICAC),2004.
+
+USENIX  Association OSDI  '04: 6th Symposium on  Operating Systems Design and Implementation
+
+165
+
+t17l W. Chen,  S. Toueg,  and M. K. Aguilera. On  the  quality  of
+
+tributed  Computing,  1998.
+
+[39] I. Stoica, R. Monis, D. Karger,  M. F. Kaashoek,  and
+H. Baltrkrishnan.  Chord:  A Scalable  Peer-To-Peer  Lookup
+Service  for  Intemet  Applications.  ln SIGCOMM,2001.
+
+t40l  H. Tirngmunarunkit,  R. Govindan,  S. Shenker,  and  D.  Es-
+trin.  The Impact  of Routing  Policy on Internet  Paths.  In
+Infocom,2001  .
+
+t41l  A. Vahdat,  K. Yocum, K. Walsh,  P. Mahadevan,  D. Kosti6,
+J.  Chase,  and D. Becker. Scalability and Accuracy  in a
+Large-Scale  Network  Emulator.  In  5th O5D1,2002.
+
+[42] R. van  Renesse,  Y. Minska, and M. Hayden.  A Gossip-
+
+Based  Failure Detection  Service.  ln Middleware.7998.
+
+t43l  W. Vogels. World wide  failures.  In ACM SIGOPS Euro-
+
+pean  Workshop,1996.
+
+t44l W. Vogels and  C. Re. Ws-membership  - failure  manage-
+ment  in a web-services world.  ln IntL.  World  Wide  Web
+C onfe  renc e (WWW ), 2003.
+
+t45l H. Yu  and  A. Vahdat.  Consistent and  Automatic  Replica
+
+Regeneration. ln lst N5D1,2004.
+
+[46] B. Y. Zhao,  J. D. Kubiatowicz,  and  A. D. Joseph.  Tapestry:
+An Infrastructure  for Fault-Resilient  Wide-area  Location
+and  Routing.  Technical  Report  UCB//CSD-01-1141,  UC
+Berkeley,2001.
+
+service  of  failure  detectors. In DSN, 2000.
+
+J18l  F. Dabek, B.Zhao, P.  Druschel,  and  I. Stoica. Towards a
+colrrmon API for structured peer-to-peer overlays.  In 2nd
+Intl. Workshop  on  Peer-to-Peer  Systems  (IPTPS),2003.
+
+l19l A. Das,  I. Gupta,  and A. Motivala. SWIM:  Scalable
+Weakly  consistent  Infection-style  process  group Member-
+ship  protocol.  In DlN,2002.
+
+[20] J. Dunagan,  N.  J. A. Harvey,  M.  B.  Jones,  M. Theimer,
+and A. Wolman.  Subscriber/Volunteer  Trees:  Polite,
+Efficient Overlay  Multicast  Trees.
+http  ://research.microsoft.com/sn/Herald/papers/SVTree. 
+Submitt ed fo r pub  lic ation,  2004.
+
+[21]  P. Felber, X. Defago,  R.  Gueruaoui,  and  P. Oser.  Failure
+Detectors  as First Class Objects.  ln Intl.  Symposium  on
+Distributed Ob.jects  and Applications, 7999.
+
+122)  M. Fischer,  N. Lynch,  and  M. S. Paterson.  Impossibiiity of
+distributed  consensus  with  one  faulty process.  Journal of
+the  ACM,  32(2):31  4-382, 1985.
+
+pdf
+
+[23] I. Gupta,  T. Chandra,  and G. Goldszmidt.  On  Scalable  and
+
+Efflcient  Distributed  Failure Detectors.  ln PODC,200l.
+
+[24] J. Halpern and Y. Moses. Knowledge  and common  knowl-
+edge  in a distributed  environment.  Joumal  of  the  ACM,
+37:549-587,  1990.
+
+t25l  N. J. A.  Harvey, M.  B. Jones,  S. Saroiu, M. Theimer,  and
+A. Wolman.  SkipNet: A Scalable  Overlay  Network with
+Practical  Locality  Properties.  In Fourth USENIX  Sympo-
+sium  on Intetnet  Technologies  and  Systems  (USITS),2003.
+126)  P. li, Z. Ge, J. Kurose,  and D.  Towsley.  A Comparison
+of Hard-state and  Soft-state Signaling  Protocols. In  ^SIG-
+coMM,2003.
+
+[27] C. Labovitz and  A. Ahuja.  Experimental  Study  of Inter-
+net Stability and Wide-Area  Backbone Failures.  ln Fault-
+Tolerant Computing Symposium  ( FTCS ), 1999.
+
+[28] L. Lamport.  Using Time  Instead  of Timeout for  Fault-
+Tolerant Distributed  Systems.  A C M TO P LA S, 6:25  4-280,
+1984.
+
+[29] L. Lamport.  The  Part-Time  Parliament.  ACM  TOCS,
+
+[30] B. Liskov.  Distributed  Programming  with  Argus.  CACM,
+
+I 6:133-169, 1998.
+
+31:30G-312,1988.
+
+[31] R. Mahajan,  D. Wetherall,  and  T. Anderson.  Understand-
+
+ing BGP misconfiguratiot.  ln SIGCOMM,2002.
+
+[32] J. Mogul,  L. Brakmo, D. E. Lowell,  D. Subhraveti,  and
+
+J. Moore. Unveiling  the Transport.  ln HotNets,2003.
+
+[33] J. T. Moy. OSPF;  Anatomy  of An Intemet  Routing  Proto-
+
+col. Addison-Wesley,  1998.
+
+[34] S. Ratnasamy,  P. Francis,  M. Handley,  R. Karp,  and
+S. Shenker.  A Scalable  Content-Addressable  Network.  In
+SIGCOMM,2OO1.
+
+[35] T. L. Rodeheffer and M. D. Schroeder.  Automatic  Recon-
+
+flguration  in Autonet.  In SOSP,  199  1.
+
+t36l A. Rowstron  and  P. Druschei.  Pastry: Scalable,  distributed
+object  location  and routing  for  large-scale  peer-to-peer
+systems.  ln Middleware,  2001.
+
+t37l A. Rowstron,  A.-M. Kermarrec,  M. Castro, and P. Dr-
+uschel.  Scribe: The design  of a large-scale  event  notifica-
+tion infrastructure.  In Third  Intl.  Workshop  on Networked
+G  ro up Communications,  200 l.
+
+[38] P. Stelling, C. Lee, I. Foster, G. von Laszewski,  and
+C. Kesselman.  A Fault  Detection  Service for Wide  Area
+Distributed  Computations.  ln High  Pefibrmance  Dis-
+
+166
+
+OSDI  '04: 6th Symposium on  Operating Systems Design and Implementation  USENIX  Association
+
+

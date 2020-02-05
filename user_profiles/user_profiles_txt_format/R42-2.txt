@@ -1,0 +1,1388 @@
+Points-to Analysis for JavaScript∗
+
+Korea Advanced Institute of Science &
+
+Korea Advanced Institute of Science &
+
+Dongseok Jang
+
+Dept. of Computer Science
+
+Technology
+
+dsjang@kaist.ac.kr
+
+Kwang-Moo Choe
+
+Dept. of Computer Science
+
+Technology
+
+choe@kaist.ac.kr
+
+ABSTRACT
+JavaScript is widely used by web developers and the com-
+plexity of JavaScript programs has increased over the last
+year. Therefore, the need for program analysis for Java-
+Script is evident. Points-to analysis for JavaScript is to de-
+termine the set of objects to which a reference variable or
+an object property may point. Points-to analysis for Java-
+Script is a basis for further program analyses for JavaScript.
+It has a wide range of applications in code optimization and
+software engineering tools. However, points-to analysis for
+JavaScript has not yet been developed.
+
+JavaScript has dynamic features such as the runtime mod-
+iﬁcation of objects through addition of properties or updat-
+ing of methods. We propose a points-to analysis for Java-
+Script which precisely handles the dynamic features of Java-
+Script. Our work is the ﬁrst attempt to analyze the points-to
+behavior of JavaScript. We evaluate the analysis on a set
+of JavaScript programs. We also apply the analysis to a
+code optimization technique to show that the analysis can
+be practically useful.
+
+Categories and Subject Descriptors
+D.3.2 [Programming Languages]: Language Classiﬁca-
+tions—Specialized application languages; F.3.2 [Logics and
+Meanings of Programs]: Semantics of Programming Lan-
+guages—Program analysis
+
+General Terms
+Algorithms,Design,Experimentation,Languages
+
+Keywords
+JavaScript, points-to analysis, pointer analysis, program anal-
+∗
+
+This work was supported by the Engineering Research Cen-
+ter of Excellence Program of Korea Ministry of Education,
+Science and Technology(MEST) / Korea Science and Engi-
+neering Foundation(KOSEF), grant number R11-2008-007-
+02004-0.
+
+Permission to make digital or hard copies of all or part of this work for
+personal or classroom use is granted without fee provided that copies are
+not made or distributed for proﬁt or commercial advantage and that copies
+bear this notice and the full citation on the ﬁrst page. To copy otherwise, to
+republish, to post on servers or to redistribute to lists, requires prior speciﬁc
+permission and/or a fee.
+SAC’09 March 8-12, 2009, Honolulu, Hawaii, U.S.A.
+Copyright 2009 ACM 978-1-60558-166-8/09/03 ...$5.00.
+
+1930
+
+ysis, scripting language
+
+1.
+
+INTRODUCTION
+
+JavaScript is a scripting language designed for client-side
+web scripting. There is now a standardized version, EC-
+MAScript[6]. JavaScript has attracted more users and Java-
+Script programs have become lengthy and complex. Al-
+most all web browsers support JavaScript. With help of
+the DOM[11] and Ajax[7], there are more and more sophis-
+ticated JavaScript programs used in popular web sites in
+these days. The web sites use JavaScript to implement im-
+portant application logic rather than simple user interfaces.
+A problem of JavaScript programs is slow execution speed.
+That is because JavaScript programs are usually executed
+by interpreters and JavaScript has many dynamic features
+which must be checked at runtime. The speed of JavaScript
+programs aﬀects people’s perception about the responsive-
+ness of popular websites.
+
+Performance improvement through the use of code opti-
+mization is an important method for making JavaScript a
+proper choice for building high quality software. Because a
+JavaScript statement executes many machine instructions,
+a little change of a JavaScript source code can bring about
+much improvement of the performance. Code optimization
+can be statically applied by using source level transforma-
+tion. JavaScript compilers can also adopt code optimization
+to generate faster target code. Even JavaScript interpreters
+can utilize code optimization techniques at runtime.
+
+Points-to analysis for JavaScript is essential for code opti-
+mization, but it has not yet been developed. Points-to anal-
+ysis for JavaScript determines the set of objects to which a
+reference variable or an object property may point. Points-
+to analysis enables essential analyses for code optimization,
+such as side-eﬀect analysis and def-use analysis.
+
+In this paper, we present and evaluate a points-to analy-
+sis for JavaScript as a ﬁrst step for further program analyses
+for JavaScript. Our analysis is based on Andersen’s points-
+to analysis for C[2]. In Section 2, we discuss a motivating
+example of our research. Then, we deﬁne a restricted lan-
+guage to brieﬂy describe points-to behavior of JavaScript in
+Section 3. We present a constraint-based, ﬂow- and context-
+insensitive 1 points-to analysis for the restricted language in
+Section 4. In Section 5, we evaluate our analysis on a set
+of JavaScript programs. We also evaluate the impact of
+the analysis on a special case of partial-redundancy elimi-
+1A ﬂow-insensitive analysis does not take control-ﬂow into
+account. A context-insensitive analysis does not distinguish
+between diﬀerent invocations of a function
+
+S0 : var str = prompt();
+S1 : var a = new Object(); // o1
+// o2
+S2 : a.x = new Object();
+// o3
+S3 : a.y = new Object();
+S4 : a[str] = new Object(); // o4
+S5 : b = a.x;
+
+a
+
+b
+
+O 1 []
+
+O 1
+
+O 2
+
+O 3
+
+O 4
+
+O 1
+
+O 2
+
+O 3
+
+O 4
+
+a
+
+O 1.x
+
+O 1.y
+
+O []
+
+1
+
+b
+
+Figure 1: Example of JavaScript program and its
+points-to graphs. Top: Program code, Bottom left:
+Conventional graph, Bottom right: Graph with con-
+sidering properties
+
+nation[1] for the JavaScript programs. Section 6 discusses
+related work. Finally, Section 7 presents conclusions and
+future work.
+
+2. MOTIVATION
+
+In a sense, a JavaScript object is an associative array–a
+data structure that allows to dynamically associate arbitrary
+data values with arbitrary strings. An object property2 can
+be accessed as an array element. The feature is represented
+in JavaScript syntax. For example, the JavaScript expres-
+sion object.property is equivalent to object["property"].
+In Figure 1, the program shows that behavior. S0 gets
+a string from a library function. Then, S1 creates a new
+object o1 with no properties. Here we name an object by
+its allocation site in a program. S2 assigns o2 to a non-
+existing property named x of o1 referenced by a. Because
+it does not exist, the property is created on the ﬂy and the
+value is assigned to the newly created property. S3 does
+similar operations to the property y of o1. S4 assigns o4
+to a property whose name is given by the expression str
+via the [ ] operator. The expression str may evaluate to
+"x","y", or a non-existing property name. When an object
+property is accessed by the [ ] operator, the actual property
+name may be statically unknown.
+
+Conventional points-to analyses based on Andersen’s anal-
+ysis[2] treat elements of an array as an aggregate.
+If we
+naively adapt the conventional analyses to JavaScript, ob-
+ject properties are also treated as aggregates because ob-
+ject properties are only array elements indexed by strings
+in JavaScript.
+In practice, object properties are used for
+complex hierarchical data structures such as the DOM[11].
+Therefore, the results of the conventional analyses would be
+inaccurate. For the program in Figure 1, Andersen’s algo-
+rithm computes the points-to graph on the bottom left. In
+the points-to graph, all the properties of o1 are aggregated
+as o1[ ]. Consequently, the points-to set of b is {o2, o3, o4}.
+2Fields of an object are called “properties” of the object in
+JavaScript
+
+If we maintain information for each property to increase
+the precision of the analysis, we obtain the points-to graph
+on the bottom right of Figure 1. In the graph, we maintain
+the name of each property of an object. For example, we use
+o1.x to represent the property x of the object o1. For the
+added property via the [ ] operator, we use the aggregate
+o1[ ] in the same way of Andersen’s analysis.
+
+When an object property is updated via the [ ] operator,
+we may not know what property of the object is actually
+updated because the name of the changing property may
+not be statically determined. Any existing property of the
+object may be updated, or a new property may be created
+in the object. Because str may evaluate to "x" or "y" at
+S4, o1.x and o1.y point to o4 in our points-to graph for the
+program. The node o1[ ] is for the case that str evaluate to
+a property name which cannot be statically determined. In
+our points-to graph, the points-to set of b is {o2, o4}. This
+is more accurate than the conventional approaches. Our
+points-to analysis increases accuracy by distinguishing each
+property separately while considering dynamic features of
+JavaScript.
+
+3. SIMPLESCRIPT
+
+For presentation brevity, we deﬁne SimpleScript, a re-
+stricted language of JavaScript. The most part of Simple-
+Script is based on Thiemann’s work [16], but modiﬁed in
+some ways. We add the . operation and a unique global ob-
+ject to SimpleScript to expose signiﬁcant points-to behaviors
+of JavaScript.
+
+JavaScript is a weakly and dynamically typed object-based
+language. JavaScript has no classes but supports construc-
+tors and prototyping to share functionality of code. Java-
+Script provides the runtime modiﬁcation of objects through
+addition of properties or updating of methods. A JavaScript
+object is just like an associative array– a data structure that
+allows to dynamically associate arbitrary data values with
+arbitrary strings(property names).
+
+JavaScript has lexically scoped ﬁrst-class functions which
+behave as functions or methods. When a function object is
+assigned to a property of an object, the function acts as a
+method if it is referenced by the property of the object and
+called. If a function is called as a method of an object, each
+reference to this is bound to the object in the function body.
+Otherwise, each reference to this resolves to the unique
+global object of JavaScript. A function can be used as a
+constructor when invoked through the new operator. The
+new operator creates a new object, and calls a constructor
+which binds this to the new object in the function body.
+
+JavaScript has a unique global object. Whenever a vari-
+able is declared in the global scope or a value is assigned to
+an undeclared variable, the variable becomes a property of
+the global object.
+
+The abstract syntax of SimpleScript is in Figure 2. Sim-
+
+pleScript comprises the following language constructs.
+
+• this : When a function is called as a method of an
+object, this is a reference to the object receiving the
+method call in the function body. Otherwise, this is
+a reference to the global object.
+
+• {} is an object literal which creates a new object with
+
+no properties.
+
+• function f (x1, ..., xm){s} creates a new function ob-
+ject with the formal parameters x1, ..., xm and the func-
+
+1931
+
+Expressions
+e ::= this
+
+self reference in method calls
+variable
+primitive data value
+object literal
+
+x
+c
+{}
+function x(x, ...){s} function expression
+e.x
+e[e]
+new e(e, ...)
+e(e, ...)
+e = e
+p(e, ...)
+
+property reference by .
+property reference by [ ]
+object creation
+function call
+assignment
+primitive operators(add, etc.)
+
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+
+Statements
+s ::= skip
+var x
+e
+s; s
+if (e) then {s} else {s} conditional
+while (e) {s}
+return e
+
+|
+|
+|
+|
+|
+|
+
+no operation
+variable declaration
+expression statement
+sequence
+
+iteration
+function return
+
+Figure 2: Syntax of SimpleScript
+
+tion body s. The statements in the body refer to the
+enclosing function as f , but f is invalid outside of the
+function.
+
+• e.x is a property reference by the . operator. The
+expression e evaluates to an object and x is a property
+name. If the expression appears on the left side of an
+assignment expression and the property x is not in the
+object, the property is created at runtime.
+
+• e1[e2] is a property reference by the [ ] operator. The
+expression e1 evaluates to an object. e2 evaluates to a
+string which is used as a property name of the object.
+If e2 evaluates to the string x, the meaning of the entire
+expression is equivalent to e1.x.
+
+• new e0(e1, ...) is an object creation expression. e0 eval-
+uates to a function object and the function is called
+with e1, ... as its actual parameters.
+In the function
+body, this resolves to the newly created object for the
+object creation expression. If the function does not re-
+turn an object, then the entire expression evaluates
+to the new object. Otherwise, the entire expression
+evaluates to the return value of the function.
+
+• e0(e1, ...) is a function call. e0 evaluates to a function
+object. The function is called with e1, ... as its actual
+parameters. If the function is called as a method of
+an object, that is, e0 is the form of e01.x or e01[e02],
+this is bound to an object to which e01 evaluates in
+the function body. Otherwise, this is bound to the
+global object.
+
+• p(e1, ...) is for primitive operations such as arithmetic
+or logical operations. SimpleScript primitive opera-
+tions return a primitive data value. 3
+
+• var x is a variable declaration. When a variable is
+declared in the global scope or a value is assigned to an
+undeclared variable, the variable becomes a property
+
+3In JavaScript, the logical AND(&&) and logical OR(||) op-
+erations may return an object.
+
+1932
+
+of the global object.
+
+For presentation brevity, some JavaScript features are re-
+stricted in SimpleScript. All identiﬁers are assumed to be
+syntactically diﬀerent and a global variable is declared be-
+fore it is used in a SimpleScript program. SimpleScript does
+not allow prototyping and the implicit conversion from a
+primitive data value to an object. Property deletion is mean-
+ingless to our ﬂow-insensitive analysis and so is not included
+in our analysis. Those restricted features can be easily added
+to our analysis with trivial modiﬁcation.
+
+4. POINTS-TO ANALYSIS
+
+In this section, we present a ﬂow- and context-insensitive
+points-to analysis for JavaScript. We develop our analy-
+sis based on the set-constraint framework[8]. The analy-
+sis precisely models dynamic features of JavaScript, such
+as the runtime modiﬁcation of objects through addition of
+properties or updating of methods. Our analysis maintains
+information for each property of an object to increase the
+precision of points-to analysis.
+
+We present set constraints for the points-to analysis (Sec-
+tion 4.1). Then, we describe our set-constraints system de-
+signed in the form of constraint generation rules. Our anal-
+ysis constructs set constraints for input programs by using
+the generation rules (Section 4.2). Next, by using a set of
+rules for solving, the analysis computes the least solution(or
+model) of the constraints (Section 4.3).
+
+4.1 Set Constraints
+
+A set constraint is of the form Xe ⊇ se where Xe is a set
+variable and se is a set expression. A set constraint Xe ⊇ se
+is read “at runtime, the expression e evaluates to an object
+in a set of objects(a points-to set) including those of se.”
+We write C for a ﬁnite collection of set constraints.
+
+The syntax and semantics of set expressions are in Fig-
+ure 3. The formal semantics of set expressions is deﬁned
+by an interpretation I that maps from set expressions to
+sets of values (subsets of V al). In the deﬁnition of I, some
+set expressions themselves impose restrictions on I. If these
+restrictions are not met, then the interpretation of the ex-
+pression is undeﬁned. We call an interpretation I a model(a
+solution) of a conjunction of constraints C if, for each con-
+straint X ⊇ se (set variable X and set expression se) inC ,
+I(se) is deﬁned and I(X ) ⊇ I(se). We write lm(C) for the
+least model of C. The semantics of set expressions naturally
+follows from their corresponding language constructs.
+
+• Xe : A set variable for objects to which e evaluates.
+• Xe:recv :
+
+If e is a property reference, i.e., e is e1.x
+or e1[e2] ande() is executed, then this is bound to
+the value of e1 in the called function body. When a
+function referenced by e is called, Xe:recv is used for
+passing the object receiving the method call to this
+in the function body.
+
+• Xo.x : A set variable for objects assigned to the object
+o’s property x via the . operator.
+If the variable l
+refers to the object o, then the statement l.x = r let
+Xo.x contain Xr
+
+• Xo:dot : A set variable for all objects assigned to a prop-
+erty of the object o via the . operator. If the variable
+l refers to the object o, the statement l.property = r
+let Xo:dot contain Xr, regardless of property.
+
+Syntax of set expressions
+e ∈ Expressions
+o ∈ {ol | l is an object allocation site} object name
+x ∈ Identif iers
+se ::= Xe
+
+SimpleScript expression
+
+| Xe:recv
+| Xo.x
+| Xo:dot
+| Xo:brk
+| Xo:this
+| Xo:return
+|
+|
+| W riteDot(Xe1 , x,X e2 )
+| W riteBrk(Xe1 , Xe2 )
+| ReadDot(Xe1 , x)
+| ReadBrk(Xe1 )
+| Call(Xe0 , Xe0:recv, Xe1 , ..., Xen )
+
+const
+o
+
+SimpleScript identiﬁer
+set variable for SimpleScript expression
+set variable for binding this for function call
+set variable for property x of object o
+set variable for all properties of o assigned by .
+set variable for all properties of o assigned by [ ]
+set variable for this in body of function o
+set variable for return value of function o
+set expression for primitive data values
+set expression for object name
+set expression for property write by .
+set expression for property write by [ ]
+set expression for property read by .
+set expression for property read by [ ]
+set expression for function call
+
+Semantics of set expressions
+V al
+Def Of
+I(Xe)
+I(const)
+I(ol)
+I(W riteDot(Xe1 , x,X e2 ))
+I(W riteBrk(Xe1 , Xe2 ))
+I(ReadDot(Xe1 , x))
+I(ReadBrk(Xe1 ))
+I(Call(Xe0 , Xp, Xe1 , ..., Xen )) = {v | v ∈ I(Xo:return)}
+
+= {ol | l is an object allocation site} ∪ {const}
+: V al → Expressions
+⊆ V al
+= {const}
+= {ol}
+= {} provided o ∈ I(Xe1 ) implies that I(Xo.x) ⊇ I(Xe2 ) ∧ I(Xo:dot) ⊇ I(Xe2 )
+= {} provided o ∈ I(Xe1 ) implies that I(Xo:brk) ⊇ I(Xe2 )
+= {v | v ∈ I(Xo.x) ∪ I(Xo:brk), o ∈ I(Xe1 )}
+= {v | v ∈ I(Xo:dot) ∪ I(Xo:brk), o ∈ I(Xe1 )}
+
+provided o ∈ I(Xe0 ) ∧ Def Of (o) =function x0(x1, ..., xn){...} implies that
+I(Xo:this) ⊇ I(Xp) ∧ I(Xx1 ) ⊇ I(Xe1 ) ∧ ... ∧ I(Xxn ) ⊇ I(Xen )
+
+Figure 3: Set expressions for SimpleScript
+
+• Xo:brk : A set variable for all objects assigned to a
+property of the object o via the [ ] operator. If the vari-
+able l refers to the object o, the statement l[str] = r
+let Xo:brk contain Xr regardless of the value of str.
+
+• Xo:this : A set variable for objects to which this points
+
+in the function object o.
+
+• Xo:return : A set variable for objects which the function
+
+object o returns.
+
+• const : A set expression for representing all the primi-
+tive data values (number, string, boolean, null). const
+itself means the singleton set containing const.
+
+• ol : An object name created at the object allocation
+site l. l is uniquely determined by a location in a pro-
+gram code. ol itself means the singleton set containing
+ol.
+
+• W riteDot(Xe1 , x,X e2 ) : A set expression for repre-
+senting the semantics of the expression e1.x = e2. For
+all o in Xe1 , the set expression imposes some restric-
+tions to collect values of Xe2 into Xo.x and Xo:dot.
+
+• W riteBrk(Xe1 , Xe2 ) : A set expression for represent-
+ing the semantics of the expression e1[str] =e 2. For
+all o in Xe1 , the set expression imposes a restriction to
+collect values of Xe2 into Xo:brk.
+
+• ReadDot(Xe, x) : A set expression for objects to which
+the expression e.x evaluates. The set expression means
+a set which is the union of Xo.x and Xo:brk for all o in
+
+Xe. Xo:brk is for the case that the property x of o is
+set by the [ ] operator.
+
+• ReadBrk(Xe) : A set expression for objects to which
+the expression e[str] evaluates. The set expression
+means a set which is the union of Xo:dot and Xo:brk
+for all o in Xe. When e evaluates the object o, e[str]
+might evaluate to any property of o. Therefore, all
+properties of o should be considered.
+
+• Call(Xe0 , Xe0:recv, Xe1 , ..., Xen ) : A set expression for
+the function call expression e0(e1, ..., en). The ﬁrst pa-
+rameter of Call is for a function object that is called.
+The second parameter is for objects receiving a method
+call when the function is called as a method. The other
+parameters are for the actual parameters of the func-
+tion. Def Of is a function that maps from an object
+name to the SimpleScript expression which creates the
+object. Def Of is used for obtaining the function’s
+signature. The set expression imposes restrictions for
+binding this and actual parameters of a function.
+
+A solution of our analysis is deﬁned to be the least model
+of a conjunction of constraints. A conjunction of constraints
+for a program guarantees the existence of its least solu-
+tion because every operator is monotonic (in terms of set-
+inclusion) and each constraint’s left-hand-side is a single
+variable[8].
+
+1933
+
+[Const]
+
+[PrimOp]
+
+[ObjLit]
+
+[This]
+
+(cid:2)c : {Xe ⊇ const}
+
+(cid:2)ei : Ci, i = 0, ..., n
+
+(cid:2)p(e1, ..., en) :
+
+{Xe ⊇ const} ∪ C1 ∪ ... ∪ Cn
+
+(cid:2){}l : {Xe ⊇ ol}
+
+o is the enclosing function object
+
+(cid:2)this : {Xe ⊇ Xo:this, Xe:recv ⊇ og}
+
+[FuncExpr]
+
+(cid:2)function x0(x1, ..., xn){s1}l :
+
+{Xe ⊇ ol, Xe:recv ⊇ og} ∪ C1
+
+(cid:2)s1 : C1
+
+(cid:2)e1 : C1
+(cid:2)x = e1 :
+
+[Write]
+
+{Xe ⊇ Xe1 , Xx ⊇ Xe1 , Xe:recv ⊇ og} ∪ C1
+
+[PWrite([ ])]
+
+{Xe ⊇ Xe3 , Xe ⊇ W riteBrk(Xe1 , Xe3 ),
+
+Xe:recv ⊇ og} ∪ C1 ∪ C2 ∪ C3
+
+(cid:2)e1 : C1 (cid:2) e2 : C2
+
+(cid:2)e1.x = e2 :
+{Xe ⊇ Xe2 ,
+
+Xe ⊇ W riteDot(Xe1 , x,X e2 ),
+
+Xe:recv ⊇ og} ∪ C1 ∪ C2
+
+(cid:2)e1 : C1 (cid:2) e2 : C2 (cid:2) e3 : C3
+
+(cid:2)e1[e2] = e3 :
+
+(cid:2)e1 : C1
+(cid:2)e1.x :
+
+{Xe ⊇ ReadDot(Xe1 , x),
+
+Xe:recv ⊇ Xe1 } ∪ C1
+
+(cid:2)e1 : C1 (cid:2) e2 : C2
+
+(cid:2)e1[e2] :
+
+{Xe ⊇ ReadBrk(Xe1 ),
+Xe:recv ⊇ Xe1 } ∪ C1 ∪ C2
+
+(cid:2)ei : Ci, i = 0, ..., n
+(cid:2)new e0(e1, ..., en)l :
+
+{Xe ⊇ ol,
+
+[PWrite(.)]
+
+[PRead(.)]
+
+[PRead([ ])]
+
+[New]
+
+[Call]
+
+Xe ⊇ Call(Xe0 , ol, Xe1 , ..., Xen ),
+
+Xe:recv ⊇ og} ∪ C0 ∪ ... ∪ Cn
+
+(cid:2)ei : Ci, i = 0, ..., n
+
+(cid:2) e0(e1, ..., en) :
+
+{Xe ⊇ Call(Xe0 , Xe0:recv, Xe1 , ..., Xen ),
+
+Xe:recv ⊇ og} ∪ C0 ∪ ... ∪ Cn
+
+o is the enclosing function (cid:2) e1 : C1
+
+[Return]
+
+(cid:2)return e1 :
+
+{Xo:return ⊇ Xe1 } ∪ C1
+
+[VarDecl]
+
+(cid:2)var x : Xog .x ⊇ Xx
+
+the declaration is at top-level
+
+Figure 4: Constraint generation rules for Simple-
+Script
+
+1934
+
+Xe1 ⊇ Xe2 Xe2 ⊇ o
+
+Xe1 ⊇ Xe2 Xe2 ⊇ const
+
+Xe1 ⊇ o
+
+Xe1 ⊇ const
+
+Xe ⊇ W riteDot(Xe1 , x,X e2 ) Xe1 ⊇ o
+
+Xo.x ⊇ Xe2 Xo:dot ⊇ Xe2
+
+Xe ⊇ W riteBrk(Xe1 , Xe3 ) Xe1 ⊇ o
+
+Xo:brk ⊇ Xe3
+
+Xe ⊇ ReadDot(Xe1 , x) Xe1 ⊇ o
+
+Xe ⊇ Xo.x Xe ⊇ Xo:brk
+
+Xe ⊇ ReadBrk(Xe1 ) Xe1 ⊇ o
+
+Xe ⊇ Xo:dot Xe ⊇ Xo:brk
+
+Xe ⊇ Call(Xe0 , Xe0:recv, Xe1 , ..., Xen ) Xe0 ⊇ o
+
+Def Of (o) =function x0(x1, ..., xn){...}
+
+Xe ⊇ Xo:return Xo:this ⊇ Xe0:recv Xxi
+
+⊇ Xei
+
+, i = 1, ..., n
+
+Figure 5: Constraint solving rules
+
+4.2 Constraint Generation
+
+For every program expression, our analysis generates set
+constraints representing the semantics of the expression. Fig-
+ure 4 shows the constraint generation rules for SimpleScript.
+For our analysis, every program expression e has a con-
+straint: Xe ⊇ se. The Xe is a set variable for the points-to
+set of the expression e. For each generation rule, the sub-
+script e of Xe denotes the current expression to which the
+rule applies. Our analysis also generates set constraints rep-
+resenting the semantics of global variable declarations and
+function return statements. For the statements which are
+not described in Figure 4, our analysis simply collects the
+constraints for expressions contained in the statements.
+
+The relation “(cid:2)e : C” is read “constraints C are gener-
+ated from expression e”. The global object is represented
+by og. The expressions which creates a new object are la-
+beled l, an object allocation site. The labels are used as ob-
+ject names created by the expressions. Some rules generate
+constraints which contain compound set expressions such as
+W riteDot,W riteBrk, etc. The meanings of the constraints
+are explained in Section 4.1. The constraints are resolved
+into simpler constraints during constraint solving in Section
+4.3. For the expression e which can evaluate to a function,
+the rules generate a constraint of the form Xe:recv ⊇ se.
+When a function call e() is found, Xe:recv is used for pass-
+ing objects receiving a method call to this in the function
+body. Xe:recv ⊇ og is generated for an expression that is not
+a property reference because this is bound to the global
+object if a function is not called as a method.
+
+The correctness of (cid:2) (i.e., the least model of constraints
+generated by (cid:2) for a program includes the actual values) is
+assumed. The set-based operational semantics can be de-
+ﬁned based on the small-step operational semantics of Thie-
+mann[16]. The set-based semantics can be used as an inter-
+mediate form to prove that our system is correct as those
+outlined in [9].
+
+[PrimOp] is for primitive operations.
+
+In SimpleScript,
+primitive operations always return a primitive data value.
+[ObjLit] is straightforward. A new object is labeled an ob-
+ject allocation site l.
+[This] is simple too. For a function
+
+object o, Xo:this is for this reference in the function body.
+[Write] deals with an expression which assigns a value to
+a reference variable. Two constraints are generated by the
+expression. The ﬁrst describes that the expression itself has
+the value of its right side, and the second describes that the
+expression assigns the value of its right side to the variable.
+[PWrite(.)] concerns an expression which assigns a value to
+an object property by the . operator. The rule generates the
+following constraints for the expression: 1) the assignment
+expression has the value of e2. 2) for an object to which
+e1 evaluates, the property x of the object has the value of
+e2.
+[PWrite([ ])] is for an expression which assigns a value
+to an object property by the [ ] operator. The generated
+constraints describes the following: 1) the assignment ex-
+pression itself has the value of e2. 2) for an object to which
+e1 evaluates, an unknown property of the object has the
+value of e2. Moreover, any property of the object can be
+updated.
+
+[PRead(.)] concerns a property reference by the . opera-
+tor. The rule generates two constraints for the expression.
+The ﬁrst constraint describes that the expression has the
+value of the property x of the object described by e1. The
+second constraint is for binding this reference when a func-
+tion referenced by the expression is called. When a function
+is referenced by an object o’s property and is called, this is
+bound to the object o in the function body. The set variable
+Xe:recv is used for that binding.
+[PRead([ ])] is for a prop-
+erty reference by the [ ] operator. The rule generates two
+constraints for the expression. The ﬁrst constraint describes
+that the expression has the value of any property of the ob-
+ject described by e1. The second constraint is the same as
+the one for [PRead(.)].
+
+[FuncExpr] is for a function expression. The function ex-
+pression is labeled l, and evaluates to a newly created func-
+tion object ol. [Call] is for a function call. From the expres-
+sion, the rule generates a constraint which contains a set
+expression Call. The meaning of the constraint is described
+in Section 4.1. [New] is for an object creation expression. A
+new object ol is created and this is bound to the new ob-
+ject in the body of the function used as the constructor. If
+the function does not return an object value, the expression
+evaluates to the new object. Otherwise, the expression eval-
+uates to the return value of the function. The constraints
+describes those behaviors.
+
+[Return] is the rule for a return statement.
+
+[VarDecl] is
+If a variable is declared
+for a global variable declaration.
+in global scope, it becomes a property of the global object.
+Xog .x is for the property x of the global object.
+
+4.3 Constraint Solving
+
+This section presents constraint solving rules for our con-
+straint systems. Set constraints containing compound set
+expressions are resolved into simpler constraints by using
+the rules in this section. Figure 5 shows the constraint solv-
+ing rules for SimpleScript. Intuitively, the rules propagate
+values along all the possible data ﬂow paths in a program.
+The ﬁrst two rules simply propagate values. The rule for
+W riteDot introduces Xo.x ⊇ Xe2 for the property x of o,
+and Xo:dot ⊇ Xe2 to collect the object o’s properties which
+are set by the . operator. The rule for W riteBrk collects in
+Xo:brk the object o’s properties which are set by the [ ] op-
+erator. The rule for ReadDot introduces Xe ⊇ Xo.x for the
+property x’s values which are explicitly set by the . opera-
+
+tor. Xe ⊇ Xo:brk is added by the rule because the property
+x can be implicitly set by the [ ] operator. All properties of
+the object o consist of properties deﬁned by the . operator
+(Xo:dot) or the [ ] operator (Xo:brk). The rule for ReadBrk
+just collects all properties of the object o because the [ ] op-
+erator may return a value of any property of an object. The
+rule for Call adds new constraints representing parameter
+bindings. Def Of is used to obtain the function signature.
+The Def Of information can be simultaneously collected in
+the constraint generation phase of Section 4.2.
+
+The solution can be computed by the conventional iter-
+ative ﬁxpoint method because the solution space is ﬁnite
+: object names given by object allocation sites. Correct-
+ness proof can be done by the ﬁxpoint induction over the
+continous functions that are derived[4] from our constraint
+systems.
+
+5. EXPERIMENTAL RESULTS
+
+We implemented a prototype points-to analyzer for Java-
+Script. We used the JavaScript interpreter Rhino[15] to
+parse a JavaScript program. All experiments were con-
+ducted on a 3.0Ghz Intel Pentium 4 machine with 1Gb
+physical memory. We used SunSpider[14], one of the most
+popular JavaScript benchmarks. The benchmark programs
+are implemented in pure JavaScript without using the DOM
+scripting or other browser APIs. Table 1 shows the bench-
+mark programs. The column “Object creation sites” reports
+the number of expressions which creates a new object. We
+exclude programs which heavily depend on a particular API
+like RegExp, and programs which do not have more than
+one object creation statement because they do not show sig-
+niﬁcant points-to behavior. We also exclude programs with
+higher-order script because they are out of our scope.
+
+5.1 Analysis Time and Object Read-Write In-
+
+formation
+
+The third column of Table 1 shows the analysis time of
+our analysis. The reported times are the median values out
+of 5 runs. For all the programs, the analysis runs in less than
+200 microseconds. The results show that our analysis can be
+done even at runtime for a small but important JavaScript
+program.
+
+We measured object read-write information to estimate
+the preciseness of our analysis. We considered all indirect
+access expressions, expressions of the form a.b or a[e] in a
+program. For each such expression, the points-to set of a
+contains objects which may be read or written by the ex-
+pression. Clients of object read-write information perform
+better with smaller points-to sets. Similar metrics have been
+used for a points-to analysis for C[10] or Java[12] to perform
+measurements to estimate the impact of the analysis.
+
+The experimental results are summarized in Table 1. The
+column “Avg # of Objects for Indirect Access” is for the
+average number of accessed objects for indirect access ex-
+pressions in a program.
+It is less than 2 in 10 out of the
+13 programs. These results show that the analysis precisely
+models the points-to behavior of the programs, and that the
+points-to solution can be eﬀectively used for applications of
+points-to analysis such as call graph construction.
+
+5.2 Eliminating Redundant Property Refer-
+
+ences
+
+1935
+
+Program
+
+Lines
+
+Object Analysis
+
+Creation
+Sites
+
+cube
+morph
+raytrace
+binary-trees
+fannkuch
+nbody
+nsieve
+aes
+md5
+sha1
+spectral-norm
+fasta
+validate-input
+
+346
+35
+448
+57
+73
+175
+45
+432
+301
+231
+58
+93
+95
+
+112
+5
+105
+10
+8
+31
+9
+81
+45
+41
+15
+14
+13
+
+Avg # of
+Time Objects for
+(ms)
+Indirect
+Access
+4.64
+1
+3.58
+1.73
+1
+2.36
+1
+1.68
+1.14
+1.25
+1.17
+1.38
+1
+
+146
+31
+168
+62
+31
+78
+31
+125
+68
+73
+36
+36
+46
+
+Table 1: Characteristics of programs and analysis
+time of the analysis and average number of accessed
+objects for indirect access expressions
+
+A property reference is a basic language construct in Java-
+Script.
+In JavaScript programs, a property reference is a
+frequently used operation, and syntactically similar prop-
+erty references are commonly found. Therefore, redundant
+property references are good targets for partial-redundancy
+elimination[1]. For partial redundancy elimination, points-
+to analysis is essential in detecting whether or not a property
+reference evaluates to the same value at diﬀerent points of
+a program.
+
+Figure 6 shows an example of eliminating redundant prop-
+erty references. In the left program, the same property ref-
+erence a.x is used at S6 and S8. If the value of a.x is not
+changed between S6 and S8, we can optimize the program
+by storing the value of the property in the temporary vari-
+able t, and then use the value of t instead of reevaluating
+a.x. The value of a.x is changed in one of the the following
+cases: 1) when an assignment expression a =e or a.x = e
+is executed. 2) when the property x of an a’s alias is up-
+dated, that is, d.x = e is executed. 3) when a function call
+does the same operations described in the case 2. Based on
+the fact that b is not an alias of a, and f does not change
+the property x of its parameter, the original program can be
+transformed into the program in Figure 6 (right).
+
+We transformed the benchmark programs by using the
+proposed technique with and without the points-to solution
+from our analysis. The transformation was done on source
+code level. The transformation without points-to informa-
+tion is done by suggesting that any two variables are aliases
+of each other and a function call aﬀects values of all prop-
+erty references. We found redundant property references in
+9 out of 13 programs. The execution time of each program
+was measured on Mozilla Firefox 2.0. The reported times
+are the averages of 50 runs.
+
+Table 2 shows the experimental results. The columns
+“PR” and “AE” show the number of property references
+and the number of assignment expressions in each program,
+respectively. The number of assignment expressions is re-
+ported because our transformation technique introduces a
+new assignment expression to a program. The column “Time”
+is for the execution time. We use “-” to signify that a pro-
+
+S0 : function f(p)
+
+{ p.y = 0;}
+S1 : var a = {};
+S2 : var b = {};
+S3 : var c = {};
+S4 : var d = a;
+S5 : a.x = Math.rand();
+S6 : b.x = a.x * 0.5;
+S7 : f(a);
+S8 : c.x = a.x * 0.9;
+
+S0 : function f(p)
+
+{ p.y = 0;}
+S1 : var a = {};
+S2 : var b = {};
+S3 : var c = {};
+S4 : var d = a;
+S5 : a.x = Math.rand();
+S6 : var t = a.x;
+S7 : b.x = t *0.5;
+S8 : f(a);
+S9 : c.x = t *0.9;
+
+Example of eliminating redundant
+Figure 6:
+property references.
+Left:Original program,
+Right:Program transformed by eliminating redun-
+dant property references
+
+Program Original
+
+Transformed
+without PTA with PTA
+
+Transformed
+
+(ms)
+
+(ms)
+
+PR AE Time PR AE Time PR AE Time
+(ms)
+346 178 868.6 323 192 995.1 221 224 781.3
+350 195 545.1 322 218 520.3 298 233 510.0
+73 65 781.3
+169 168 400.1 169 169 393.8 148 191 364.3
+91 126 426.5
+35 75 429.6
+12 30 431.2
+
+-
+-
+14 28 435.8
+
+94 119 439.1
+38 68 437.5
+16 27 446.9
+
+76 61 784.5
+
+77 60 785.9
+
+-
+-
+
+-
+-
+
+12 34 856.4
+11 34 624.8
+
+-
+-
+
+-
+-
+
+-
+-
+
+12 35 837.6
+11 35 595.5
+
+cube
+raytrace
+nbody
+aes
+md5
+sha1
+spectral-
+norm
+fasta
+validate-
+input
+
+Table 2: Characteristics of original programs and
+programs transformed by eliminating redundant
+property references. “PR” is for the number of
+property references and “AE” is for the number of
+assignment expressions
+
+gram is not transformed by the transformation technique.
+In some programs, the number of assignment expressions is
+increased without decreasing the number of property refer-
+ences because of eliminating loop invariant property refer-
+ences. The transformation technique simply tries to elimi-
+nate all redundant property references, even when a same
+property reference is used only twice. However, the simple
+method could make performance worse because introduced
+operations for temporary variables may cost more than the
+eliminated property references in some situations. For exam-
+ple, the performance becomes worse in the case of the trans-
+formed cube program without points-to information before
+the transformation. The performance improvement can be
+more signiﬁcant if redundant property references are selec-
+tively eliminated by considering the trade-oﬀ between in-
+troducing assignment expressions and eliminating property
+references in various situations.
+
+The transformation technique with points-to information
+eliminated more redundant property references and improved
+the performance of each program better than the technique
+without points-to information did. The results show that
+our points-to analysis can be useful for a practical applica-
+tion of the analysis.
+
+1936
+
+6. RELATED WORK
+
+Program analysis for C may be a starting point of pro-
+gram analysis for JavaScript. There are various points-to
+analyses for C with diﬀerent tradeoﬀs between cost and pre-
+cision. A relatively precise and eﬃcient points-to analysis
+is Andersen’s analysis for C[2]. Andersen’s analysis is more
+precise than other works of Steensgaard[13] and Das[5] even
+though it is slower than the others. In addition, Andersen’s
+analysis has been a starting point for other points-to anal-
+yses. Therefore, Andersen’s approach is a reasonable basis
+for our analysis.
+
+Because JavaScript is an object-based language, our work
+
+is clearly related to points-to analysis for other object-oriented
+languages. A points-to analysis for Java[12] is also based on
+Andersen’s analysis. In [12], annotated constraints are used
+to track object properties separately. The approach cannot
+be directly adapted to JavaScript because of the runtime
+modiﬁcation of objects. The potential impact of the ap-
+proach are extensively measured by using object read-write
+information, call graph construction, and synchronization
+removal and stack allocation in [12].
+
+The type systems for JavaScript[16, 3] focus on helping
+
+programmers debug and maintain JavaScript programs. They
+consider the runtime modiﬁcation of objects. Thiemann[16]
+speciﬁes a formal semantics for JavaScript and a type sys-
+tem. Thiemann’s type system models the automatic type
+conversions of JavaScript to detect runtime errors such as
+accessing a property of the null object.
+
+The type systems can also be used to execute JavaScript
+programs faster. While executing a JavaScript program, it
+takes much time for interpreters to do runtime type check-
+ing. With a static type system, a JavaScript interpreter can
+execute a program faster by avoiding runtime type checking
+for statically type checked variables.
+
+7. CONCLUSIONS AND FUTURE WORK
+
+We present a points-to analysis for JavaScript based on
+Andersen’s points-to analysis for C[2]. We implement the
+analysis by using a constraint-based approach. Conventional
+points-to analyses treat elements of an array in aggregate.
+However, the conventional approaches would be inaccurate
+for JavaScript because JavaScript objects are also associa-
+tive arrays. To distinguish between diﬀerent properties of an
+object, our analysis carefully deals with an JavaScript object
+depending on whether the object is used as an array or not.
+We evaluate our analysis on JavaScript programs. We also
+apply our analysis to optimize the programs by eliminat-
+ing redundant property references. Our results demonstrate
+that the analysis can be practically useful.
+
+For future work we want to evaluate the impact of our
+analysis on a larget set of extensive JavaScript programs.
+We would need to model the points-to behavior of com-
+plicated hierarchical object structures such the DOM or
+browser-speciﬁc objects that are used in practical JavaScript
+programs. We would also like to develop various client anal-
+yses of points-to analysis to evaluate the eﬀectiveness our
+analysis. Especially, we would like to develop general code
+optimization techniques for JavaScript, and evaluate the im-
+pact of the techniques on practical JavaScript programs.
+
+8. ACKNOWLEDGMENTS
+
+We are grateful to Dachuan Yu, Peter Thiemann, and Flo-
+
+rian Loitsch for sharing their valuable ideas on this work.
+
+9. REFERENCES
+[1] A. Aho, M. Lam, R. Sethi, and J. Ullman. Compilers:
+
+principles, techniques, and tools. Addison-Wesley
+Longman Publishing Co., Inc. Boston, MA, USA,
+2006.
+
+[2] L. Andersen. Program analysis and specialization for
+the C programming language. PhD thesis, University
+of Cophenhagen, 1994.
+
+[3] C. Anderson, P. Giannini, and S. Drossopoulou.
+
+Towards type inference for JavaScript. 19th European
+Conference on Object-Oriented Programming, pages
+428–453, 2005.
+
+[4] P. Cousot and R. Cousot. Compositional and
+
+inductive semantic deﬁnitions in ﬁxpoint, equational,
+constraint, closure-condition, rule-based and
+game-theoretic form. Lecture Notes in Computer
+Science, 939:293–308, 1995.
+
+[5] M. Das. Uniﬁcation-based pointer analysis with
+directional assignments. Proceedings of the ACM
+SIGPLAN 2000 conference on Programming language
+design and implementation, pages 35–46, 2000.
+
+[6] ECMA International. ECMAScript language
+
+speciﬁcation. Stardard ECMA-262, 3rd Edition,, Dec
+1999. http://www.ecma-
+international.org/publications/ﬁles/ECMA-ST/Ecma-
+262.pdf.
+
+[7] J. Garrett. Ajax: A new approach to web applications,
+
+2005.
+
+[8] N. Heintze. Set based program analysis. PhD thesis,
+
+Carnegie Mellon University, 1992.
+
+[9] N. Heintze. Set-based analysis of ML programs. ACM
+
+SIGPLAN Lisp Pointers, 7(3):306–317, 1994.
+
+[10] M. Hind and A. Pioli. Which pointer analysis should I
+
+use? ACM SIGSOFT Software Engineering Notes,
+25(5):113–123, 2000.
+
+[11] A. Le Hors, P. Le H´egaret, L. Wood, G. Nicol,
+
+J. Robie, M. Champion, and S. Byrne. Document
+object model (DOM) level 3 core speciﬁcation (W3C
+recommendation), 2004.
+http://www.w3.org/TR/DOM-Level-3-Core.
+
+[12] A. Rountev, A. Milanova, and B. Ryder. Points-to
+
+analysis for Java using annotated constraints.
+Proceedings of the 16th ACM SIGPLAN conference on
+Object oriented programming, systems, languages, and
+applications, pages 43–55, 2001.
+
+[13] B. Steensgaard. Points-to analysis in almost linear
+
+time. Proceedings of the 23rd ACM
+SIGPLAN-SIGACT symposium on Principles of
+programming languages, pages 32–41, 1996.
+
+[14] The Webkit Open Source Project. Sunspider
+
+JavaScript benchmark, 2007.
+http://webkit.org/perf/sunspider-0.9/sunspider.html/.
+
+[15] The Mozilla Organization. Rhino : JavaScript for
+
+Java, 2004. http://www.mozilla.org/rhino/.
+
+[16] P. Thiemann. Towards a type system for analyzing
+
+JavaScript programs. European Symposium On
+Programming, pages 408–422, 2005.
+
+1937
+
+

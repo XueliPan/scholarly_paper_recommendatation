@@ -1,0 +1,3337 @@
+Self-calibrating Online Wearout Detection
+
+Jason Blome
+
+Shuguang Feng
+
+Shantanu Gupta
+
+Scott Mahlke
+
+Advanced Computer Architecture Laboratory
+
+University of Michigan
+Ann Arbor, MI 48109
+
+fjblome, shoe, shangupt, mahlkeg@umich.edu
+
+ABSTRACT
+Technology scaling, characterized by decreasing feature size, thin-
+ning gate oxide, and non-ideal voltage scaling, will become a major
+hindrance to microprocessor reliability in future technology gener-
+ations. Physical analysis of device failure mechanisms has shown
+that most wearout mechanisms projected to plague future technol-
+ogy generations are progressive, meaning that the circuit-level ef-
+fects of wearout develop and intensify with age over the lifetime
+of the chip. This work leverages the progression of wearout over
+time in order to present a low-cost hardware structure that identi-
+ﬁes increasing propagation delay, which is symptomatic of many
+forms of wearout, to accurately forecast the failure of microarchi-
+tectural structures. To motivate the use of this predictive technique,
+an HSPICE analysis of the effects of one particular failure mecha-
+nism, gate oxide breakdown, on gates from a standard cell library
+characterized for a 90 nm process is presented. This gate-level anal-
+ysis is then used to demonstrate the aggregate change in output de-
+lay of high-level structures within a synthesized Verilog model of
+an embedded microprocessor core. Leveraging this analysis, a self-
+calibrating hardware structure for conducting statistical analysis of
+output delay is presented and its efﬁcacy in predicting the failure of
+a variety of structures within the microprocessor core is evaluated.
+
+1.
+
+INTRODUCTION
+
+Traditionally, microprocessors have been designed with worst
+case operating conditions in mind. To this end, manufacturers have
+employed burn in, guard bands, and speed binning to ensure that
+processors will meet a predeﬁned lifetime qualiﬁcation, or mean
+time to failure (MTTF). However, projections of current technol-
+ogy trends indicate that these techniques are unlikely to satisfy re-
+liability requirements in future technology generations [14]. As
+CMOS feature sizes scale to smaller dimensions, the inability of
+operating voltage to scale accordingly results in dramatic increases
+in power and current density. Areas of high power density increase
+local temperatures leading to hot spots on the chip [29]. Since most
+wearout mechanisms, such as gate oxide breakdown (OBD), neg-
+ative bias temperature instability (NBTI), electromigration (EM),
+and hot carrier injection (HCI), are highly dependent on tempera-
+ture, power, and current density, the occurrence of wearout-induced
+failures will become increasingly common in future technology
+generations [2].
+
+Though the reliability of individual devices is projected to de-
+crease, consumer expectations regarding system reliability are only
+likely to increase. For example, some business customers have re-
+ported downtime costs of more than $1 million per hour [6]. Fur-
+ther, a recent poll conducted by Gartner Research demonstrated that
+more than 84% of organizations rely on systems that are over ﬁve
+years old, and more than 50% use machines that are over ten years
+
+old [1]. Given the requisite long life expectancies of systems in
+the ﬁeld and the high costs of in-ﬁeld replacement, any technique
+for mitigating the amount of downtime experienced due to failed
+systems will prove invaluable to businesses.
+
+In order to maintain availability in the presence of potentially un-
+reliable components, architects and circuit designers have histori-
+cally employed either error detection or failure prediction mech-
+anisms. Error detection is used to identify failed or failing com-
+ponents by locating (potentially transient) pieces of incorrect state
+within the system. Once an error is detected, the problem is diag-
+nosed and corrective actions may be taken. The second approach,
+failure prediction, supplies the system with a failure forecast allow-
+ing it to take preventative measures to avoid, or at least minimize,
+the impact of expected device failures.
+
+Historically, high-end server systems have relied on error detec-
+tion to provide a high degree of system reliability. Error detection is
+typically implemented through coarse grain replication. This repli-
+cation can be conducted either in space through the use of repli-
+cated hardware [32, 12], or in time by way of redundant computa-
+tion [27, 24, 22, 37, 30, 18, 25, 23]. The use of redundant hardware
+is costly in terms of both power and area and does not signiﬁcantly
+increase the lifetime of the processor without additional cold-spare
+devices. Detection through redundancy in time is potentially less
+expensive but is generally limited to transient error detection unless
+redundant hardware is readily available.
+
+Failure prediction techniques are typically less costly to imple-
+ment, but they also face a number of challenges. One traditional
+approach to failure prediction is the use of canary circuits [4], de-
+signed to fail in advance of the circuits they are charged with pro-
+tecting, providing an early indication that important processor struc-
+tures are nearing their end of life. Canary circuits are an efﬁcient
+and generic means to predict failure. However, there are a number
+of sensitive issues that must be addressed to deploy them effec-
+tively. For instance, the placement of these circuits is extremely
+important for accurate prediction, because the canary must be sub-
+jected to the same operating conditions as the circuit it is designed
+to monitor.
+
+Another technique for failure prediction is the use of timing sen-
+sors that detect when circuit latency is increasing over time or has
+surpassed some predeﬁned threshold [17, 13, 5]. The work pre-
+sented here extends upon [13] which presented the idea of failure
+prediction using timing analysis and identifying degrading perfor-
+mance as a symptom of wearout in semiconductor devices.
+
+Recent work by Srinivasan [34] proposes a predictive technique
+that monitors the dynamic activity and temperature of structures
+within a microprocessor in order to calculate their predicted time
+to failure based on analytical models. This system can then be used
+to swap in cold-spare structures based on these predictions. This
+
+work pioneered the idea of dynamically trading performance for
+reliability in order to meet a predeﬁned lifetime qualiﬁcation. Al-
+though this technique may be used to identify structures that are
+likely to fail in the near future, it relies on accurate analytical de-
+vice wearout models and a narrow probability density function for
+effective predictions.
+
+Research into the physical effects of wearout on circuits has
+shown that many wearout mechanisms for silicon devices are pro-
+gressive over time. Further, many of these wearout mechanisms,
+such as EM, OBD, HCI, and NBTI, have been shown to have a
+negative impact on device performance [7, 20, 41, 16]. For exam-
+ple, a device subject to hot carrier injection (HCI) will experience
+drive current degradation, which leads to a decrease in switching
+frequency [7]. The recognition of progressive performance degra-
+dation as a precursor to wearout-induced failures creates a unique
+opportunity for predictive measures, which can forecast failures by
+dynamically analyzing the timing of logic in situ.
+
+The work presented here proposes an online technique that de-
+tects the performance degradation caused by wearout over time in
+order to anticipate failures. Rather than aggressively deploying du-
+plicate fault-checking structures or relying on analytical wearout
+models, an early warning system is presented that identiﬁes the
+performance degradation symptomatic of wearout. As a case study,
+and to derive an accurate performance degradation model for subse-
+quent simulations, detailed HSPICE simulations were performed to
+determine the impact of one particular wearout mechanism, OBD,
+on logic gates within a microprocessor core. Research of other pro-
+gressive wearout mechanisms such as HCI and EM, indicates that
+similar effects are likely to be observed as a result of these phe-
+nomenon.
+
+The results of this analysis are used to motivate the design of
+an online latency sampling unit, dubbed the wearout detection unit
+(WDU). The WDU is capable of measuring the signal propaga-
+tion latencies for signals within microprocessor logic. This infor-
+mation is then sampled and ﬁltered by a statistical analysis mech-
+anism that accounts for anomalies in the sample stream (caused
+by phenomenon such as clock jitter, and power and temperature
+ﬂuctuations). In this way, the WDU is able to identify signiﬁcant
+changes in the latency proﬁle for a given structure and predict a
+device failure. Online statistical analysis allows the WDU to be
+self-calibrating, adapting to each structure that it monitors, making
+it generic enough to be reused for a variety of microarchitectural
+components.
+
+Traditional studies of wearout mechanisms have focused primar-
+ily on their effects on transistor and circuit level performance, with-
+out analyzing the microarchitectural impact. To the best of the au-
+thors’ knowledge, the experiments presented in this work are the
+ﬁrst such attempt in this direction. The contributions of this paper
+include:
+
+(cid:15) An HSPICE-based characterization of OBD-induced wearout
+(cid:15) A microarchitectural analysis of the performance impact of
+
+OBD on microprocessor logic
+
+(cid:15) A detailed simulation infrastructure for modeling the impact
+
+of wearout on an embedded processor core
+
+(cid:15) A self-calibrating WDU capable of monitoring path latencies
+(cid:15) A demonstration of how the WDU can be deployed to extend
+
+processor lifetime
+
+2. DEVICE-LEVEL WEAROUT ANALYSIS
+Though many wearout mechanisms have been shown to progres-
+sively degrade performance as transistors age [7, 41, 16], as a case
+
+study, this work focuses on the effects of one particular mechanism,
+gate oxide breakdown (OBD), to demonstrate how performance
+degradation at the device level can affect processor performance at
+the microarchitectural level. Due to the lack of microarchitectural
+models for the progressive effects of wearout, it was necessary to
+ﬁrst model the effects at the circuit level in order to abstract them
+up to the microarchitecture. The results of the modeling and ab-
+straction are presented within this section. While this section is
+useful in understanding the nature of progressive wearout, readers
+unfamiliar with device physics may want to simply note the high-
+level abstraction of OBD effects presented in Figure 1 and move on
+to section 3.
+
+The remainder of this section describes the transistor degrada-
+tion model for OBD, based on empirical data from researchers at
+IBM. This section also presents an HSPICE characterization of the
+effects of OBD on gates in a 90 nm standard cell library from a
+major technology vendor.
+
+2.1 Gate Oxide Breakdown
+
+OBD, also known as time dependent dielectric breakdown (TDDB),
+
+is caused by the formation of a conductive path through the gate
+oxide of a CMOS transistor. The progression of OBD causes an
+increasing leakage current through the gate oxide of devices that
+eventually leads to oxide failure, rendering the device unrespon-
+sive to input stimuli [36, 21, 20]. Sune and Wu showed that there is
+a signiﬁcant amount of time required for the OBD leakage current
+to reach a level capable of affecting circuit performance [36]. This
+suggests that there is a window of opportunity to detect the onset
+of OBD before oxide leakage levels compromise the operation of
+devices and cause timing failures.
+
+The modeling of OBD conducted in this work is based upon the
+experimental results of Rodriguez et al. [26]. The change in gate
+oxide current resulting from OBD is modeled by the power-law
+expression in Equation 1:
+
+(cid:1)Igate = K(Vgd)p
+
+(1)
+
+The change in gate-to-drain (gate-to-source) current is repre-
+sented as a function of a linear scaling factor K, the gate-to-drain
+(gate-to-source) voltage Vgd (Vgs), and a power-law exponent, p.
+Both ﬁtting parameters K and p vary depending on the amount of
+degradation experienced by the transistor in question. However, for
+much of the empirical data collected in [26], selecting a p = 5:0,
+while still allowing K to track the degree of degradation, resulted
+in a consistent ﬁt. This is the model for device degradation used in
+this work.
+
+2.2 HSPICE Analysis
+
+To facilitate modeling the effects of OBD-induced degradation in
+HSPICE, the BSIM4 gate leakage model [11] for gate-to-drain and
+gate-to-source oxide leakage is modiﬁed to accommodate the scal-
+ing factor from Equation 1. Using this leakage model, an HSPICE
+testbench was created to simulate the effects of OBD on propaga-
+tion delay within logic circuits. The testbench consists of an ideal
+voltage source driving an undegraded copy of the gate under test,
+which drives the gate under test, which drives another undegraded
+copy of the gate under test. This testbench allows the simulations
+to capture both the loading effects a degraded device presents to
+nodes on the upstream path, as well as the ability of downstream
+nodes to regenerate a degraded signal.
+
+For each type of logic gate within the cell library, one transistor
+at a time is selected from the gate and its leakage model is replaced
+with the modiﬁed BSIM4 model. For each transistor that is being
+degraded, all input to output transistions are simulated so that for
+
+-20
+
+ 0
+
+ 0.0001
+
+ 0.0002
+
+ 0.0003
+
+ 0.0004
+
+ 0.0005
+
+ 0.0006
+
+Oxide Leakage (A)
+(a) Inverter delay proﬁle.
+
+PMOS (rise)
+PMOS (fall)
+NMOS (rise)
+NMOS (fall)
+
+ 140
+
+ 120
+
+ 100
+
+ 80
+
+ 60
+
+ 40
+
+ 20
+
+ 0
+
+)
+
+%
+
+l
+
+(
+ 
+y
+a
+e
+D
+n
+o
+
+ 
+
+i
+t
+
+a
+g
+a
+p
+o
+r
+P
+a
+
+ 
+
+t
+l
+
+e
+D
+
+)
+
+%
+
+l
+
+(
+ 
+y
+a
+e
+D
+ 
+n
+o
+i
+t
+a
+g
+a
+p
+o
+r
+P
+ 
+a
+t
+l
+e
+D
+
+ 500
+
+ 400
+
+ 300
+
+ 200
+
+ 100
+
+ 0
+
+-100
+
+Increasing 
+Degradation
+
+(a) Input to inverter cell (tcell).
+
+Increasing 
+Degradation
+
+Increasing 
+Degradation
+
+(b) Output of inverter cell (tcell).
+
+ 1e-11  1e-10  1e-09  1e-08  1e-07  1e-06  1e-05  1e-04  0.001
+
+Oxide Leakage (A)
+
+(b) Net effect (rise+fall transitions) on propagation delay for 90
+nm standard cells.
+
+Figure 1: Impact of OBD-induced oxide leakage current on stan-
+dard cell propagation delays.
+
+every gate characterized, propagation delays corresponding to all
+possible combinations of degraded transistor, input to output path,
+and initial input states are captured. For each simulation run, the
+amount of degradation experienced by the degraded transistor (as
+modeled by the oxide leakage) is slowly increased until the gate
+ceases to function (outputs no longer switch).
+
+The results of the timing characterization are shown in Figure 1.
+Figure 1a shows the changes in propagation delay for an average
+size inverter. The plot highlights the different effects that OBD has
+on propagation delay depending on the transition direction and lo-
+cation/type of the degraded transistor. Note that for the case when
+the PMOS (the analogous story is true for the NMOS) is degraded,
+rising transitions expressed increases in delay while falling transi-
+tions showed decreases in delay. A detailed discussion of this phe-
+nomenon follows in the next paragraph. Although there are com-
+plex dependence relationships affecting the performance impact on
+rise and fall propagation delays, as a simplifying assumption, the
+net effect is used in this work. Figure 1b presents the net effect
+(rising transition + falling transition) of OBD on gates within the
+cell library. For a given gate a separate curve is shown for each
+of its transistors. Note that the “net” change in propagation delay
+is categorically increasing near the end of life for gates within this
+cell library, irrespective of which internal transistor is degraded.
+
+An examination of Figure 1a reveals that in the case where the
+PMOS experiences OBD, the rising transition expresses more than
+
+(c) Restored “circuit” output (tcircuit).
+
+Figure 2: HSPICE simulation traces for inverter with degraded
+PMOS (slowdown).
+
+a doubling of its nominal delay before the inverter fails to transition.
+The primary source of this increase in delay is the interaction with
+the previous stage, a non-degraded inverter, which is subjected to
+driving the leaky PMOS oxide. Figures 2 and 3 show the voltages
+at the nodes of interest during the rising and falling transitions of
+the degraded inverter. The bold traces show the voltage transitions
+under nominal conditions while the lighter curves are the result of
+increasing amounts of wearout.
+
+When the input to the inverter under test begins to fall (Fig-
+ure 2a), the gate-to-source oxide leakage, Igs, through the PMOS
+device provides additional current to the input node, prolonging
+the discharge time of the gate through the NMOS of the preceding
+stage. The gate-to-drain oxide leakage, Igd, initially aids the rising
+transition, helping to charge up the inverter output. However, as the
+transition continues and the output begins to rise, this Igd leakage
+also provides an additional current to the gate node. As with the Igs
+current, this too increases the time required to drain the remaining
+charge on the gate. Note also that with large amounts of degrada-
+tion the input voltage range compresses due to Igs and Igd oxide
+
+Increasing 
+Degradation
+
+(a) Input to inverter cell (tcell).
+
+Increasing 
+Degradation
+
+Increasing 
+Degradation
+
+(b) Output of inverter cell (tcell).
+
+(c) Restored “circuit” output (tcircuit).
+
+Figure 3: HSPICE simulation traces for inverter with degraded
+PMOS (speedup).
+
+leakage. Unable to switch from rail-to-rail, the on-currents sus-
+tainable by the PMOS and NMOS are signiﬁcantly reduced, which
+ultimately contributes to the increase in overall propagation delay
+(Figure 2c).
+
+Perhaps more surprising is the behavior of the propagation delay
+during a falling transition of the inverter output (Figure 3). With
+increasing oxide degradation, the delay of the inverter actually de-
+creases until just prior to functional failure. This behavior is caused
+by the Igs and Igd leakage currents that help in charging their own
+gate node, resulting in an earlier rising transition on the input. As
+a result, despite the degraded on currents due to the compressed
+gate voltage swing, because the inverter actually “sees” the input
+transitioning sooner, the net effect is a decrease in the overall prop-
+agation delay of the inverter itself (tcell) and ultimately the circuit
+(tcircuit).
+
+In summary, at moderate values of oxide degradation, the in-
+put voltage on the gate node swings roughly rail-to-rail, allowing
+normal operation of the inverter. However, during the ﬁnal stages
+of oxide OBD, the input voltage range compresses due to Igs and
+
+Igd leakage (Figures 3a and 2a), and the current conducted by the
+PMOS and NMOS devices in the inverter are signiﬁcantly altered.
+The signiﬁcantly reduced output range eventually results in func-
+tional failure when the device is no longer capable of driving sub-
+sequent stages. Note however, that prior to circuit failure, the stage
+immediately following the inverter under test is able to completely
+restore the signal to a full rail swing (Figures 2c and 3c), irrespec-
+tive of the switching direction.
+
+3. MICROARCHITECTURE-LEVEL
+
+WEAROUT ANALYSIS
+
+This section describes how the transistor-level models from the
+previous section are used to simulate the effects of OBD over time
+on an embedded microprocessor core. The section begins by de-
+scribing the processor core studied in this work along with the syn-
+thesis ﬂow used in its implementation and thermal analysis. This
+is followed by a discussion of MTTF calculations and a description
+of the approach used to conduct Monte Carlo simulations of the ef-
+fects of OBD. A discussion of OBD’s impact on propagation delay
+at the microarchitectural level concludes the section.
+
+3.1 Microprocessor Implementation
+
+The testbed used to conduct wearout experiments was a Ver-
+ilog model of the OpenRISC 1200 (OR1200) CPU core [3]. The
+OR1200 is an open-source, embedded-style, 32-bit, Harvard ar-
+chitecture that implements the ORBIS32 instruction set. The mi-
+croprocessor contains a single-issue, 5-stage pipeline, with direct
+mapped 8KB instruction and data caches, and virtual memory sup-
+port. This microprocessor core has been used in a number of com-
+mercial products and is capable of running the (cid:22)Clinux operating
+system.
+
+The OR1200 core was synthesized using Synopsys Design Com-
+piler, with a cell library characterized for a 90 nm process and a
+clock period of 2.5 ns (400 MHz). Cadence First Encounter was
+used to conduct ﬂoorplanning, cell placement, clock tree synthesis,
+and routing. This design ﬂow provided accurate timing informa-
+tion (cell and interconnect delays) and circuit parasitics (resistance
+and capacitance values) for the entire OR1200 core. The ﬂoorplan
+along with details of the implementation is shown in Figure 4. Note
+that although the OR1200 microprocessor core shown in Figure 4
+is a relatively small design, it’s area and power requirements are
+comparable to that of an ARM9 microprocessor. The ﬁnal synthe-
+sis of the OR1200 appropriates a timing guard band of 250 ps (10%
+of the clock cycle time) to mimic a commodity processor and to en-
+sure that the wearout simulations do not prematurely cause timing
+violations.
+
+3.2 Power, Temperature, and MTTF Calcula-
+
+tions
+
+The MTTF due to OBD is dependent on many factors, the most
+signiﬁcant being oxide thickness, operating voltage, and tempera-
+ture. To quantify the MTTF of devices undergoing OBD, this work
+uses the empirical model described in [33], which is based on ex-
+perimental data collected at IBM [39]. This model is presented in
+Equation 2.
+
+M T T FOBD / (
+
+)(a(cid:0)bT )e
+
+1
+V
+
+(X+
+
+Y
+T +ZT )
+kT
+
+(2)
+
+where,
+
+(cid:15) V = operating voltage
+(cid:15) T = temperature
+
+OR1200 Core
+Area
+Power
+Clock Frequency
+Data Cache Size
+Instruction Cache Size
+Logic Cells
+Technology Node
+Operating Voltage
+
+1.0 mm2
+123.9 mW
+400 MHz
+8 KB
+8 KB
+24,000
+90 nm
+1.0 V
+
+Implementation details
+
+(a)
+OR1200 microprocessor.
+
+for
+
+the
+
+dhrystone
+g721 encode
+rawcaudio
+rc4
+sobel
+
+dhrystone
+g721 encode
+rawcaudio
+rc4
+sobel
+
+A
+
+D
+
+E
+
+N
+
+F
+
+L
+
+M
+
+O
+
+R
+
+S
+
+W
+
+L
+
+U
+
+e
+
+c
+
+x
+
+c
+
+e
+
+o
+
+d
+
+e
+
+p
+t
+
+e
+
+x
+
+t 
+
+P
+
+e
+t
+c
+
+h
+
+C
+
+S
+
+U
+
+u
+
+lt/
+
+M
+
+p
+
+e
+r
+a
+
+e
+
+g
+
+A
+
+C
+
+n
+
+d
+ 
+
+M
+
+P
+
+B
+
+is
+t
+e
+
+R
+
+S
+
+r 
+
+F
+
+il
+
+e
+
+u
+
+x
+
+e
+
+s
+
+o
+
+ 340
+
+)
+
+K
+
+(
+ 
+
+t
+
+e
+r
+u
+a
+r
+e
+p
+m
+e
+T
+
+ 343
+
+ 342
+
+ 341
+
+ 339
+
+ 338
+
+ 337
+
+ 336
+
+ 335
+
+ 334
+
+)
+s
+r
+a
+e
+y
+(
+ 
+e
+r
+u
+
+l
+i
+
+a
+F
+ 
+o
+t
+ 
+e
+m
+T
+ 
+n
+a
+e
+M
+
+i
+
+ 45
+
+ 40
+
+ 35
+
+ 30
+
+ 25
+
+ 20
+
+ 15
+
+ 10
+
+(b) Overlay of the OR1200 ﬂoorplan on top of the
+placed and routed implementation of the CPU core.
+
+Figure 4: OpenRisc1200 embedded microprocessor.
+
+(cid:15) k = Boltzmann’s constant
+(cid:15) a; b; X; Y; and Z are all ﬁtting parameters based on [33]
+
+In order to calculate the MTTF for devices within the OR1200
+core, gate-level activity data was generated by simulating the ex-
+ecution of a set of benchmarks1 running on a synthesized netlist
+using Synopsys VCS. This activity information, along with the
+parasitic data generated during placement and routing, was then
+used by Synopsys PrimePower to generate a per-benchmark power
+trace. The power trace and ﬂoorplan were in turn processed by
+HotSpot [29], a block level temperature analysis tool, to produce a
+dynamic temperature trace and a steady state temperature for each
+structure within the design.
+
+Once the activity and temperature data were derived, the MTTF
+for each logic gate in the design was calculated using Equation 2
+with the temperature and activity data for each benchmark. A per-
+module MTTF is calculated by identifying the minimum MTTF
+across all logic gates within each top-level module of the OR1200
+core. These per-module MTTF values are later used to parametrize
+the statistical distribution of failures used in Monte Carlo simula-
+tions of OBD effects. Figure 5 presents the steady state tempera-
+tures and MTTF values of different structures within the CPU core
+
+1Five benchmarks were studied to represent a range of computa-
+tional behavior for embedded systems: dhrystone - a synthetic inte-
+ger benchmark; g721encode and rawcaudio from the MediaBench
+suite; rc4 - an encryption algorithm; and sobel - an image edge
+detection algorithm.
+
+A
+
+D
+
+E
+
+N
+
+F
+
+M
+
+O
+
+R
+
+S
+
+W
+
+L
+
+U
+
+e
+
+c
+
+o
+
+x
+
+c
+
+e
+
+d
+
+e
+
+p
+t
+
+e
+
+x
+
+t 
+
+P
+
+e
+t
+c
+
+h
+
+C
+
+L
+
+S
+
+U
+
+u
+
+lt/
+
+M
+
+p
+
+e
+r
+a
+
+e
+
+g
+
+P
+
+R
+
+B
+
+is
+t
+e
+
+S
+
+A
+
+C
+
+n
+
+d
+ 
+
+M
+
+r 
+
+F
+
+il
+
+e
+
+u
+
+x
+
+e
+
+s
+
+Figure 5: Derived workload-dependent steady state temperature
+and MTTF for the OR1200 CPU core. An ambient temperature
+of 333K was used for Hotspot.
+
+for the ﬁve benchmarks.
+
+Figure 5 highlights the correlation between MTTF and temper-
+ature. Structures with the highest temperatures tended to have the
+smallest MTTFs, meaning that they were most likely to wearout
+ﬁrst. For example, the decode unit, with a maximum temperature
+about 3(cid:14)K higher than any other structure on the chip, would likely
+be the ﬁrst structure to fail. Somewhat surprisingly, the ALU had a
+relatively low temperature, resulting in a long MTTF. Upon further
+investigation, it was found that across most benchmark executions,
+less than 50% of dynamic instructions exercised the ALU, and fur-
+thermore, about 20% of the instructions that actually required the
+ALU were simple logic operations and not computationally inten-
+sive additions or subtractions. These circumstances led to a rela-
+tively low utilization and ultimately lower temperatures. It is im-
+portant to note that although this work focuses on a simpliﬁed CPU
+model, the proposed wearout detection technique is not coupled to
+a particular microprocessor design or implementation, but rather re-
+lies upon the general circuit-level trends suggested by the HSPICE
+simulations. In fact, a more aggressive, high performance micro-
+processor is likely to have more dramatic hotspots, which would
+only serve to exaggerate the trends that motivate the WDU design
+presented in this work.
+
+3.3 Wearout Simulation
+
+As demonstrated in Section 2, progressive wearout phenomena
+
+result[0]
+result[6]
+result[7]
+result[11]
+result[12]
+result[26]
+result[27]
+result[28]
+result[29]
+result[31]
+
+ 12
+
+ 10
+
+ 8
+
+ 6
+
+ 4
+
+ 2
+
+ 0
+
+n
+w
+o
+d
+w
+o
+S
+
+l
+
+ 
+t
+
+n
+e
+c
+r
+e
+P
+
+-2
+
+ 0
+
+ 1
+
+ 2
+
+ 3
+
+ 5
+
+ 4
+ 6
+Time (years)
+
+ 7
+
+ 8
+
+ 9
+
+ 10
+
+Figure 6: The observed slowdown of signals from the ALU result
+bus as a result of OBD effects over the lifetime of one instance of
+an OR1200 processor core.
+
+(OBD in particular) have a signiﬁcant impact on circuit-level tim-
+ing. Work done by Linder and Stathis [20] has shown that OBD-
+induced gate leakage obeys an exponential growth rate with age:
+
+(cid:1)IOBD(t) = IOBD0 (cid:1) et=(cid:13)
+
+(3)
+
+where,
+
+(cid:15) IOBD(t): the amount of leakage current at time t
+(cid:15) IOBD0 : the initial amount of leakage current at time 0
+(cid:15) (cid:13): varied to model a “fast” or “slow” exponential growth
+
+Monte Carlo simulations of the OBD effects on a distribution of
+microprocessors in the ﬁeld are conducted by coupling the leakage
+model, shown in Equation 3, with the model for MTTF from Equa-
+tion 2. For every logic gate within each microprocessor simulated,
+the time when the ﬁrst initial breakdown path is formed in the ox-
+ide, (cid:28)BD, is calculated using a Weibull distribution with (cid:11) equal to
+the gate’s MTTF and (cid:12) = 1:0, consistent with [20]. The growth
+rate (cid:13) is then taken from a uniform distribution of += (cid:0) 10% of
+(cid:28)BD, consistent with a slow growth rate, as in [20].
+
+By integrating the model for OBD failure times and this leakage
+growth model, a statistically accurate picture of the effects of OBD-
+induced leakage for every gate within the OR1200 core (across a
+population of chips) is derived. This new model is then used to
+generate age-dependent performance data for each gate within the
+population of processors in the Monte Carlo simulations. The per-
+formance information is then annotated onto the synthesized netlist
+and custom signal monitoring handlers are used to measure the
+signal propagation delays at the output of various modules within
+the design. The process of annotation and monitoring is repeated
+for every processor in the population at regular time intervals over
+the simulated lifetime of each processor.
+
+To demonstrate how OBD can affect the timing of microarchi-
+tectural structures, Figure 6 shows the results of one sample of an
+OR1200 core from the Monte Carlo simulations. This ﬁgure shows
+the amount of performance degradation observed at the output of
+the ALU for a subset of signals from the result bus. This ﬁgure il-
+lustrates the general trend of slowdown across output signals from
+microarchitectural structures. The following section discusses how
+this trend is leveraged to conduct wearout detection and failure pre-
+diction.
+
+4. WEAROUT DETECTION
+
+In this section, the delay trends for microarchitectural structures
+observed in Section 3 are leveraged to propose a novel technique
+for predicting wearout-induced failures. The technique consists of
+two logical steps: online delay monitoring and statistical analysis
+of delay data. In the following subsection, a circuit for conduct-
+ing online delay sampling is presented. Next, the algorithm used
+for statistical analysis, TRIX, is presented, and its applicability to
+wearout detection is discussed. Finally, two potential implementa-
+tions for the statistical analysis of delay proﬁles are proposed, one
+in hardware and the other in software.
+
+4.1 Online Delay Proﬁling
+
+In this section, a self-calibrating circuit for online delay proﬁling
+is presented. A schematic diagram of the online delay proﬁling unit
+(DPU) is shown in Figure 7. The DPU is used to measure the time
+that elapses after a circuit’s output signal stabilizes until the next
+positive clock edge (slack time). It is important to note that even
+for critical paths within the design, some slack time exists because
+of guard bands provisioned into the design for worst-case environ-
+mental variation and signal degradation due to wearout. The DPU
+design consists of three distinct stages. The ﬁrst stage of the DPU is
+an arbiter that determines which one of the (potentially many) input
+signals to the DPU will be proﬁled. The second stage of the DPU
+generates an approximation of the available slack time. The ﬁnal
+stage of the DPU is an accumulator that totals a sample of 4096
+signal transition latency measurements, and uses this measurement
+as a point estimate for the amount of available slack in the circuit
+for the given input signal.
+
+The ﬁrst stage fulﬁlls the simple purpose of enabling the DPU to
+monitor delay information for multiple output signals from a given
+structure. This stage is a simple arbiter that determines which sig-
+nal will be monitored. The area of this structure scales linearly
+(though very slowly) with the number of output signals being mon-
+itored. The effects of scaling on area and power are discussed later
+in Section 5.
+
+The purpose of the second stage of the DPU is to obtain a coarse-
+grained proﬁle of the amount of slack at the end of a given clock
+period. The signal being monitored by the DPU is connected to a
+series of delay buffers. Each delay buffer in this series feeds one bit
+in a vector of registers (labeled ’A’ in Figure 7) such that the signal
+arrival time at each register in this vector is monotonically increas-
+ing. At the positive edge of the clock, some of these registers will
+capture the correct value of the module output, while others will
+store an incorrect value (the previous signal value). This situation
+arises because the propagation delay imposed by the sequence of
+delay buffers causes the output signal to arrive after the latching
+window for a subset of these registers. The value stored at each
+of the registers is then compared with a copy of the correct out-
+put value, which is stored in the register labeled ’B’. The XOR of
+each delayed register value with the correct value produces a bit
+vector that represents the propagation delay of the path exercised
+for that particular cycle. In addition, the output signal value from
+the previous cycle is stored in the register labeled ’C’, and is used
+to identify cycles during which the module output actually experi-
+ences a transition. This ensures that cycles during which the output
+is idle do not bias the latency sample. As a module’s performance
+degrades due to wearout, the signal latency seen at its outputs in-
+creases, fewer comparisons will succeed, and the value reported at
+the output of the vector of XOR gates will increase.
+
+In the third stage of the DPU, a point estimate of the mean prop-
+agation latency for a given output signal is calculated by accumu-
+lating 4096 signal arrival times. The accumulation of 4096 arrival
+
+0
+1
+
++
+
+...
+
+module
+
+under
+
+observation
+
+B
+
+clk
+
+A
+
+C
+
+clk
+
+delay
+
+delay
+
+delay
+
+delay
+
+delay
+
+Latency Sampler
+
++
+
+0
+
+5
+
+Stage 1
+Arbitration
+
+Stage 2
+
+Signal Latency Detection
+
+Stage 3
+Sampling
+
+Figure 7: Online delay proﬁling unit.
+
+times is used to smooth out the variation in path delays that are
+caused by variation in the module input, and the sample size 4096
+is used because it is a power of two and allows for efﬁcient division
+by shifting.
+
+There are multiple ways in which this sampled mean propagation
+latency may be utilized by a system for failure prediction. In the
+next subsection, an algorithm is presented for this purpose that may
+be implemented either in specialized hardware or software.
+
+4.2 Failure Prediction Algorithm
+
+In order to capitalize on the trend of divergence between the sig-
+nal propagation latency observed during the early stages of the
+microprocessor’s lifetime and those observed at the end of life,
+TRIX (triple-smoothed exponential moving average) [35] analysis
+is used. TRIX, is a trend analysis technique used to measure mo-
+mentum in ﬁnancial markets and relies on the composition of three
+calculations of an exponential moving average (EMA) [10]. The
+EMA is calculated by combining the current sample value with a
+fraction of the previous EMA, causing the weight of older sample
+values to decay exponentially over time. The calculation of EMA
+is given as:
+
+EM A = (cid:11) (cid:2) sample + (1 (cid:0) (cid:11))EM Aprev
+
+(4)
+
+The use of TRIX, rather than the EMA, provides two signiﬁcant
+beneﬁts. First, TRIX provides an excellent ﬁlter of noise within
+the data stream because the composed applications of the EMA
+smooth out aberrant data points that may be caused by dynamic
+variation, such as temperature or power ﬂuctuations (discussed in
+Section 5.2). Second, the TRIX value tends to provide a better
+leading indicator of sample trends. The equations for computing
+the TRIX value are:
+
+EM A1 = (cid:11)(sample (cid:0) EM A1prev) + EM A1 prev
+EM A2 = (cid:11)(EM A1 (cid:0) EM A2prev) + EM A2prev
+T RIX = (cid:11)(EM A2 (cid:0) T RIXprev) + T RIXprev
+
+(5)
+
+demonstrates that small (cid:11) values tend to favor older samples, while
+larger (cid:11) values reﬂect local trends. The wearout detection algo-
+rithm presented in this work relies on the calculation of two TRIX
+values using different (cid:11)’s to identify when the local trends in the
+observed signal latency begin to diverge from the historical trends
+(biased toward early-life timing). Figure 8b shows the effect of dif-
+ferent (cid:11) values on the TRIX analysis of ALU result bit 0. Figure 8b
+presents the TRIX calculations for six different (cid:11) values as well
+as the long-term running average and local point average of signal
+over the lifetime of the microprocessor. This data demonstrates that
+TRIX calculation using (cid:11) = 1=210 provides an accurate estimate
+of the running average (of latencies for a signal) over the lifetime of
+the chip, and does so without the overhead of maintaining a large
+history. Further, this ﬁgure shows that a TRIX calculation with
+(cid:11) = 0:8 provides a good indicator of the local sample latency at a
+given point in the microprocessor’s lifetime.
+
+The next subsection describes two potential implementations that
+bring together the DPU and this statistical analysis technique in or-
+der to predict the failure of structures within a processor core.
+
+4.3 Implementation Details
+
+In order to accurately detect the progression of wearout and pre-
+dict when structures are likely to fail, this work proposes the use of
+the DPU in conjunction with TRIX analysis. In the following sub-
+sections, two techniques for building systems with wearout predic-
+tion mechanisms are proposed. The ﬁrst technique is a hardware-
+only approach, where both online delay proﬁling and TRIX analy-
+sis are conducted together in a specialized hardware unit called the
+wearout detection unit (WDU). The second technique is a hybrid
+approach requiring fewer resources where delay proﬁling is con-
+ducted in hardware, but TRIX analysis is conducted in software,
+either in the operating system or in ﬁrmware.
+In Section 5, we
+discuss the hardware costs in terms of area and power for each of
+these implementations, as well how the WDU scales as it is used to
+monitor an increasing number of signals.
+
+4.3.1 Hardware-only Implementation
+
+TRIX calculation is recursive and parametrized by the weight,
+(cid:11), which dictates the amount of emphasis placed on older sample
+values. Figure 8a demonstrates the impact of different (cid:11) values
+on the amount of weight given to historical samples. This ﬁgure
+
+The design of the WDU is presented in Figure 9 and consists
+of three distinct stages. The ﬁrst stage is comprised of the de-
+lay proﬁling unit described in Section 4.1, while the second stage
+is responsible for conducting the TRIX analysis discussed in Sec-
+
+0
+1
+
++
+
+Observed
+Module
+
+(cid:231)(cid:3)(cid:231)(cid:3)(cid:231)
+
+Ł(cid:3)Ł(cid:3)Ł
+
+(cid:231)(cid:3)(cid:231)(cid:3)(cid:231)
+
+Ł(cid:3)Ł(cid:3)Ł
+
+(cid:231)(cid:3)(cid:231)(cid:3)(cid:231)
+
+Ł(cid:3)Ł(cid:3)Ł
+
+(cid:231)(cid:3)(cid:231)(cid:3)(cid:231)
+
+Ł(cid:3)Ł(cid:3)Ł
+
+(cid:231)(cid:3)(cid:231)(cid:3)(cid:231)
+
+Ł(cid:3)Ł(cid:3)Ł
+
+(cid:231)(cid:3)(cid:231)(cid:3)(cid:231)
+
+Ł(cid:3)Ł(cid:3)Ł
+
+(cid:231)(cid:3)(cid:231)(cid:3)(cid:231)
+
+Ł(cid:3)Ł(cid:3)Ł
+
+(cid:231)(cid:3)(cid:231)(cid:3)(cid:231)
+
+Ł(cid:3)Ł(cid:3)Ł
+
+(cid:231)(cid:3)(cid:231)(cid:3)(cid:231)
+
+Ł(cid:3)Ł(cid:3)Ł
+
+...
+
+(cid:231)(cid:3)(cid:231)(cid:3)(cid:231)
+
+Ł(cid:3)Ł(cid:3)Ł
+
+(cid:231)(cid:3)(cid:231)(cid:3)(cid:231)
+
+Ł(cid:3)Ł(cid:3)Ł
+
+(cid:231)(cid:3)(cid:231)(cid:3)(cid:231)
+
+Ł(cid:3)Ł(cid:3)Ł
+
+input signal
+
+delay
+
+delay
+
+delay
+
+delay
+
+delay
+
+clk
+
+Latency Sampler
+
+0
+
+5
+
++
+
+Stage 1
+
+Delay Profiling Unit (DPU)
+
+Threshold
+
+Calculation
+
+Prediction
+
+Stage 3
+Prediction
+
+TRIX Calculation
+
+alpha = 0.8
+
+(cid:151)(cid:3)(cid:151)
+
+(cid:152)(cid:3)(cid:152)
+
+(cid:151)(cid:3)(cid:151)
+
+(cid:152)(cid:3)(cid:152)
+
+EMA
+
+(cid:151)(cid:3)(cid:151)
+
+(cid:152)(cid:3)(cid:152)
+
+(cid:149)(cid:3)(cid:149)
+
+(cid:147)(cid:3)(cid:147)
+
+(cid:145)(cid:3)(cid:145)
+
+(cid:148)(cid:3)(cid:148)
+
+(cid:146)(cid:3)(cid:146)
+
+(cid:151)(cid:3)(cid:151)
+
+(cid:152)(cid:3)(cid:152)
+
+(cid:149)(cid:3)(cid:149)
+
+(cid:147)(cid:3)(cid:147)
+
+(cid:145)(cid:3)(cid:145)
+
+(cid:148)(cid:3)(cid:148)
+
+(cid:146)(cid:3)(cid:146)
+
+(cid:151)(cid:3)(cid:151)
+
+(cid:152)(cid:3)(cid:152)
+
+(cid:137)(cid:3)(cid:137)
+
+(cid:135)(cid:3)(cid:135)
+
+(cid:133)(cid:3)(cid:133)
+
+(cid:136)(cid:3)(cid:136)
+
+(cid:134)(cid:3)(cid:134)
+
+(cid:151)(cid:3)(cid:151)
+
+(cid:152)(cid:3)(cid:152)
+
+(cid:137)(cid:3)(cid:137)
+
+(cid:135)(cid:3)(cid:135)
+
+(cid:133)(cid:3)(cid:133)
+
+(cid:136)(cid:3)(cid:136)
+
+(cid:134)(cid:3)(cid:134)
+
+}(cid:3)}
+
+{(cid:3){
+
+y(cid:3)y
+
+|(cid:3)|
+
+z(cid:3)z
+
+(cid:151)(cid:3)(cid:151)
+
+(cid:152)(cid:3)(cid:152)
+
+(cid:151)(cid:3)(cid:151)
+
+(cid:152)(cid:3)(cid:152)
+
+}(cid:3)}
+
+{(cid:3){
+
+y(cid:3)y
+
+|(cid:3)|
+
+z(cid:3)z
+
+‰(cid:3)‰
+
+(cid:190)(cid:3)(cid:190)
+
+‰(cid:3)‰
+
+(cid:190)(cid:3)(cid:190)
+
+EMA’
+
+‰(cid:3)‰
+
+(cid:190)(cid:3)(cid:190)
+
+»(cid:3)»
+
+„(cid:3)„
+
+•(cid:3)•
+
+”(cid:3)”
+
+‚(cid:3)‚
+
+‰(cid:3)‰
+
+(cid:190)(cid:3)(cid:190)
+
+»(cid:3)»
+
+„(cid:3)„
+
+•(cid:3)•
+
+”(cid:3)”
+
+‚(cid:3)‚
+
+‰(cid:3)‰
+
+(cid:190)(cid:3)(cid:190)
+
+ﬂ(cid:3)ﬂ
+
+›(cid:3)›
+
+«(cid:3)«
+
+ﬁ(cid:3)ﬁ
+
+‹(cid:3)‹
+
+‰(cid:3)‰
+
+(cid:190)(cid:3)(cid:190)
+
+ﬂ(cid:3)ﬂ
+
+›(cid:3)›
+
+«(cid:3)«
+
+ﬁ(cid:3)ﬁ
+
+‹(cid:3)‹
+
+£(cid:3)£
+
+¡(cid:3)¡
+
+(cid:159)(cid:3)(cid:159)
+
+¢(cid:3)¢
+
+(cid:160)(cid:3)(cid:160)
+
+‰(cid:3)‰
+
+(cid:190)(cid:3)(cid:190)
+
+‰(cid:3)‰
+
+(cid:190)(cid:3)(cid:190)
+
+£(cid:3)£
+
+¡(cid:3)¡
+
+(cid:159)(cid:3)(cid:159)
+
+¢(cid:3)¢
+
+(cid:160)(cid:3)(cid:160)
+
+ª(cid:3)ª
+
+(cid:228)(cid:3)(cid:228)
+
+ª(cid:3)ª
+
+(cid:228)(cid:3)(cid:228)
+
+TRIX
+
+ª(cid:3)ª
+
+(cid:228)(cid:3)(cid:228)
+
+Æ(cid:3)Æ
+
+(cid:223)(cid:3)(cid:223)
+
+(cid:221)(cid:3)(cid:221)
+
+(cid:224)(cid:3)(cid:224)
+
+(cid:222)(cid:3)(cid:222)
+
+ª(cid:3)ª
+
+(cid:228)(cid:3)(cid:228)
+
+Æ(cid:3)Æ
+
+(cid:223)(cid:3)(cid:223)
+
+(cid:221)(cid:3)(cid:221)
+
+(cid:224)(cid:3)(cid:224)
+
+(cid:222)(cid:3)(cid:222)
+
+ª(cid:3)ª
+
+(cid:228)(cid:3)(cid:228)
+
+(cid:213)(cid:3)(cid:213)
+
+(cid:211)(cid:3)(cid:211)
+
+(cid:209)(cid:3)(cid:209)
+
+(cid:212)(cid:3)(cid:212)
+
+(cid:210)(cid:3)(cid:210)
+
+ª(cid:3)ª
+
+(cid:228)(cid:3)(cid:228)
+
+(cid:213)(cid:3)(cid:213)
+
+(cid:211)(cid:3)(cid:211)
+
+(cid:209)(cid:3)(cid:209)
+
+(cid:212)(cid:3)(cid:212)
+
+(cid:210)(cid:3)(cid:210)
+
+ª(cid:3)ª
+
+(cid:228)(cid:3)(cid:228)
+
+ª(cid:3)ª
+
+(cid:228)(cid:3)(cid:228)
+
+(cid:201)(cid:3)(cid:201)
+
+˙(cid:3)˙
+
+¯(cid:3)¯
+
+¨(cid:3)¨
+
+˘(cid:3)˘
+
+(cid:201)(cid:3)(cid:201)
+
+˙(cid:3)˙
+
+¯(cid:3)¯
+
+¨(cid:3)¨
+
+˘(cid:3)˘
+
+TRIX Calculation
+alpha = 1/2 10
+
+%(cid:3)%
+
+%(cid:3)%
+
+EMA
+
+%(cid:3)%
+
+(cid:30)(cid:3)(cid:30)
+
+(cid:28)(cid:3)(cid:28)
+
+#(cid:3)#
+
+!(cid:3)!
+
+(cid:31)(cid:3)(cid:31)
+
+(cid:29)(cid:3)(cid:29)
+
+(cid:27)(cid:3)(cid:27)
+
+%(cid:3)%
+
+(cid:30)(cid:3)(cid:30)
+
+(cid:28)(cid:3)(cid:28)
+
+#(cid:3)#
+
+!(cid:3)!
+
+(cid:31)(cid:3)(cid:31)
+
+(cid:29)(cid:3)(cid:29)
+
+(cid:27)(cid:3)(cid:27)
+
+%(cid:3)%
+
+(cid:23)(cid:3)(cid:23)
+
+(cid:21)(cid:3)(cid:21)
+
+(cid:19)(cid:3)(cid:19)
+
+(cid:17)(cid:3)(cid:17)
+
+(cid:15)(cid:3)(cid:15)
+
+(cid:18)(cid:3)(cid:18)
+
+(cid:16)(cid:3)(cid:16)
+
+%(cid:3)%
+
+(cid:23)(cid:3)(cid:23)
+
+(cid:21)(cid:3)(cid:21)
+
+(cid:19)(cid:3)(cid:19)
+
+(cid:17)(cid:3)(cid:17)
+
+(cid:15)(cid:3)(cid:15)
+
+(cid:18)(cid:3)(cid:18)
+
+(cid:16)(cid:3)(cid:16)
+
+%(cid:3)%
+
+%(cid:3)%
+
+(cid:11)(cid:3)(cid:11)
+
+(cid:9)(cid:3)(cid:9)
+
+(cid:7)(cid:3)(cid:7)
+
+(cid:5)(cid:3)(cid:5)
+
+(cid:2)(cid:3)(cid:2)
+
+(cid:6)(cid:3)(cid:6)
+
+(cid:4)(cid:3)(cid:4)
+
+(cid:11)(cid:3)(cid:11)
+
+(cid:9)(cid:3)(cid:9)
+
+(cid:7)(cid:3)(cid:7)
+
+(cid:5)(cid:3)(cid:5)
+
+(cid:2)(cid:3)(cid:2)
+
+(cid:6)(cid:3)(cid:6)
+
+(cid:4)(cid:3)(cid:4)
+
+K(cid:3)K
+
+K(cid:3)K
+
+EMA’
+
+K(cid:3)K
+
+D(cid:3)D
+
+B(cid:3)B
+
+I(cid:3)I
+
+G(cid:3)G
+
+E(cid:3)E
+
+C(cid:3)C
+
+A(cid:3)A
+
+K(cid:3)K
+
+D(cid:3)D
+
+B(cid:3)B
+
+I(cid:3)I
+
+G(cid:3)G
+
+E(cid:3)E
+
+C(cid:3)C
+
+A(cid:3)A
+
+K(cid:3)K
+
+=(cid:3)=
+
+;(cid:3);
+
+9(cid:3)9
+
+7(cid:3)7
+
+5(cid:3)5
+
+8(cid:3)8
+
+6(cid:3)6
+
+K(cid:3)K
+
+=(cid:3)=
+
+;(cid:3);
+
+9(cid:3)9
+
+7(cid:3)7
+
+5(cid:3)5
+
+8(cid:3)8
+
+6(cid:3)6
+
+K(cid:3)K
+
+K(cid:3)K
+
+1(cid:3)1
+
+/(cid:3)/
+
+-(cid:3)-
+
++(cid:3)+
+
+)(cid:3))
+
+,(cid:3),
+
+*(cid:3)*
+
+1(cid:3)1
+
+/(cid:3)/
+
+-(cid:3)-
+
++(cid:3)+
+
+)(cid:3))
+
+,(cid:3),
+
+*(cid:3)*
+
+q(cid:3)q
+
+q(cid:3)q
+
+TRIX
+
+q(cid:3)q
+
+j(cid:3)j
+
+h(cid:3)h
+
+o(cid:3)o
+
+m(cid:3)m
+
+k(cid:3)k
+
+i(cid:3)i
+
+g(cid:3)g
+
+q(cid:3)q
+
+j(cid:3)j
+
+h(cid:3)h
+
+o(cid:3)o
+
+m(cid:3)m
+
+k(cid:3)k
+
+i(cid:3)i
+
+g(cid:3)g
+
+q(cid:3)q
+
+c(cid:3)c
+
+a(cid:3)a
+
+_(cid:3)_
+
+](cid:3)]
+
+[(cid:3)[
+
+^(cid:3)^
+
+\(cid:3)\
+
+q(cid:3)q
+
+c(cid:3)c
+
+a(cid:3)a
+
+_(cid:3)_
+
+](cid:3)]
+
+[(cid:3)[
+
+^(cid:3)^
+
+\(cid:3)\
+
+q(cid:3)q
+
+q(cid:3)q
+
+W(cid:3)W
+
+U(cid:3)U
+
+S(cid:3)S
+
+Q(cid:3)Q
+
+O(cid:3)O
+
+R(cid:3)R
+
+P(cid:3)P
+
+W(cid:3)W
+
+U(cid:3)U
+
+S(cid:3)S
+
+Q(cid:3)Q
+
+O(cid:3)O
+
+R(cid:3)R
+
+P(cid:3)P
+
+Stage 2
+
+TRIX Calculation
+
+Figure 9: Design and organization of the wearout detection unit.
+
+tion 4.2, and the third stage conducts threshold analysis to identify
+signiﬁcant divergences in latency trends. The shaded structures in
+this diagram represent those components that would scale with the
+number of signals being monitored. The remainder of this section
+discusses the implementation details of stage two and three of this
+design, and the required resources for their implementation.
+
+In stage two of the WDU, two TRIX values are computed: a
+
+locally-biased value, T RIXl, and a historically-biased value, T RIXg.
+These are calculated using (cid:11) values of 0:8 and 1=210, respectively.
+It is important to note that the value of (cid:11) is dependent on the
+sample rate and sample period. In this work, we assume a sam-
+ple rate of three to ﬁve samples per day over an expected 10 year
+lifetime. Also, the long incubation periods for many of the com-
+mon wearout mechanisms require the computed TRIX values to
+routinely be saved into a small area of nonvolatile storage, such as
+ﬂash memory.
+
+Since the TRIX consists of three identical EMA calculations,
+the impact of Stage 2 on both area and power can be minimized
+by spanning the calculation of the TRIX values over multiple cy-
+cles and only synthesizing a single instance of the EMA calculation
+hardware. Section 5 describes the area and power overhead for the
+WDU in more detail.
+
+The third stage of the WDU receives T RIXl and T RIXg val-
+ues from the previous stage and is responsible for predicting a
+failure if the difference between these two values exceeds a given
+threshold. The simulations conducted in this work indicate that a
+5% difference between T RIXl and T RIXg is almost universally
+indicative of a structure nearing failure. It is envisioned that this
+prediction would be used to enable a cold spare device, or notify
+a higher-level conﬁguration manager of a potentially failing struc-
+ture within the core. An analysis of the accuracy of this threshold
+prediction is presented in Section 5.
+
+4.3.2 Hardware/Software Hybrid Implementation
+
+In order to alleviate some of the scaling problems and resource
+requirements of a hardware only technique, a hardware/software
+hybrid technique can be used. In this system, the DPU is still im-
+plemented in hardware, while the TRIX analysis is performed in
+
+software by the operating system or system ﬁrmware. In this con-
+ﬁguration, a set of dedicated registers for maintaining the latency
+samples for different modules within the design are used. These
+dedicated registers are similar to the performance counters used in
+modern day processors. The system software then regularly sam-
+ples these counters and can store the calculated TRIX values to disk
+or other non-volatile storage.
+
+This hardware/software hybrid design has multiple beneﬁts over
+the hardware-only approach. In the hardware-only approach, the
+TRIX calculation, as well as the (cid:11) parametrization values are hard-
+wired into the design, meaning that across different technology
+generations with different wearout progression rates, different WDU
+implementations will be necessary. However, in the hybrid ap-
+proach, the TRIX parametrization is easily modiﬁed for use in a
+variety of systems. Another beneﬁt is that the hybrid implemen-
+tation consumes less power and has a smaller area footprint with
+better scaling properties than the hardware-only design.
+
+5. EXPERIMENTAL ANALYSIS
+
+This section provides a detailed analysis of the proposed WDU
+for both the hardware-only and hybrid implementations, the area
+and power overhead for implementation, and its efﬁcacy in predict-
+ing failure.
+
+5.1 Overhead and Accuracy
+
+Figure 10 demonstrates the area and power requirements for a
+WDU and a DPU (for the hybrid approach) implemented in Ver-
+ilog and synthesized using a 90 nm standard cell library, designed
+to monitor multiple output signals for a structure. The x-axis rep-
+resents the number of signals being monitored and the y-axis rep-
+resents the overhead in terms of area or power. Figure 10a demon-
+strates that the WDU scales poorly in terms of area, and Figure 10b
+shows analagous results for power. This behavior is largely because
+the amount of storage within the WDU increases linearly with the
+number of signals being monitored. In contrast, the DPU scales
+well in both area and power with an increasing number of signals
+being monitored because only the logic for the arbiter scales with
+an increasing number of signals, and this increase in logic is for
+
+(cid:0)
+(cid:0)
+(cid:1)
+(cid:1)
+(cid:8)
+(cid:8)
+(cid:10)
+(cid:10)
+(cid:12)
+(cid:12)
+(cid:13)
+(cid:13)
+(cid:14)
+(cid:14)
+(cid:20)
+(cid:20)
+(cid:22)
+(cid:22)
+(cid:24)
+(cid:24)
+(cid:25)
+(cid:25)
+(cid:26)
+(cid:26)
+ 
+ 
+"
+"
+$
+$
+&
+&
+&
+&
+&
+&
+&
+&
+’
+’
+(
+(
+.
+.
+0
+0
+2
+2
+3
+3
+4
+4
+:
+:
+<
+<
+>
+>
+?
+?
+@
+@
+F
+F
+H
+H
+J
+J
+L
+L
+L
+L
+L
+L
+L
+L
+M
+M
+N
+N
+T
+T
+V
+V
+X
+X
+Y
+Y
+Z
+Z
+‘
+‘
+b
+b
+d
+d
+e
+e
+f
+f
+l
+l
+n
+n
+p
+p
+r
+r
+r
+r
+r
+r
+r
+r
+s
+s
+t
+t
+u
+u
+v
+v
+w
+w
+x
+x
+~
+~
+(cid:127)
+(cid:127)
+(cid:128)
+(cid:128)
+(cid:129)
+(cid:129)
+(cid:130)
+(cid:130)
+(cid:131)
+(cid:131)
+(cid:132)
+(cid:132)
+(cid:138)
+(cid:138)
+(cid:139)
+(cid:139)
+(cid:140)
+(cid:140)
+(cid:141)
+(cid:141)
+(cid:142)
+(cid:142)
+(cid:143)
+(cid:143)
+(cid:144)
+(cid:144)
+(cid:150)
+(cid:150)
+(cid:153)
+(cid:153)
+(cid:154)
+(cid:154)
+(cid:155)
+(cid:155)
+(cid:156)
+(cid:156)
+(cid:157)
+(cid:157)
+(cid:158)
+(cid:158)
+⁄
+⁄
+¥
+¥
+ƒ
+ƒ
+§
+§
+¤
+¤
+'
+'
+“
+“
+(cid:176)
+(cid:176)
+–
+–
+†
+†
+‡
+‡
+·
+·
+(cid:181)
+(cid:181)
+¶
+¶
+…
+…
+¿
+¿
+(cid:192)
+(cid:192)
+`
+`
+´
+´
+ˆ
+ˆ
+˜
+˜
+˚
+˚
+¸
+¸
+(cid:204)
+(cid:204)
+˝
+˝
+˛
+˛
+ˇ
+ˇ
+—
+—
+(cid:214)
+(cid:214)
+(cid:215)
+(cid:215)
+(cid:216)
+(cid:216)
+(cid:217)
+(cid:217)
+(cid:218)
+(cid:218)
+(cid:219)
+(cid:219)
+(cid:220)
+(cid:220)
+(cid:226)
+(cid:226)
+(cid:229)
+(cid:229)
+(cid:229)
+(cid:229)
+(cid:230)
+(cid:230)
+(cid:230)
+(cid:230)
+Ø
+Ø
+Œ
+Œ
+º
+º
+(cid:236)
+(cid:236)
+(cid:237)
+(cid:237)
+(cid:238)
+(cid:238)
+(cid:239)
+(cid:239)
+(cid:240)
+(cid:240)
+æ
+æ
+æ
+æ
+æ
+æ
+æ
+(cid:242)
+(cid:242)
+(cid:242)
+(cid:242)
+(cid:242)
+(cid:242)
+(cid:242)
+ = 0.80
+ = 0.67
+ = 0.50
+ = 0.40
+ = 0.33
+
+g
+n
+
+i
+t
+
+i
+
+h
+g
+e
+W
+
+ 60
+
+ 50
+
+ 40
+
+ 30
+
+ 20
+
+ 10
+
+ 0
+
+ 1.06
+
+ 1.04
+
+ 1.02
+
+ 1
+
+ 0.98
+
+ 0.96
+
+ 0.94
+
+)
+s
+n
+(
+ 
+y
+c
+n
+e
+t
+a
+L
+ 
+l
+a
+n
+g
+S
+ 
+n
+a
+e
+M
+
+i
+
+ = 1/210)
+TRIX (a
+ = 1/29)
+TRIX (a
+ = 1/28)
+TRIX (a
+ = 1/27)
+TRIX (a
+ = 1/26)
+TRIX (a
+TRIX (a
+ = 0.8)
+Local Average
+Running Average
+
+DPU
+WDU
+
+DPU
+WDU
+
+2
+m
+m
+n
+
+ 
+
+i
+ 
+
+a
+e
+r
+A
+
+ 
+
+W
+m
+n
+i
+ 
+r
+e
+w
+o
+P
+
+ 0.1
+
+ 0.09
+
+ 0.08
+
+ 0.07
+
+ 0.06
+
+ 0.05
+
+ 0.04
+
+ 0.03
+
+ 0.02
+
+ 0.01
+
+ 0
+
+ 2.5
+
+ 1.5
+
+ 3
+
+ 2
+
+ 1
+
+ 0
+
+ 0.5
+
+ 2
+
+ 4
+
+ 6
+
+ 14
+
+ 16
+
+ 18
+
+ 20
+
+ 8
+
+ 10
+
+ 12
+Sample Time
+
+(a) Impact of (cid:11) value on the weighting of old sample values.
+
+ 2
+
+ 4
+
+ 6
+
+ 12
+Number of signals monitored
+
+ 10
+
+ 8
+
+ 14
+
+ 16
+
+ 0.92
+
+ 0
+
+ 20
+
+ 40
+ 60
+Time (years)
+
+ 80
+
+ 100
+
+(b) Impact of (cid:11) value on the tracking of a signal undergoing
+OBD degradation effects.
+
+Figure 8: Sensitivity analysis of TRIX parametrization.
+
+the most part negligible. This implies that the hybrid prediction
+technique can be implemented at a much lower design cost.
+
+In order to evaluate the efﬁcacy of TRIX analysis in predicting
+failure, a large number of Monte Carlo wearout simulations were
+conducted using the Weibull distribution and failure model pre-
+sented in Section 3.2. Figure 11a demonstrates the relative time
+at which failure was predicted for a variety of structures within the
+processor core for the population of microprocessors used in this
+Monte Carlo simulation. The error bars in this ﬁgure represent the
+standard deviation of these values. Across all simulations, failure
+was predicted within 20% of the time of failure for the device. This
+typically amounted to slightly less than two years of remaining life
+before the device ultimately failed. Two extreme cases were the
+Next PC module and the LSU, where the failure prediction was
+often almost too optimistic, with many of the failure predictions
+being made with only about 1% or about 4 days of the structure’s
+life remaining. On the opposite end of the spectrum, failure of the
+register ﬁle was often predicted with more than 15% of the life-
+time remaining, meaning that some usable life would be wasted in
+a cold-sparing situation.
+
+Figure 11b demonstrates the percentage of signals that caused
+predictions to be raised for each module before the module failed.
+In general, the percentage of outputs ﬂagged at the time of failure
+varied widely. This can be attributed to a number of factors. First,
+the Weibull distribution used to model the time of ﬁrst breakdown
+for each gate within the design has a moderate amount of variance,
+
+ 2
+
+ 4
+
+ 6
+
+ 12
+Number of signals monitored
+
+ 10
+
+ 8
+
+ 14
+
+ 16
+
+Figure 10: Scaling of the WDU and DPU area and power as the
+number of signals monitored scales.
+
+as does the uniform distribution used to model the growth rate of
+leakage from the time of ﬁrst breakdown. Also, because some gates
+experience speedup in the early stages of wearout before they ul-
+timately begin to slow down, there are competing effects between
+gates at different stages of wearout early in the breakdown period.
+
+5.2 Dynamic Variations
+
+Dynamic environmental variations, such as temperature spikes,
+power surges, and clock jitter, can each have an impact on circuit-
+level timing, potentially affecting the operation of the WDU. Here,
+we brieﬂy discuss some of the sources of dynamic variation and
+their impact on the WDU’s efﬁcacy.
+
+Temperature is a well known factor in calculating device delay,
+where higher temperatures typically increase the response time for
+logic cells. Figure 12 demonstrates the increase in response time
+for a selection of logic gates2 over a wide range of temperatures.
+This ﬁgure shows that over an interval of 50oC, the increase in
+response time amounts to approximately 3.4%.
+
+Another source of variation is clock jitter. In general, there are
+three types of jitter: absolute jitter, period jitter, and cycle-to-cycle
+jitter. Of these, cycle-to-cycle jitter is the only form of jitter that
+may potentially affect the WDU. Cycle-to-cycle jitter is deﬁned as
+the difference in length between any two adjacent clock periods and
+may be both positive (cycle 2 longer than cycle 1) or negative (cycle
+2 shorter than cycle 1). Statistically, jitter measurements exhibit a
+random distribution with a mean value approaching zero [40].
+
+2The gate models were taken from the 90 nm library and simulated
+using HSPICE.
+
+a
+a
+a
+a
+a
+e
+m
+
+i
+t
+
+e
+
+f
+i
+
+l
+
+ 
+
+L
+e
+u
+d
+o
+M
+
+ 
+f
+
+ 
+
+o
+e
+g
+a
+
+t
+
+n
+e
+c
+r
+e
+P
+
+ 105
+
+ 100
+
+ 95
+
+ 90
+
+ 85
+
+ 80
+
+ 75
+
+l
+
+d
+e
+g
+g
+a
+F
+ 
+s
+a
+n
+g
+S
+
+i
+
+l
+
+ 
+t
+
+t
+
+u
+p
+u
+O
+
+ 
+f
+
+t
+
+ 
+
+o
+e
+g
+a
+n
+e
+c
+r
+e
+P
+
+ 45
+
+ 40
+
+ 35
+
+ 30
+
+ 25
+
+ 20
+
+ 15
+
+ 10
+
+ 5
+
+ 0
+
+A
+
+L
+
+U
+
+L
+
+S
+
+U
+
+R
+
+e
+
+g
+
+is
+t
+e
+
+r 
+
+F
+
+il
+
+e
+
+N
+
+e
+
+x
+
+t 
+
+P
+
+C
+
+(a) Average percentage of the lifetime at which failure
+predictions are made with error bars representing the
+standard deviation of the population.
+
+A
+
+L
+
+U
+
+L
+
+S
+
+U
+
+R
+
+e
+
+g
+
+is
+t
+e
+
+r 
+
+F
+
+il
+
+e
+
+N
+
+e
+
+x
+
+t 
+
+P
+
+C
+
+(b) Percentage of the output signals that were ﬂagged
+at the time of failure for each module with error bars
+representing the standard deviation of the population.
+
+Figure 11: Analysis of TRIX analysis efﬁcacy in predicting failure.
+
+In general, the sampling techniques employed for failure predic-
+tion are sufﬁcient to smooth out the effects of dynamic variation
+described. For example, a conservative, linear scaling of tempera-
+ture effects on the single inverter delay to a 3.4% increase in module
+output delay does not present a sufﬁcient magnitude of variance to
+overcome the 5% threshold required for the WDU to predict fail-
+ure. Also, because the expected variation due to both clock jitter
+and temperature will exhibit a mean value of zero (i.e., temperature
+is expected to ﬂuctuate both above and below the mean value), sta-
+tistical sampling of latency values should minimize the impact of
+these variations. To further this point, since the TRIX calculation
+acts as a three-phase low-pass ﬁlter, the worst case dynamic vari-
+ations would need to cause latency samples to exceed the stored
+T RIXg value by greater than 5% over the course of more than
+12 successive sample periods, corresponding to over four days of
+operation.
+
+6. RELATED WORK
+
+Issues in technology scaling and process variation have raised
+concerns for reliability in future microprocessor generations. Re-
+cent research work has attempted to diagnose and, in some cases,
+reconﬁgure the processing core to increase operational lifetime. In
+this section, we brieﬂy discuss this related work and how it has
+inﬂuenced the direction of this paper.
+
+As mentioned in Section 1, much of the research into failure de-
+
+ 3.5
+
+INV
+AND
+OR
+
+e
+s
+a
+e
+r
+c
+n
+
+I
+ 
+y
+a
+e
+D
+
+l
+
+ 
+t
+
+n
+e
+c
+r
+e
+P
+
+ 2.5
+
+ 3
+
+ 2
+
+ 1
+
+ 1.5
+
+ 0.5
+
+ 0
+
+ 50
+
+ 60
+
+ 70
+
+ 80
+
+ 90
+
+ 100
+
+Temperature (OC)
+
+Figure 12: Impact of temperature on logic gate delay.
+
+tection relies upon redundancy, either in time or space. One such
+example of hardware redundancy is DIVA [8], which targets soft
+error detection and online correction. It strives to provide a low
+cost alternative to the full scale replication employed by traditional
+techniques like triple-modular redundancy. The system utilizes a
+simple in-order core to monitor the execution from a large high per-
+formance superscalar processor. The smaller checker core recom-
+putes instructions before they commit and initiates a pipeline ﬂush
+within the main processor whenever it detects an incorrect compu-
+tation. Although this technique proves useful in certain contexts,
+the second microprocessor requires signiﬁcant design/veriﬁcation
+effort to build and incurs additional area overhead.
+
+Bower et al. [15] extends the DIVA work by presenting a method
+for detecting and diagnosing hard failures using a DIVA checker.
+The proposed technique relies on maintaining counters for major
+architectural structures in the main microprocessor and associating
+every instance of incorrect execution detected by the DIVA checker
+to a particular structure. When the number of faults attributed to a
+particular unit exceeds a predeﬁned threshold, it is deemed faulty
+and decommissioned. The system is then reconﬁgured, and in the
+presence of cold spares, can extend the useful life of the processor.
+Related work by Shivakumar et al. [28] argues that even without
+additional spares the existing redundancy within modern proces-
+sors can be exploited to tolerate defects and increase yield through
+reconﬁguration.
+
+Research by Vijaykumar [18, 37] and Falsaﬁ [22, 30] attempt
+to exploit the redundant, and often idle, resources of a superscalar
+processor to enhance reliability by utilizing these extra units to ver-
+ify computations during periods of low resource demand. This
+technique represents an example of the time redundant computa-
+tion alluded to in Section 1. It leverages work by the Slipstream
+group [27, 23] on simultaneous redundant multithreading as well
+as earlier work on instruction reuse [31]. ReStore [38] is another
+variation on this theme which couples time redundancy with symp-
+tom detection to manage the adverse effects of redundant computa-
+tion by triggering replication only when the probability of an error
+is high.
+
+Srinivasan et al. have also been very active in promoting the need
+for robust designs that can withstand the wide variety of reliability
+challenges on the horizon [34]. Their work attempts to accurately
+model the MTTF of a device over its operating lifetime, facilitat-
+ing the intelligent application of techniques like dynamic voltage
+and/or frequency scaling to meet reliability goals. Although some
+physical models are shared in common, the focus of our paper is
+
+not to guarantee that designs can achieve any particular reliabil-
+ity goal, but rather to enable a design to recognize behavior that
+is symptomatic of wearout induced breakdown allowing it to react
+accordingly.
+
+Analyzing circuit timing in order to self-tune processor clock
+frequencies and voltages is also a well studied area. Kehl [19]
+discusses a technique for re-timing circuits based on the amount
+of cycle-to-cycle slack existing on worst-case latency paths. The
+technique presented requires ofﬂine testing involving a set of stored
+test vectors in order to tune the clock frequency. Although the pro-
+posed circuit design is similar in nature to the WDU, it only exam-
+ines the small period of time preceding a clock edge and is only
+concerned with worst case timing estimation, whereas the WDU
+employs sampling over a larger time span in order to conduct av-
+erage case timing analysis. Similarly, Razor [9] is a technique for
+detecting timing violations using time-delayed redundant latches
+to determine if operating voltages can be safely lowered. Again,
+this work studies only worst-case latencies for signals arriving very
+close to the clock edge.
+
+7. CONCLUSION
+
+In this paper, the device-level effects of oxide breakdown (OBD)
+on circuit performance are characterized. It is demonstrated that
+progressive OBD has a non-uniform impact on circuit performance.
+The results of the circuit-level modeling are then applied to a syn-
+thesized implementation of the OR-1200 microprocessor to analyze
+the effects of OBD at the microarchitectural level. Circuit timing is
+identiﬁed as a common phenomenon that can be tracked to predict
+the progression of OBD. A self-calibrating circuit for analyzing cir-
+cuit path delay along with an algorithm for predicting failure using
+this data is proposed. Results show that our failure prediction algo-
+rithm is successful in identifying wearout and ﬂagging outputs that
+suffer a trend of increasing delay over time.
+
+8. ACKNOWLEDGMENTS
+
+We thank the anonymous referees for their comments and sug-
+gestions. We would also like to thank David Blaauw and Eric Karl
+for their insightful discussions and feedback. This research was
+supported by ARM Limited, the National Science Foundation ITR
+grant CCR-0325898, and the Gigascale Systems Research Center,
+one of ﬁve research centers funded under the Focus Center Re-
+search Program, a Semiconductor Research Corporation program.
+
+9. REFERENCES
+
+[1] Gartner data systems conference, Dec. 2005.
+[2] International technology roadmap for semiconductors, 2005.
+[3] Openrisc 1200, 2006.
+
+http://www.opencores.org/projects.cgi/web/or1k/openrisc 1200.
+
+[4] Ridgetop group, 2006. http://www.ridgetop-group.com/.
+[5] M. Agarwal, B. Paul, and S. Mitra. Circuit failure prediction
+
+and its application to transistor aging. In Proc. of the 2007
+IEEE VLSI Test Symposium, page To appear, Apr. 2007.
+
+[6] E. R. Alliance. Online survey results: 2001 cost of
+
+downtime, 2001.
+
+[7] J. S. S. T. Association. Failure mechanisms and models for
+semiconductor devices. Technical Report JEP122C, JEDEC
+Solid State Technology Association, Mar. 2006.
+
+[8] T. Austin. Diva: a reliable substrate for deep submicron
+
+microarchitecture design. In Proc. of the 32nd Annual
+International Symposium on Microarchitecture, pages
+196–207, 1999.
+
+[9] T. Austin, D. Blaauw, T. Mudge, and K. Flautner. Making
+
+typical silicon matter with razor. IEEE Computer,
+37(3):57–65, Mar. 2004.
+
+[10] M. Batty. Monitoring an exponential smoothing forecasting
+
+system. Operational Research Quaterly, 20(3):319–325,
+1969.
+
+[11] B. G. U. Berkeley. Bsim4 mosfet model, 2007.
+[12] D. Bernick, B. Bruckert, P. D. Vigna, D. Garcia, R. Jardine,
+J. Klecka, and J. Smullen. Nonstop Advanced Architecture.
+In International Conference on Dependable Systems and
+Networks, pages 12–21, June 2005.
+
+[13] J. A. Blome, S. Feng, S. Gupta, and S. Mahlke. Online timing
+analysis for wearout detection. In Proc. of the 2nd Workshop
+on Architectural Reliability (WAR), pages 51–60, 2006.
+
+[14] S. Borkar. Designing reliable systems from unreliable
+
+components: The challenges of transistor variability and
+degradation. IEEE Micro, 25(6):10–16, 2005.
+
+[15] F. A. Bower, D. J. Sorin, and S. Ozev. A mechanism for
+
+online diagnosis of hard faults in microprocessors. In Proc.
+of the 38th Annual International Symposium on
+Microarchitecture, pages 197–208, 2005.
+
+[16] J. Carter, S. Ozev, and D. Sorin. Circuit-level modeling for
+concurrent testing of operational defects due to gate oxide
+breadkown. In Proc. of the 2005 Design, Automation and
+Test in Europe, pages 300–305, June 2005.
+
+[17] D. Ernst, N. S. Kim, S. Das, S. Pant, T. Pham, R. Rao,
+
+C. Ziesler, D. Blaauw, T. Austin, and T. Mudge. Razor: A
+low-power pipeline based on circuit-level timing speculation.
+In Proc. of the 36th Annual International Symposium on
+Microarchitecture, pages 7–18, 2003.
+
+[18] M. Gomaa and T. Vijaykumar. Opportunistic transient-fault
+
+detection. In Proc. of the 32nd Annual International
+Symposium on Computer Architecture, pages 172–183, June
+2005.
+
+[19] T. Kehl. Hardware self-tuning and circuit performance
+
+monitoring. In Proc. of the 1993 International Conference on
+Computer Design, pages 188–192, Oct. 1993.
+
+[20] B. P. Linder and J. H. Stathis. Statistics of progressive
+
+breakdown in ultra-thin oxides. Microelectronic
+Engineering, 72(1-4):24–28, 2004.
+
+[21] F. Monsieur, E. Vincent, D. Roy, S. Bruyere, J. C. Vildeuil,
+G. Pananakakis, and G. Ghibaudo. A thorough investigation
+of progressive breakdown in ultra-thin oxides. physical
+understanding and application for industrial reliability
+assessment. In Proc. of the 2002 International Reliability
+Physics Symposium, pages 45–54, Apr. 2002.
+
+[22] J. Ray, J. Hoe, and B. Falsaﬁ. Dual use of superscalar
+
+datapath for transient-fault detection and recovery. In Proc.
+of the 34th Annual International Symposium on
+Microarchitecture, pages 214–224, Dec. 2001.
+
+[23] V. Reddy, S. Parthasarathy, and E. Rotenberg. Understanding
+
+prediction-based partial redundant threading for
+low-overhead, high-coverage fault tolerance. In 14th
+International Conference on Architectural Support for
+Programming Languages and Operating Systems, pages
+83–94, Oct. 2006.
+
+[24] S. K. Reinhardt and S. S. Mukherjee. Transient fault
+
+detection via simulataneous multithreading. In Proc. of the
+27th Annual International Symposium on Computer
+Architecture, pages 25–36, June 2000.
+
+[25] G. Reis, J. Chang, N. Vachharajani, R. Rangan, , and D. I.
+
+[41] X. Yang, E. Weglarz, and K. Saluja. On nbti degradation
+
+process in digital logic circuits. In Proc. of the 2007
+International Conference on VLSI Design, pages 723–730,
+Jan. 2007.
+
+August. SWIFT: Software implemented fault tolerance. In
+Proc. of the 2005 International Symposium on Code
+Generation and Optimization, pages 243–254, 2005.
+
+[26] R. Rodriguez, J. H. Stathis, and B. P. Linder. Modeling and
+
+experimental veriﬁcation of the effect of gate oxide
+breakdown on cmos inverters. In International Reliability
+Physics Symposium, pages 11–16, Apr. 2003.
+
+[27] E. Rotenberg. AR-SMT: A microarchitectural approach to
+
+fault tolerance in microprocessors. In International
+Symposium on Fault Tolerant Computing, pages 84–91,
+1999.
+
+[28] P. Shivakumar, S. Keckler, C. Moore, and D. Burger.
+Exploiting microarchitectural redundancy for defect
+tolerance. In Proc. of the 2003 International Conference on
+Computer Design, page 481, Oct. 2003.
+
+[29] K. Skadron, M. R. Stan, K. Sankaranarayanan, W. Huang,
+
+S. Velusamy, and D. Tarjan. Temperature-aware
+microarchitecture: Modeling and implementation. ACM
+Transactions on Architecture and Code Optimization,
+1(1):94–125, 2004.
+
+[30] J. Smolens, J. Kim, J. Hoe, and B. Falsaﬁ. Efﬁcient resource
+
+sharing in concurrent error detecting superscalar
+microarchitectures. In Proc. of the 37th Annual International
+Symposium on Microarchitecture, pages 256–268, Dec.
+2004.
+
+[31] A. Sodani and G. Sohi. Dynamic instruction reuse. In Proc.
+
+of the 25th Annual International Symposium on Computer
+Architecture, pages 194–205, June 1998.
+
+[32] L. Spainhower and T. Gregg. IBM S/390 Parallel Enterprise
+
+Server G5 Fault Tolerance: A Historical Perspective. IBM
+Journal of Research and Development, 43(6):863–873, 1999.
+[33] J. Srinivasan, S. V. Adve, P. Bose, and J. A. Rivers. The case
+for lifetime reliability-aware microprocessors. In Proc. of the
+31st Annual International Symposium on Computer
+Architecture, pages 276–287, June 2004.
+
+[34] J. Srinivasan, S. V. Adve, P. Bose, and J. A. Rivers.
+
+Exploiting structural duplication for lifetime reliability
+enhancement. In Proc. of the 32nd Annual International
+Symposium on Computer Architecture, pages 520–531, June
+2005.
+
+[35] StockCharts.com. TRIX, Oct. 2006.
+
+[36] J. Sune and E. Wu. From oxide breakdown to device failure:
+an overview of post-breakdown phenomena in ultrathin gate
+oxides. In International Conference on Integrated Circuit
+Design and Technology, pages 1–6, May 2006.
+
+[37] T. Vijaykumar, I. Pomeranz, and K. Cheng. Transient-fault
+
+recovery via simultaneous multithreading. In Proc. of the
+29th Annual International Symposium on Computer
+Architecture, pages 87–98, May 2002.
+
+[38] N. Wang and S. Patel. Restore: Symptom based soft error
+
+detection in microprocessors. In International Conference on
+Dependable Systems and Networks, pages 30–39, June 2005.
+
+[39] E. Wu et al. Interplay of voltage and temperature
+
+acceleration of oxide breakdown for ultra-thin gate oxides.
+Solid-State Electronics, 46:1787–1798, 2002.
+
+[40] T. J. Yamaguchi, M. Soma, D. Halter, J. Nissen, R. Raina,
+
+M. Ishida, and T. Watanabe. Jitter measurements of a
+powerpc microprocessor using an analytic signal method. In
+Proc. of the 2000 International Test Conference, pages
+955–964, 2000.
+
+http://stockcharts.com/education/IndicatorAnalysis/indic trix.htm.
+
+

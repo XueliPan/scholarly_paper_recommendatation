@@ -1,0 +1,2305 @@
+22nd Euromicro Conference on Real-Time Systems
+
+Compositional Analysis of Multi-Mode Systems∗
+
+Linh T.X. Phan
+
+Insup Lee
+
+Oleg Sokolsky
+
+Department of Computer and Information Sciences, University of Pennsylvania
+
+Email: {linhphan, lee, sokolsky}@cis.upenn.edu
+
+Abstract—The paper presents a model for multi-mode real-
+time applications and develops new techniques for the composi-
+tional analysis of systems that contain multiple such applications.
+An algorithm for constructing an interface for a single multi-
+mode application is presented. Then, a method for computing
+an interface of a composite application is presented, which uses
+only the interfaces of constituent applications. A case study of an
+adaptive streaming system demonstrates that multi-mode analysis
+offers more precise results compared to a unimodal worst-case
+analysis.
+
+I. INTRODUCTION
+
+The increasing scale and complexity of real-time embedded
+systems have prompted the need for advanced analysis tech-
+niques that facilitate component-based design. In this design
+paradigm, a large complex system is ﬁrst decomposed into
+smaller and simpler components – which are developed inde-
+pendently – before recomposing them into a complete system
+using interfaces that abstract away their internal complexities.
+To achieve component-based design, interface abstraction
+and interface composition must adhere to the principle of
+compositionality, i.e., properties that have been established
+at
+the system level. Besides
+functional and behavioral aspects, real-time embedded systems
+are concerned with time-constrained resource demands. This
+necessitates timing analysis frameworks that are composi-
+tional, i.e., system-level schedulability analysis should be done
+by combining component interfaces that abstract component-
+level timing requirements.
+
+the component level hold at
+
+Compositional analysis has therefore been a topic of great
+interest within the real-time and embedded systems commu-
+nity. Numerous frameworks have been proposed (e.g., [6],
+[7], [15], [16]) and continuously extended. These frameworks
+typically assume a static system execution semantics, where
+a ﬁxed set of tasks/event streams are always active and
+demanding a ﬁxed amount of resource. They too abstract
+away event communication between components in the sys-
+tem, replacing it with resource demand placed on the sys-
+tem by event streams. Such an abstraction is adequate for
+systems that have stable resource-use patterns. In practice,
+however, systems are often required to operate in multiple
+modes that exhibit vastly different resource demands. Modal
+behaviors are exhibited by a wide spectrum of embedded
+systems, ranging from safety-critical aircraft control systems
+to adaptive streaming servers and smart devices. A networked
+streaming server, for example, often needs to process several
+applications concurrently, including audio, video and graphics
+processing, as well as system-related tasks. These applications
+
+∗Research is supported in part by NSF grants CNS-0720703 and CNS-
+
+0834524, and AFOSR grant FA9550-07-1-0216.
+
+are becoming network-aware and adaptive. They may adapt
+themselves (e.g., select a different encoding algorithm) during
+runtime depending on the network connection. They may also
+synchronize with one another, intentionally or inadvertently
+due to the network conditions.
+
+In such a system, each mode may be characterized by a
+different set of tasks, different data arrival rates, and a different
+scheduling policy. Mode switches may be both time-triggered
+and event-triggered, for instance, due to a time-triggered
+interrupt or a buffer in the system exceeding a certain ﬁll-level.
+An incoming event from another component may also trigger
+a mode switch in the receiving component. Such mode-
+dependent behavior and mode-switching communication need
+to be taken into consideration. While internal event triggered
+may be encapsulated in the resource demand, mode-switching
+behavior in response to incoming external events needs to be
+exposed on the component interface.
+
+Our contributions: In this paper, we propose a framework
+for the compositional analysis of real-time systems which
+execute multiple multi-mode applications concurrently under
+a hierarchical scheduling policy on a single processing re-
+source. We present here a multi-mode automaton model
+(MMA) for modeling such multi-mode applications and an
+interface-based technique for analyzing them compositionally.
+Our MMA model reﬁnes the previously proposed timed-
+and event-triggered automata (TET) model described in [11].
+While TET is designed for complete system architecture with
+both processing loads and resource availability, the MMA is
+concerned only with the application loads and its execution
+semantics. The service function, that is, resource availability
+characterization, is calculated during the analysis. This makes
+the MMA model more declarative than TET and suitable for
+open systems. Further, the TET model assumes all the task
+parameters are reset when the system moves to a new mode;
+the MMA, however, takes into account that some tasks are
+unaffected by a mode change. As a result, MMA analysis
+is more precise. Most importantly, we extend the analysis
+framework in [11] with new techniques for the compositional
+analysis of hierarchical multi-mode systems.
+
+Our key contributions are summarized as follows:
+
+• We describe the MMA model for multi-mode applica-
+tions, which reﬁnes the previously proposed model in [11]
+to better represent the application semantics without a
+speciﬁcation of resource supply. Compared to [11], the
+MMA model also employs a more realistic mode change
+protocol where tasks that are not affected by the mode
+switch need not be reset when switching to a new
+mode. We characterize two general ways for handling
+
+1068-3070/10 $26.00 © 2010 IEEE
+DOI 10.1109/ECRTS.2010.35
+
+197
+
+pending event streams during a mode change, and present
+the composition semantics of MMA in the context of
+hierarchical scheduling.
+
+• We propose an interface representation for MMA that
+hides the application-level tasks and scheduling details
+while exposing timing guards and external events required
+for synchronization with other component
+interfaces.
+Each multi-mode interface is a state machine, where each
+state is augmented with a service function that represents
+the resource requirement of a corresponding mode in the
+application.
+
+• We develop a method for computing the interfaces of
+MMA that is capable of accurately capturing the effects
+of mode changes on the resource requirements during
+transitional periods. Our method also considers buffer
+conditions and timing guards in deriving the service
+requirement of a mode. Unlike most previous techniques
+where pending events in the buffer during a mode change
+must be ﬁnished in the immediate destination mode
+(hence, no cascading pending events), our technique is
+designed for the general case. We discuss, however, cases
+in which such a restriction should be imposed for certain
+modes in an MMA.
+
+• We illustrate the utility of our model and compositional
+analysis using a case study of an adaptive streaming
+system, and compare the obtained results against that of
+the unimodal compositional analysis.
+
+Related work: Several compositional analysis techniques have
+been proposed for unimodal systems (see e.g., [1], [6], [16],
+[17], [19]). These techniques support multiple levels of hierar-
+chy and well-known scheduling policies for real-time systems
+such as FP (Fixed Priority) and EDF (Earliest Deadline First).
+They can be broadly divided into two categories: (a) classical
+periodic and sporadic task models and (b) stream-based task
+models. In the former, resources are often modeled as periodic,
+bounded delay, and explicit deadline periodic [6], [16], [17].
+Resource interfaces in the latter are presented using service
+functions, which capture the minimum resource requirements
+in any interval of a given length [4], [19]. Both approaches
+abstract away communication between components, allowing
+analysis to be achieved based on the calculation of resource
+model interfaces using demand and supply bound functions. A
+formalism for describing multi-modal components, however,
+will be useful in system development only if accompanied
+by a host of analysis techniques that can compute component
+interfaces as well as detect incompatibilities in communication
+and resource use of components in a composite system.
+Hence, these previous techniques become insufﬁcient with the
+addition of mode-switching behaviors.
+
+Several techniques have been proposed to extend models
+and timing analysis techniques from the real-time systems
+literature to accommodate multi-mode behaviors. For exam-
+ple, the framework presented in [3] allows certain tasks to
+intentionally change their execution periods, which is a type
+of mode change. Different mode change protocols have been
+studied in [8], [14], [18] and have been classiﬁed in [13].
+Techniques developed in these papers ensure that no deadlines
+
+are violated in each of the modes or during the transition
+intervals in a single multi-mode component. Our mode change
+protocol is similar to the one proposed in [18], but is more
+general as we do not require that buffered events be executed
+before the mode switch take place and can remain in the
+buffer through several subsequent mode switches. It is worth
+noting that these studies of mode switching protocols do not
+consider the compositional analysis of systems with multiple
+multi-mode components that are hierarchically scheduled.
+
+Finally, we recently proposed a multi-mode extension to
+the RTC framework [12], which is different when compared
+to the MMA model that we shall be presenting in this paper.
+The arrival and service automata in [12] aim at modeling
+(independently) complex arrival patterns of event streams
+and resource availability patterns following a relatively
+the MMA allows for
+simple processing semantics. Here,
+a richer processing semantics, with different
+tasks and
+scheduling policies explicitly captured and adapted to the
+dynamic characteristics of the application. The MMA model
+studied in this paper resembles the TET model proposed
+that MMA has no knowledge of resource
+in [11] except
+supply. In fact,
+the method proposed here computes such
+a suitable resource supply that was already given to TET.
+To the best of our knowledge, our paper is the ﬁrst attempt
+to consider the compositional analysis of multi-mode systems.
+
+Organization of the paper: In the next section, we revisit
+the compositional analysis of unimodal systems. Section III
+formulates the MMA model and its composition semantics.
+We present our interface representation and generation tech-
+nique in Section IV, followed by the interface composition
+in Section V. We then describe the case study in Section VI
+before concluding the paper.
+
+II. COMPOSITIONAL ANALYSIS OF UNIMODAL SYSTEMS
+
+This section revisits the interface computation of a unimodal
+component developed in [4], [9], [19], and extends the results
+for the compositional analysis of unimodal systems that consist
+of multiple unimodal components that share the same resource
+under a hierarchical scheduling policy.
+
+A. System description and basic models
+
+A unimodal system consists of a ﬁnite set of tasks running
+on a single processing element, each of which processes an
+input event stream and produces an output event stream. Each
+task has an input buffer (to store the input stream) and an
+output buffer (to store the output stream) that are unshared
+with other tasks. All tasks process their input events in a FIFO
+manner. As soon as a task completes its processing of an event,
+it will remove the event from its input buffer and write the
+results (as an output event) to its output buffer.
+
+Figure 1 depicts the unimodal model of a system with three
+tasks T1, T2 and T3 that share the same resource under EDF,
+where Bi (B(cid:3)
+
+i) denotes the input (output) buffer of Ti.
+
+In a unimodal system, all tasks are always active and their
+attributes stay constant throughout the system execution. Each
+task T is characterized by
+
+T =
+
+(cid:2)
+idT , BT , B
+
+(cid:3)
+T
+
+, ET , DT , πT , ˜αT , αT
+
+(cid:3)
+
+198
+
+Fig. 1. A unimodal system architecture, modeled by a single mode.
+
+, ˜αl
+T
+
+˜αT = ( ˜αu
+T
+
+(Δ) and ˜αl
+T
+
+) where ˜αu
+T
+
+with idT being the task identiﬁer, BT the associated input
+buffer, B(cid:3)
+T the associated output buffer, ET the execution
+demand, DT the relative deadline, πT the priority if FP
+is used (and πT = 0 otherwise), and ˜αT the event-based
+arrival function of the input event stream of T , respectively.
+(Δ) give the
+Here,
+maximum and minimum number of events that can arrive
+from the associated input stream in any interval of length
+Δ for all Δ ≥ 0. Further, αT = ET ˜αT is the workload-based
+arrival function of the input stream (i.e., in terms of number
+of execution units). The backlog (ﬁll-level) of a buffer at
+time t refers to the number of execution units required to
+process the events in the buffer at time t. We assume that
+a granularity of time has been chosen, and events arrive at
+discrete point in time. Further, the unit of resource supply
+is an execution time unit. As we are mainly concerned with
+αu
+T , we shall refer αT to αu
+T wherever a single function applies.
+Scheduling Policies. Given a set of active workloads and
+a number of execution units provided by a resource within
+a time interval, a scheduling policy computes the number of
+execution units allocated to each workload during the interval.
+Scheduling decisions are often made at discrete points in time,
+either for the next time unit or until a new event arrives. Each
+workload denotes the execution requirement of a task, a ﬁnite
+set of tasks or a system component. Denote by W the set of all
+workloads. We describe below a general notion of scheduling
+policy, which is required to deﬁne the precise semantics
+of hierarchical scheduling. Note that this deﬁnition captures
+both work-conserving and non-work-conserving scheduling
+policies. However, the analysis techniques we present next
+assume work-conserving scheduling policies.
+
+Deﬁnition 1 (Scheduling Policy). A scheduling policy is a
+function SC : (W × N) → (W → N) which takes as inputs a
+ﬁnite set of workloads W ⊆ W, a non-negative integer k ∈ N
+denoting the number of resource units available during a time
+duration before a new event arrives, and returns as results the
+number of resource units provided to each workload in W in
+this duration. In other words, SC(W, k) is a function g : W → N
+where g(w) gives the number of execution units allocated to
+each w ∈ W , such that
+
+w∈W g(w) ≤ k.
+
+(cid:4)
+
+Greedy processing. Suppose T is the only task in the system.
+Denote b(t) as the backlog (i.e., number of execution units
+required) of the input buffer BT at time t. Suppose k is the
+number of execution units available in an interval [t, Δ) before
+a new event arrives. Then, the number of execution units that
+are provided to BT during this interval is min
+
+(cid:6)
+(cid:5)
+k, b(t)
+
+.
+
+if
+
+Example 1. (Fixed Priority (FP)) Consider a set of tasks
+T1, T2, . . . , Tn that are scheduled under FP, where Ti has higher
+i < j. Denote bi(t) as the backlog of
+priority than Tj
+BTi at time t. Suppose k is the number of resource units
+[t,t + Δ) during which there are
+available in an interval
+no new events. Since the resource is ﬁrst allocated to T1
+then to T2 and so on, one can verify that the number of
+def= min
+resource unit hi allocated to Ti is h1
+and
+for all 2 ≤ i ≤ n. Thus,
+hi
+FP(W, k) def= g where g(Ti) = hi.
+
+(cid:6)
+(cid:5)
+def= min
+k − (h1 + · · · + hi−1), bi(t)
+
+(cid:6)
+(cid:5)
+k, b1(t)
+
+B. Hierarchical scheduling of unimodal systems
+
+In a hierarchical scheduling framework, the system is par-
+titioned into a tree of components that are scheduled in a
+hierarchical manner as illustrated in Figure 2. Each internal
+node of the tree represents a composite component, whose
+children are its sub-components. Each leaf represents an
+elementary component, which is a ﬁnite set of tasks in the
+system. Each component has its own scheduling policy under
+which its sub-components are scheduled, which may differ
+from its parent’s scheduling policy.
+
+     Component C
+
+Resource
+
+FP
+
+EDF
+
+FP
+
+T1
+
+T2
+
+T3
+
+T4
+
+     Component C1
+
+    Component  C2
+
+T1, T2, T3, T4 : Tasks
+
+Fig. 2. Hierarchical scheduling of a system component.
+
+C. Compositional analysis of unimodal systems
+
+Consider an elementary component C = (cid:9)τ, SC(cid:10) consisting
+of a set of tasks τ that is scheduled under a scheduling policy
+SC. Denote F as the set of all functions f : N → N. The
+interface of C is a minimum service function β in F for which
+τ is schedulable and none of the input buffers overﬂows. Recall
+that a service function β(Δ) speciﬁes the number of execution
+units available in any interval of length Δ ≥ 0.
+
+Suppose SC is EDF. In order for the tasks to be schedulable,
+the service function βT allocated to each task T in τ must be at
+least equal to the demand bound function of T , which is given
+by dbfT (Δ) = αT (Δ − DT ) for all Δ ≥ 0. Recall that dbfT (Δ)
+speciﬁes the maximum possible execution units required by T
+over any interval of length Δ.
+
+Further, the input buffer BT does not overﬂow iff αT (Δ) −
+βT (Δ) ≤ size(BT ) for all Δ ≥ 0. Thus, the minimum service
+function required by a task T alone is deﬁned by: for all Δ ≥ 0:
+
+(cid:5)
+(Δ) = max
+
+(cid:6)
+αT (Δ − DT ), α(Δ) − size(BT )
+
+β
+
+(1)
+where size(B) denotes the capacity of buffer B. Hence, the
+interface of C is the service function β
+
+edf(C) def=
+
+Now suppose SC is FP. We assume without loss of gener-
+ality (w.o.l.g.) that τ = {T1, . . . , Tn} where πTi
+< πTj if i < j.
+In other words, the total resource will be ﬁrst allocated to T1
+and its remaining resource will be given to T2, and so on.
+Combined with Eq. 1, we imply that the minimum service
+
+T ∈τ β
+
+uni
+T .
+
+(cid:4)
+
+uni
+
+uni
+T
+
+199
+
+(cid:6)
+
+uni
+Ti
+
+def= β
+, αTi
+
+(cid:7)
+uni
+β
+(cid:2) (cid:7)
+Tn
+uni
+β
+Ti+1
+
+(Δ)
+
+∀Δ ≥ 0 :
+
+(cid:5)
+ε | β
+
+(cid:5)
+(Δ) def= max
+
+uni
+Tn , and ∀1 ≤ i < n,
+(cid:3)
+(Δ), β
+
+function required by Ti under FP is
+Serv
+
+(cid:7)
+uni
+β
+Ti
+(cid:3), α) denotes the smallest service function β ∈
+where Serv(β
+F required by a task with arrival function αT such that the
+remaining service function after processing the task is at least
+(cid:3)(Δ− λ)+ αT (Δ− λ)
+(cid:3), which is given by [4]: Serv(β
+(cid:3), αT ) = β
+β
+(cid:6)
+(cid:3)(Δ − ε) = β
+(cid:3)(Δ)
+where λ = sup
+. Thus, the interface of
+fp (C) def= (cid:7)
+uni
+C is the service function β
+β
+T1
+
+Next, consider a component C comprising m components
+C1, . . . , Cm that are scheduled using SC. Let βi be the interface
+of Ci for all 1 ≤ i ≤ m. Again, we assume w.o.l.g. that when SC
+is FP, Ci has higher priority than C j if i < j. The interface of
+uni
+C is the minimum service function β
+sc (C) for which all Ci are
+if
+schedulable. It is given by
+SC is FP, with
+, βi) ∀1 ≤ i < m.
+
+m
+i=1 βi if SC is EDF and by
+(cid:7)
+uni
+β
+Ci
+
+= Serv((cid:7)
+β
+
+= βm and
+
+uni
+Ci+1
+
+uni
+C1
+
+uni
+Cm
+
+(cid:4)
+
+(cid:7)
+β
+
+(cid:7)
+β
+
+uni
+
+.
+
+III. MULTI-MODE AUTOMATA (MMA)
+
+Multi-mode systems execute at multiple modes of operation,
+each of which performs a unique functionality. The set of
+tasks that are active, their attributes, as well as the scheduling
+policy during the system execution vary with respect to the
+mode at which the system is currently in. Changes from one
+mode to another can be triggered by a timing guard and/or
+an event. Such systems can be modeled by a multi-mode
+automaton, or MMA in short. A complex multi-mode system
+can be composed of a collection of multi-mode systems that
+share the same resource under a hierarchical scheduling policy,
+which are modeled as an MMA each.
+
+time guard
+
+b
+
+[1, 15]
+
+M1
+
+external event
+
+M1  = 〈{T1 , T2 , T3},  FP 〉
+M2  = 〈{T1 , T2 , T4},  FP 〉 
+M3  = 〈{T2 , T3 , T4},  EDF〉 
+
+′
+
+′
+
+′
+
+B2 ≥ 5 
+
+c
+[3, 20]
+
+M2
+
+a
+[1, 25]
+
+d
+
+b
+
+[10, 30]
+
+M3
+
+B2 ≤ 15  ∧  B3  ≤ 2
+
+buffer guard
+
+Fig. 3. An example of a multi-mode automata.
+
+An MMA is a ﬁnite automaton whose states represent
+operating modes and transitions represent mode changes. Each
+mode (state) of an MMA speciﬁes (i) a set of tasks (and their
+corresponding attributes) that are active in the mode, and (ii) a
+scheduling policy used to schedule the tasks. Each transition of
+an MMA can be triggered by an external event (e.g., interrupt),
+a condition on the ﬁll-levels of the buffers associated with the
+tasks, or a timing constraint. Denote INT as the set of intervals
+[a, b] with 0 ≤ a ≤ b and a, b ∈ N.
+
+Deﬁnition
+(M, Min, Inv, Φ, Σ, R, T ) where
+
+2
+
+(MMA). An MMA is
+
+(cid:5)
+
+(cid:6)
+
+a
+
+tuple A =
+
+T1, . . . , Tm
+
+• T =
+a ﬁnite set of tasks of the application.
+• M is a ﬁnite set of modes. Each mode M ∈ M has the
+form (cid:9)τ, SC(cid:10) with τ ⊆ T denoting the set of active tasks
+and SC the scheduling policy at M. We say BT is active
+in M iff T is active in M.
+
+• Min ∈ M is the initial mode of A.
+• Φ is a set of constraints on the ﬁll-levels of the buffers
+
+(cid:8)
+
+in B, where B =
+
+T ∈T BT .
+
+• Inv : M → INT is an invariant function that assigns
+to each mode in M an interval [Il, Iu], where Il is the
+minimum amount of time that the system must stay in
+the mode and Iu is the maximum amount of time that the
+system may stay in the mode. We require that Il ≥ 1.
+• Σ is a set of signals that trigger the mode changes.
+• R ⊆ M × Σ × Φ × INT× M is a transition relation. Each
+transition in R is of the form (M, a, ϕ, I, M(cid:3)) where M and
+M(cid:3) are the origin and destination modes, a is an external
+signal that triggers the transition, ϕ is a guard on the
+ﬁll-levels of the input buffers, and I ∈ INT is the interval
+(relative to the instant the system enters M) during which
+the transition can be enabled.
+
+the application,
+
+All modes are urgent and when multiple transitions are en-
+abled concurrently, the MMA non-deterministically selects one.
+Fig. 3 depicts an example of MMA. Here, Ti and T (cid:3)
+i
+correspond to the same task of
+thereby
+associated with the same input/output buffer. Their timing
+attributes, however, are different. Initially, the system is in
+mode M1, where T1, T2, T3 are active and scheduled under FP.
+When the system detects – after it has been in M1 for at least
+3 and no more than 20 time units – that a new task T4 arrives
+and the arrival function of T1 is changed, and if the ﬁll-level
+of the input buffer B2 of T2 is more than 5, then it will move
+to mode M2. At M2, the system deactivate the least important
+task T3 and T4 is executed together with T (cid:3)
+Mode change protocols. Whenever a transition is enabled,
+the system moves instantaneously to the new mode, and the
+new parameters will be in effect for all new incoming events
+immediately. Unchanged tasks (appearing in both modes) are
+not affected by the mode change, and no new events from an
+old task (appearing only in the old mode) arrives in the new
+mode. New input events of the new tasks (only appear in the
+new mode) and changed tasks (whose parameters are modiﬁed)
+may arrive immediately.1 Pending events in the input buffer of
+an old or a changed task may be handled differently depending
+on the application, which can be generalized into two cases:
+(i) Both the physical pending events and their timing require-
+ments (i.e., execution demand and deadline) associated
+with the old mode are preserved in the new mode.
+
+1 and T2.
+
+(ii) Only the physical pending events are preserved in the
+new mode; their timing requirements follow the modiﬁed
+parameters of the associated task in the new mode.
+
+Note that the execution demanded by an event depends on
+the current mode of the system when the event arrives at the
+system in case (i), and on the mode at which it is processed in
+case (ii). For the rest of the paper, we assume the former case;
+however, results for the latter can be established in a similar
+(and simpler) fashion. We assume also that all tasks follow
+the priorities speciﬁed in the new mode regardless of which
+event it is processing. Lastly, when the system is in a mode,
+only active tasks in the mode are being executed.2
+
+1Note that most common protocols require a delay before the system moves
+to the new mode. This can be done by adding an intermediate mode with a
+time invariant equal to the delay and old tasks having zero arrival functions.
+2Pending events of an old task can be processed in the new mode by
+adding the task into the active task set of the new mode and assigning its
+arrival function to be a zero function.
+
+200
+
+A. Composition of multi-mode automata
+
+IV. COMPOSITIONAL ANALYSIS OF MMA
+
+Systems that consist of multiple applications running con-
+currently can be reasoned by means of composition of MMA.
+There are two types of compositions: with and without re-
+source sharing. In this paper, we shall focus on the composi-
+tion of independent MMA that execute on the same resource
+under some scheduling policy.
+
+B. Mode composition
+
+Let M1 = (cid:9)τ1, SC1(cid:10) be a mode of an MMA A1 and M2 =
+(cid:9)τ2, SC2(cid:10) be a mode of an MMA A2. Suppose A1 and A2 share
+the same resource under a scheduling policy SC3. Consider
+any time interval [t,t + Δ) during which A1 is in M1, A2 is
+in M2, and no new event arrives at both automata. Suppose
+during [t,t + Δ), the processor has k resource units available
+to execute A1 and A2. By Deﬁnition 1,
+the number of
+resource units allocated to τ1 and τ2 are k1 = SC3(τ, k)(τ1) and
+k2 = SC3(τ, k)(τ2), respectively, with τ = τ1 ∪ τ2. As a result,
+the number of resource units allocated to each task T ∈ τ is:
+g(T ) = SC1(τ1, k1)(T ) if T ∈ τ1, and g(T ) = SC2(τ2, k2)(T )
+otherwise. Deﬁne SC(τ, k) def= g. The composition of M1 and
+M2 under SC3, denoted by M1 (cid:13)SC3M2, is a mode M = (cid:9)τ, SC(cid:10).
+Deﬁnition 3. Let A1 = (M1, Min1, Inv1, Φ1, Σ1, R1, T1) and
+A2 = (M2, Min2, Inv2, Φ2, Σ2, R2, T2) be two MMA. The asyn-
+chronous composition of A1 and A2 under SC, denoted by
+A1 (cid:13)SCA2, is a tuple A = (M, Min, Inv, Φ, Σ, R, T ) where:
+
+• M is the set of modes, deﬁned by M =
+
+M1 (cid:13)SCM2 |
+
+(cid:5)
+
+M1 ∈ M1 ∧ M2 ∈ M2
+
+(cid:6)
+.
+
+• Min = Min1 (cid:13)SCMin2 is the initial mode of A.
+• Inv
+
+Inv(M1 (cid:13)SCM2) =
+[1, min(U,U (cid:3))], with Inv(M1) = [L,U], Inv(M2) = [L(cid:3),U (cid:3)].
+• Φ is the set of constraints on the ﬁll-levels of the buffers
+
+invariant, where
+
+the
+
+is
+
+BT where T ∈ T .
+
+• Σ = Σ1 ∪ Σ2 is the set of external triggering signals.
+• R ⊆ M × Σ × Φ × INT × M is the transition relation,
+) in R1
+
+deﬁned as follows. For each (M1, a1, ϕ1, [L,U], M(cid:3)
+1
+and each (M2, a2, ϕ2, [L(cid:3),U (cid:3)], M(cid:3)
+2
+(i) (M1 (cid:13)SCM(cid:3)
+1
+
+) in R2:
+, a1, ϕ1 ∧ ϕ2, I, M2 (cid:13)SCM(cid:3)
+2
+in R if a1 = a2, M1 (cid:15)= M2 and M(cid:3)
+1
+[min(L, L(cid:3)), min(U,U (cid:3))].
+
+) is a transition
+(cid:15)= M(cid:3)
+2 where I =
+
+(ii) (M1 (cid:13)SCM(cid:3)
+1
+
+, a1, ϕ1, [1, min(U,U (cid:3))], M2 (cid:13)SCM(cid:3)
+)
+is a
+1
+transition in R if a1 (cid:15)= a2, M1 (cid:15)= M2 and M(cid:3)
+= M(cid:3)
+2.
+1
+, a2, ϕ2, [1, min(U,U (cid:3))], M1 (cid:13)SCM(cid:3)
+)
+is a
+2
+transition in R if a1 (cid:15)= a2, M1 = M2 and M(cid:3)
+(cid:15)= M(cid:3)
+2.
+1
+
+(iii) (M1 (cid:13)SCM(cid:3)
+1
+
+• T = T1 ∪ T2 is the set of tasks in the system.
+Note that in case (ii), it is possible that A1 enters M1 at time
+t and A2 enters M2 at time t + L. Because A1 has already spent
+L time units in M1, it can move to M(cid:3)
+1 immediately or after at
+least 1 time unit. If A1 moves immediately to M(cid:3)
+1, then both
+A1 and A2 move to a new mode at time t + L, which can be
+captured by case (i). By similar arguments, we obtain the time
+intervals associated with the transitions in cases (i) and (iii).
+The synchronous composition of MMA can be deﬁned simi-
+larly; however, only synchronized transitions are allowed (i.e.,
+case (i)) and each composed mode (transition) is associated
+with an interval I = I1 ∩ I2, where I1 and I2 are the intervals
+associated with the two component modes (transitions).
+
+Similar to the unimodal case, the compositional analysis
+of multi-mode systems begins with the system being parti-
+tioned into a ﬁnite set of components that are hierarchically
+scheduled. The only difference here is that each elementary
+component in the hierarchy is now a multi-mode system,
+modeled as an MMA. Hence, we ﬁrst compute an interface
+that captures the resource requirements for each MMA, and
+subsequently generate the interface of a composite component
+from the computed interfaces of its children.
+
+A. MMA’s interface representation
+
+The resource requirement of a multi-mode component C
+can be captured by a multi-mode resource interface, which
+is a ﬁnite state machine where each state is augmented with
+a minimum service function that is demanded by C. The
+different service functions associated with different states of
+the interface represent the different resource requirements of
+C when it
+is at different (set of) modes. Each transition
+in the interface signiﬁes a “service change request” by the
+component, which is triggered by a signal or a time invariant.
+Multi-mode resource interfaces share the same set of external
+triggering signals as that of their components. In other words,
+they expose communication between components, and hence
+allowing detection of incompatibilities in communication and
+resource use of components in a composite system during
+interface composition. On the other hand, internal events (in
+the form of buffer constraints) that exist in a component but
+are unobservable to other components are abstracted away
+and replaced with the service functions of the interface.
+This enables information hiding, at the same time limits the
+interface’s complexity.
+
+Deﬁnition 4 (Multi-mode Resource Interface). A resource
+interface of a multi-mode component C is a ﬁnite state machine
+A = (S, sin, β, Σ, R) where
+
+• S is a ﬁnite set of states, each of which characterizes the
+
+resource requirement of one or more modes in C.
+
+• sin ∈ S is the initial state.
+• β : S → F is a service mapping, which speciﬁes for each
+state s ∈ S a minimum service function β(s) that must be
+guaranteed at s for C to be schedulable.
+
+• Σ is a set of external signals.
+• R ⊆ S × Σ× INT× S is a set of transitions. Each transition
+tr = (s, a, [L,U], s(cid:3)) in R represents a change in the
+resource requirement of the component (i.e., from β(s) to
+β(s(cid:3))), which is triggered by a signal a and a time interval
+[L,U] during which the transition can be enabled.
+
+All transitions in R are instantaneous and all states in S are
+urgent.
+
+As an example, Fig. 4(b-c) shows an adaptive stream
+processing system that consists of an audio application and
+a video application (besides others), which change modes
+according to the network condition (i.e., upon presence of
+one of the external events unloaded, loaded, and congested).
+The multi-mode resource interface for the system is given
+the service function βs where
+in Fig. 5. In the ﬁgure,
+s ∈ {PCM15, ADM7.5, PLC7.5, PCM7.5} gives the minimum
+
+201
+
+C1
+
+C3
+
+PCM
+
+C4
+
+15 fps
+
+Connect
+
+unloaded
+
+bufa  ≥  B/2 
+
+[D, ∞)
+
+lostNw
+
+foundNw
+
+loaded
+
+unloaded
+
+loaded
+
+unloaded
+
+Discon.
+
+ADM
+
+congested
+bufa  ≤  B/3 
+
+PLC
+
+7.5 fps
+
+M1
+1
+M2
+1
+
+ = 〈{Ts , Tn },  EDF 〉
+ = 〈{Ts , Tns },  EDF 〉
+
+loaded
+
+Mid
+3
+
+  = 〈{Tam , Ta    }, FP 〉
+
+id
+
+Mid
+4
+
+ = 〈{Tvm , Tv    }, FP 〉
+
+id
+
+(a) System-related tasks
+
+(b) Audio application
+
+(c) Video application
+
+βPCM15
+
+unloaded
+
+PCM
+15 fps
+
+unloaded
+
+loaded
+
+[D, ∞)
+
+unloaded
+
+congested
+
+loaded
+
+PLC
+
+7.5 fps
+
+βPLC7.5
+
+loaded
+
+βADM7.5
+
+ADM
+7.5 fps
+
+[D, ∞)
+
+PCM
+7.5 fps
+
+βPCM7.5
+
+Fig. 4. MMA models of concurrent applications in a streaming system.
+
+Fig. 5. The multi-mode interface for the composite component C2 = C3 (cid:13) C4.
+resource that must be provided to the applications when
+they are in the corresponding modes. For instance, βPCM15
+is the minimum service function that must be guaranteed
+when the audio application encodes data using PCM algorithm
+and the video application sends data at 15 fps (frames per
+second). As illustrated in the ﬁgure, buffer constraints in the
+applications have been hidden while information necessary for
+synchronizing with other components (i.e., timing and network
+condition) are being exposed on the interface.
+
+Before presenting the method for computing such an inter-
+face, we introduce concepts and technical results needed for
+the computation. In what follows, [LM,UM] denotes Inv(M).
+B. Properties of pending events during mode changes
+
+In an MMA, when the system moves from one mode to
+another,
+there may be pending events in the buffers. We
+characterize below two intertwined terms that capture these
+events: the former speciﬁes their execution demand over time,
+and the latter speciﬁes their backlog.
+
+Deﬁnition 5 (Carried-in demand bound function). The
+carried-in demand bound function of a buffer B at mode M,
+denoted by cidfM,B, speciﬁes for each Δ ≥ 0 the maximum
+number of execution units demanded by the pending events in
+B (when the system enters M) whose deadlines are within Δ
+time units from the instant the system enters M.
+
+Deﬁnition 6 (Carried-in backlog). The carried-in backlog of
+a buffer B at mode M, denoted by binM,B, gives the maximum
+backlog of B when the system enters M.
+
+Fig. 6 gives an example of the carried-in demand bound
+function and backlog. In the ﬁgure, an up (down) arrow
+denotes the point at which an event arrives (must be ﬁnished).
+
+ e1 e2
+
+e3
+
+Mode M
+
+binM,B
+
+cidfM,B
+
+Δ
+
+2
+
+5
+mode change
+
+time
+
+0 2
+
+5
+
+10 (=D)
+
+Fig. 6. Carried-in demand bound function and backlog.
+
+Observe that the latest instant at which these pending events
+must be completed is the smallest D such that cidfM,B(Δ) =
+
+cidfM,B(D) for all Δ ≥ D. We call D the “deadline” of cidfM,B.
+Since the maximum backlog of B when the system enters
+M is the total execution demands of the pending events, the
+following corollary holds.
+
+Corollary IV.1. The carried-in backlog of B at M is given by
+binM,B = cidfM,B(D), where D is the deadline of cidfM,B.
+
+Further, due to these pending (old) events, the execution
+demand required by the (old and new) events in the buffer
+during the initial period after the system enters the new mode
+is often larger than the usual execution demand required at a
+later time interval. We call this the initial demand, which is
+deﬁned for absolute time intervals that begin at the instant the
+system enters the new mode.
+
+Deﬁnition 7 (Initial demand bound function (IDBF)). The
+initial demand bound function of a buffer B at mode M,
+denoted by idbfM,B, speciﬁes for each Δ ≥ 0 the maximum
+number of execution units demanded by the events in B in the
+interval [0, Δ] relative to the instant the system enters M.
+
+One can easily verify that the overall demand bound func-
+tion of a buffer B at a mode M, which gives the maximum
+execution demand of the events in B in any interval of length
+Δ when the system is at M, is at most max{idbfM,B, dbfM,B}.
+Here, for all Δ ≥ 0, dbfM,B(Δ) = αT (Δ − DT ) if B is active at
+M, and dbfM,B(Δ) = 0 otherwise. This implies Lemma IV.2,
+the proof of which is available in [10]. For convenience, we
+denote TM,B as the active task associated with B in mode M,
+and TM,B = /0 if B is not active in M.
+
+(cid:6)
+
+(cid:5)
+def= max
+binM,B + α − size(B), idbf M,B, dbfM,B
+
+Lemma IV.2. The minimum service function required by the
+events in B to ensure (i) B does not overﬂow and (ii) all the
+events in B meet their deadlines while the system is at M is:
+, where
+βM,B
+α = αTM,B if B is active in M and α(Δ) = 0 ∀Δ ≥ 0 otherwise.
+Computing initial demand bound function. The IDBF of a
+buffer B at a mode M can be computed with respect to (w.r.t.)
+an execution path that leads to M. Suppose p is a path from
+the initial mode Min to M. If M ≡ Min or B is inactive in
+all preceding modes of M in p, then cidfM,B(Δ) = 0 for all
+[L1,U1]
+Δ ≥ 0 and idbfM,B = dbfM,B. Otherwise, let ρ = M1
+−−−−→
+[Lk
+−−−−→ Mk+1 ≡ M be the longest sub-path of
+M2
+p along which the task associated with B does not change its
+parameters, i.e., (i) k = 1 and TM1,B = /0, or (ii) TMi,B (cid:15)= /0 and
+is unchanged for all 1 ≤ i ≤ k; further, ρ = p or TM0,B (cid:15)= TM1,B,
+where M0 is the immediate ancestor of M1 in p.
+
+[L2,U2]
+−−−−→ · · · Mk
+
+,Uk
+
+]
+
+TB′
+
+. . .
+
+ M0
+
+TB
+
+Δ
+
+. . .
+
+ M1
+ x1
+
+ M2
+ x2
+
+[L1, U1]
+
+[L2, U2]
+
+ M
+
+ Mk
+ xk
+
+[Lk, Uk]
+
+time
+
+Fig. 7. The service function of a path that leads to M.
+
+As illustrated in Fig. 7, [Li,Ui] is the interval (relative to
+the instant the system enters Mi) during which the system can
+move from Mi to Mi+1, i.e., [Li,Ui] = Inv(Mi) ∩ [L(cid:3)
+] where
+i
+[L(cid:3)
+] is the interval associated with the transition from Mi to
+(cid:4)
+i
+k
+Mi+1 in the MMA. Let Lp =
+i=1 Ui. Then,
+
+(cid:4)
+k
+i=1 Li and Up =
+
+,U (cid:3)
+i
+
+,U (cid:3)
+i
+
+202
+
+Lp and Up are the minimum and maximum total amount of
+time the system can spend at M1, . . . , Mk before moving to M.
+The path ρ is called the “unchanged-arrival preceding path”
+of B at M w.r.t. p, denoted by pα
+Deﬁnition 8. The overall service function βp
+(Δ) given to B
+B
+w.r.t. a path p that ends with M speciﬁes the minimum number
+of execution units allocated to B in the interval of length Δ
+immediately before the system enters M.
+
+M,B.
+
+Lemma IV.3. Suppose βi is the service function allocated to
+B at mode Mi for all 1 ≤ i ≤ k. Then, for all Δ ∈ [0,Up],
+
+βp
+B
+
+(Δ) = min
+(cid:2)
+
+(cid:9) k(cid:10)
+
+i=1
+
+βi(xi) | Δ =
+
+xi ∧ (Li ≤ xi ≤ Ui
+
+∨
+
+x1 = · · · = xi−1 = 0 ∧ xi < Li)
+
+(cid:3)(cid:11)
+
+.
+
+k(cid:10)
+
+i=1
+
+Proof: Consider an interval of length Δ immediately
+before the system enters M (see Fig. 7). Let xi be the number
+of time units the system spends at Mi. The total number of
+k
+i=1 βi(xi). Now let M j be
+execution units given to B is then
+the mode at which the interval begins. Then, the system spends
+zero time units at all modes before M j, and from Li to Ui time
+units at each mode Mi after M j. Thus, x1 = . . . = x j−1 = 0 and
+Li ≤ xi ≤ Ui for all i > j. Hence the lemma.
+
+(cid:4)
+
+Lemma IV.4. Suppose t is the instant the system enters M by
+taking p. The maximum number of execution units demanded
+by the pending events in B when the system enters M1 that
+need to be fulﬁlled in interval [t − x,t + Δ], with x ≤ Up, is
+(cid:3)
+.
+
+[x, Δ] = cidfM1,B(Up + Δ) − cidfM1,B
+
+(cid:2)
+(Lp − x)+
+
+cidf p
+
+M,B
+
+Fig. 8 demonstrates the results stated by Lemma IV.4.
+
+Details of its proof can be found in [10].
+
+≤ cidfM
+
+,B (Up + Δ)  
+
+1
+
+. . .
+
+ M1
+
+. . .
+
+ t’
+
+≥ cidfM1,B (Lp - Δ)+  
+
+ x
+
+ M
+
+Δ
+
+ Mk
+
+ t
+Δ + x
+
+Fig. 8. Carried-in demand bound function w.r.t. a path.
+
+Lemma IV.5. Let ϕ be the buffer guard associated with the
+transition from Mk to M, and Bϕ be the largest ﬁll-level of B
+that satisﬁes ϕ. Let T ≡ TM1,B and λ = (DT − Δ)+. Then, for
+all Δ ≥ 0,
+¯o
+cidf p
+
+n
+
+˘
+
+αT (x−λ) + cidf p
+
+(Δ) = min
+
+p
+[x, Δ] − β
+B
+
+Bϕ,
+
+(x)
+
+sup
+
+M,B
+
+M,B
+
+0≤x≤Up
+
+The proof of the lemma is available in [10].
+Recall that dbfM,B(x) denotes the maximum execution de-
+mand of the events that arrive at B in any time interval of
+length x when the system is at Mi. It is given by dbfM,B(x) =
+αT (x − DT ) if the task T associated with B is active in M, and
+dbfM,B(x) = 0 otherwise. Lemma IV.6 states the relationship
+between the initial and carried-in demand bound functions.
+Lemma IV.6. If TM,B (cid:15)= TM1,B, then idbf p
+dbfM,B(Δ). Otherwise,
+idbf p
+
+(Δ) = cidf p
+
+(Δ)+
+
+cidf p
+
+M,B
+
+M,B
+
+(Δ) + dbfM,B(Δ),
+
+(Δ) = min
+
+(cid:9)
+
+M,B
+
+M,B
+
+(cid:5)
+dbfM1,B(x + Δ) + cidf p
+
+M,B
+
+[x, Δ] − βp(x)
+
+(cid:6)(cid:11)
+.
+
+sup
+
+0≤x≤Up
+
+The proof of Lemma IV.6 can be established using similar
+arguments to that of Lemma IV.5. Observe that our compu-
+tation above considers the complete unchanged-arrival path,
+starting from M1. The results can be tighten by taking the
+minimum of the computed values for all paths starting from
+Mi where 1 ≤ i ≤ k.
+C. Computing service function of a mode w.r.t. a path
+
+]
+
+,Uk
+
+[L1,U1]
+−−−−→ M2
+
+[L2,U2]
+−−−−→ · · · Mk
+
+Let M = (cid:9)τ, SC(cid:10) be a mode of the MMA, reachable through a
+[Lk
+−−−−→ Mk+1 ≡ M
+path p. Let ρ = M1
+be the unchanged-arrival preceding path of B at M w.r.t. p,
+i.e., ρ = pα
+M,B. Based on Lemma IV.5 and IV.6, we compute
+the carried-in demand bound function cidf p
+M,B and the initial
+demand bound function idbf p
+M,B of B at M w.r.t. p. Apply
+cidf p
+M,B to Corollary IV.1, we imply the carried-in backlog of
+B at M, i.e., binp
+= cidf p
+(D) where D is the deadline of
+M,B
+M,B and binp
+cidf p
+M,B. From idbf p
+M,B, we then derive minimum
+service function βp
+M,B that is required by B at M (without
+considering other tasks) using Lemma IV.2.
+
+M,B
+
+M,B
+
+Requirements of the active tasks at M. In order for the
+events in the buffers to meet their deadlines, we require that
+TM,B is active for all buffers B such that βp
+(Δ) > 0 for some
+Δ ≤ UM. Otherwise, in the worst case, the system may stay at
+M for up to UM units of time; in which case, some event in
+B will miss its deadline.
+Overall service function required by M. The minimum
+service function βp
+M that is required by a mode M assuming
+the system entering M through p can be computed from all
+βp
+in the same fashion as done in the unimodal case. First,
+M,Bi
+we assume w.o.l.g. that τ = {T1, . . . , Tn} where Ti has higher
+priority than Tj if i < j. Denote Bi as the buffer associated
+with Ti and αi as the arrival function of Ti at M.
+
+i=1 βp
+
+If SC is EDF. Then, the overall service function for M is the
+sum of all service function required by all the buffers Bi, i.e.,
+βp
+. Now suppose SC is FP. Then, the overall
+M
+service function for M is βp
+M,Bn
+M
+for all 1 ≤ i < n.
+and
+uni
+One can verify that βp
+for all 1 ≤ i ≤ n.
+Ti
+M
+The equality occurs if p comprises a single mode M (≡ Min).
+D. Computing interfaces of multi-mode applications
+
+(cid:5)
+Serv((cid:7)
+βp
+= max
+M,Bi+1
+uni
+M and βp
+≥ β
+
+def= (cid:7)
+βp
+M,B1
+, αi), βp
+M,Bi
+
+M,Bi
+≥ β
+
+(cid:7)
+βp
+M,Bn
+
+(cid:7)
+βp
+M,Bi
+
+, where
+
+= βp
+
+M,Bi
+
+def=
+
+(cid:4)
+
+(cid:6)
+
+n
+
+With the above results, we now proceed to compute the
+interface INF(C) of an elementary component C, where C is a
+multi-mode application modeled as an MMA. The computation
+for the interface of a composite component made of multiple
+sub-components will be outlined in the next section.
+Basic ideas: Consider C = (M, Min, Inv, Φ, Σ, R, T ). To com-
+pute the interface INF(C),
+the idea is to allocate as little
+resource as possible to each mode of C while maintaining
+schedulability of the active tasks as well as no buffer overﬂows
+condition when the system is at the mode. This resource needs
+to be sufﬁcient to take care of the initial carried-in execution
+demand of pending events when the system enters a mode,
+as considered in the preceding sections. To achieve this, we
+construct a reachable tree of C by exploring C, starting from
+the initial mode as the root of the tree. At each reachable
+mode M in the tree along a path p, we compute the service
+
+203
+
+function βp
+M,B required by each buffer B at M and the overall
+M required by M w.r.t. p. We then add M(cid:3)
+service function βp
+into the set of reachable modes to be explored if there is
+a transition tr = (M, a, ϕ, [L(cid:3),U (cid:3)], M(cid:3)) in C and the carried-in
+backlog binp
+
+M(cid:3),B satisﬁes ϕ for all buffer B in the system.
+
+During the above exploration, if we reach a mode M(cid:3)
+that has been visited earlier and the newly computed service
+function of M(cid:3)
+is less than or equal to its most recently
+computed value, we mark M(cid:3) as “leaf”. Otherwise, we update
+the service function of M to be the maximum between its
+recently computed value and the newly computed one, and
+explore M(cid:3) further. We repeat this process until there is no
+more reachable modes to be explored.
+
+We denote βM and βM,B as the most recently updated
+values of the service function required at M by all
+the
+buffers and for B, respectively. When the superscript p is
+involved, they refer to the new values computed w.r.t. a path p.
+
+The exploration procedure:
+
+a) Initialization: For each mode M and each buffer B
+in C, we initialize βM(Δ) = 0 and βM,B(Δ) = 0 for all Δ ≥ 0.
+We start with the initial mode Min. Since all the buffers are
+initially empty, for each input buffer B in C, binMin,B = 0 and
+cidfMin,B(Δ) = 0 for all Δ ≥ 0. We include (cid:9)Min, p(cid:10) as the ﬁrst
+element in the set of modes to be explored S, where p = Min.
+b) Computation for each node v = (cid:9)M, p(cid:10) in S: We
+ﬁrst remove v from S. Follow the technique outlined in
+Section IV-B and IV-C, we compute (i) the service function
+βp
+M,B required by each input buffer B at M and (ii) the overall
+service function βp
+M for M, both with respect to p. If βM ≥ βp
+M,
+then we mark v as a leaf node. Otherwise, we assign βM,B
+(resp. βM) to the maximum of its current value and βp
+M,B (resp.
+βp
+M), and proceed to explore the outgoing transitions from M
+as follows.
+
+M(cid:3),B of B at M(cid:3) w.r.t. p(cid:3) = p ∪ (M
+
+For each outgoing transition tr = (M, a, ϕ, [L(cid:3),U (cid:3)], M(cid:3)), we
+compute, for each input buffer B in C, the carried-in backlog
+[L,U]
+−−−→ M(cid:3)), where [L,U] =
+binp
+Inv(M) ∩ [L(cid:3),U (cid:3)]. We add (cid:9)M(cid:3), p(cid:3)(cid:10) into S if binp
+M(cid:3),B satisﬁes
+ϕ for all input buffer B in C. In this case, we also compute
+cidf p
+M(cid:3),B and
+idbfM(cid:3),B to be the maximum between their current values and
+the newly computed ones associated with p(cid:3). We additionally
+mark M(cid:3) as a reachable mode.
+
+M(cid:3),B, and then assign bin
+
+M(cid:3),B and idbf p
+
+M(cid:3),B, cidf
+
+(cid:3)
+
+(cid:3)
+
+(cid:3)
+
+(cid:3)
+
+c) Termination condition: The exploration process will
+stop when there is no more reachable modes to be explored,
+i.e., S = /0. Since the number of pending events in each
+buffer is upper bounded by the size of the buffer, the service
+function βM(cid:3) of M(cid:3)
+is always upper bounded. Further, as
+its newly computed value is always larger or equal to the
+previously computed one, βM(cid:3) will reach a ﬁxed point after
+a ﬁnite number of steps. In other words, the computation is
+always decidable.
+The interface of C: Recall C = (M, Min, Inv, Φ, Σ, R, T ). The
+interface of C is the ﬁnite automaton INF(C) = (S, Min, β, Σ, R(cid:3))
+where S is the reachable modes of C and β : S → F . Each state
+M in S is associated with the service function β(M) equal to
+the ﬁxed point value of βM computed above. Further, there
+
+is a transition (M, a, [L,U], M(cid:3)) in R(cid:3) iff there is a transition
+(M, a, [L(cid:3),U (cid:3)], M(cid:3)) in R such that [L,U] = Inv(M) ∩ [L(cid:3),U (cid:3)].
+
+As the exploration procedure computes the smallest ﬁxed-
+point values of service functions that ensure schedulability and
+buffer constraints, the correctness of the computed interface
+follows directly from the soundness of the results established
+in Section IV-B and IV-C.
+
+V. INTERFACE COMPOSITION
+
+Consider a component C consisting of n components
+C1, . . . , Cn that share the same resource using a scheduling
+policy SC. When SC is FP, we assume w.o.l.g. that Ci has
+higher priority than C j if i < j. Let INF(Ci) be the resource
+interface of Ci for all 1 ≤ i ≤ n. The resource interface of C is
+a composition of all INF(Ci) with respect to SC, given by
+INF(C) = INF(Cn) (cid:13)SC INF(Cn−1) (cid:13)SC · · · (cid:13)SC INF(C1)
+
+where (cid:13)SC is deﬁned as follows.
+
+Let
+
+A1 = (S1, sin1, β1, Σ1, R1)
+
+A2 =
+(S2, sin2, β2, Φ2, Σ2, R2) be two resource interfaces. The
+asynchronous composition of A1 and A2 under SC, denoted
+by A1 (cid:13)SCA2, is a state machine A = (S, sin, β, Σ, R) where:
+
+and
+
+• S ⊆ S1 × S2 is the set of states.
+• sin =
+• β : S → F is the service function associated with the
+
+is the initial state of A.
+
+(cid:2)
+sin1, sin2
+
+(cid:3)
+
+states, deﬁned by: For all s = (s1, s2) ∈ S,
+
+(cid:12)
+
+β(s) =
+
+(cid:2)
+(cid:3)
+β1(s1), β2(s2)
+,
+
+β1(s1) + β2(s2),
+Serv
+
+if SC is EDF
+if SC is FP
+• Σ = Σ1 ∪ Σ2 is the set of service change signals.
+• R ⊆ S × Σ × INT × S is the transition relation, deﬁned
+) ∈ R1 and each
+
+as follows. For each (s1, a1, [L,U], s(cid:3)
+1
+(s2, a2, [L(cid:3),U (cid:3)], s(cid:3)
+2
+(i) (cid:9)(s1, s(cid:3)
+1
+
+) ∈ R2:
+), a1, I, (s2, s(cid:3)
+)(cid:10)
+2
+s1 (cid:15)= s2
+
+a1 = a2,
+[min(L, L(cid:3)), min(U,U (cid:3))].
+
+is
+a
+and s(cid:3)
+1
+
+transition in R if
+(cid:15)= s(cid:3)
+I =
+
+2 where
+
+(ii) (cid:9)(s1, s(cid:3)
+1
+
+R if a1 (cid:15)= a2, s1 (cid:15)= s2 and s(cid:3)
+1
+
+), a1, [1, min(U,U (cid:3))], (s2, s(cid:3)
+)(cid:10) is a transition in
+2
+= s(cid:3)
+2.
+), a2, [1, min(U,U (cid:3))], (s2, s(cid:3)
+)(cid:10) is a transition in
+2
+(cid:15)= s(cid:3)
+2.
+
+R if a1 (cid:15)= a2, s1 = s2 and s(cid:3)
+1
+
+(iii) (cid:9)(s1, s(cid:3)
+1
+
+In the case of synchronous composition, only transitions in
+(i) are allowed and I = [L,U] ∩ [L(cid:3),U (cid:3)]. One can verify that
+β(s) gives the minimum service that guarantees β(s1) and
+β(s2). Similarly, the interval associated with a transition indeed
+captures the time interval during which the corresponding
+transition(s) in A1 and A2 can be enabled.
+
+As an example, consider the components C3 and C4 shown
+earlier in Fig. 4(b) and 4(c). The interface INF(C3) (INF(C4))
+has the same structure as that of C3 (C4), except that each of
+its states is associated with a service function and all buffer
+guards in the component are abstracted away. Interface of the
+composite component C3 (cid:13)FP C4 is depicted in Fig. 5, which is
+obtained by composing INF(C3) and INF(C4) using our com-
+position technique. Observe that by exposing communication
+between components on the interfaces, we are able to eliminate
+illegal composite states during the interface composition. For
+instance, the combination of ADM and 15fps is invalid in
+the composite component, which has been ruled out by the
+interface composition.
+
+204
+
+VI. CASE STUDY
+
+In this section, we present a case study of a smart networked
+embedded system that supports multiple concurrent adaptive
+streaming audio/video applications. We shall show through
+our case study how our compositional analysis framework can
+be used to model, analyze and optimize such adaptive systems.
+
+Camera
+
+  Audio 
+
+Video
+
+Encoder
+
+Audio
+Encoder
+
+Sender
+
+Feedback 
+ via RTCP
+
+Network
+
+Video/Audio
+
+Decoder
+
+Receiver
+
+Fig. 9. An adaptive embedded networked system.
+
+Fig. 9 depicts the overall architecture, consisting of two
+network-aware end systems sending/receiving data via a net-
+work. The sender (e.g., a video phone) captures the live
+video/audio, encodes it, and sends it over the network. The
+receiver, while receiving the data, provides feedback (regard-
+ing delay, packet loss, etc.) to the sender using a real-time
+transport control protocol (RTCP). Based on this feedback,
+the audio/video application managers adapt the audio and
+video sending rates accordingly. Here, we assume the audio
+application manager adapts its application to switch between
+three compression algorithms that have different bandwidths
+– PCM (Pulse Code Modulation) at 64 kb/s, ADM (Adaptive
+Delta Modulation) at 48 kb/s, and LPC (Linear Predictive Cod-
+ing) at 4.8 kp/s – during run time depending on the network
+condition. Similarly, the video application manager adapts the
+video application to send at a lower frame rate in case the
+network is congested, and at a higher frame rate when the
+network is unloaded. The sender additionally runs other real-
+time critical system- and network-related tasks, as highlighted
+in Fig. 10. We shall focus on evaluating the sending system.
+Speciﬁcally, we shall estimate the minimum resource that must
+be guaranteed for the system to be schedulable. This is done
+by computing a resource interface for the system, using our
+multi-mode analysis and the unimodal techniques.
+
+ C
+
+Resource
+
+FP
+
+ C1
+
+System
+tasks
+
+ C2
+
+FP
+
+ C3
+
+Audio
+App.
+
+ C4
+Video
+App.
+
+Fig. 10. Hierarchical scheduling of the sender.
+
+As shown in Fig. 10,
+
+the sender employs a two-level
+hierarchical scheduling. It is partitioned into two components,
+C1 (system-related) and C2 (multimedia), which are scheduled
+using FP with C1 having higher priority than C2. Component
+C2 further comprises C3 (audio) and C4 (video) components,
+which are scheduled using FP with C3 having higher priority
+than C4. The execution semantics of C1, C3 and C4 are modeled
+by the MMA depicted in Fig. 4 (cf. Section IV-A).
+
+Component C1 contains three tasks that are scheduled under
+EDF: Tk (kernel task), always executed; Tns (network search
+task), initiated when a connection is lost; and Tnp (network
+protocol task), executed to maintain a connected network.
+
+205
+
+Next, C3 (Fig. 4(b)) runs an audio encoding task (Ta) and an
+audio manager task Tam, where Tam always has higher priority
+than Ta. As mentioned above, Ta switches between three
+compression schemes, captured by three states of C3. Since
+the encoding time of an PLC task is an order of magnitude
+longer than that of PCM and ADM tasks, the audio application
+only selects PLC algorithm if the current backlog of the audio
+input buffer (buf a) is no more than one third the buffer size
+(denoted by B in the ﬁgure). Further, as soon as the buffer
+is more than half ﬁlled and the application has been in PLC
+mode for more than D seconds, it switches back to PCM (i.e.,
+the fastest encoding scheme).
+
+We assume that
+
+Similarly, C4 shown in Fig. 4(c) consists of a video encoding
+task Tv and a video manager task Tvm, with Tvm having higher
+priority than Tv. Task Tv is assumed to change between two
+different sending rates, whereas Tvm remains unchanged.
+the camera captures the video at
+
+the
+sampling rate equal to the playout rate, i.e., 15 fps and 7.5
+fps. The deadline of Tv is set equal to its respective period,
+i.e., 66 ms (for 15 fps) and 133 ms (for 7.5 fps). Based on the
+sampling rate and the execution time of Tv for each of I, P, B
+frames [5], we compute the input arrival function (in terms of
+cycles) for Tv at each of the modes in C4. The audio task Ta
+is set to have a constant period and deadline of 20 ms. The
+ratio for its execution time at each of the modes PCM, ADM,
+and LPC are set to 1:13:110 [2]. All the remaining tasks are
+assumed to be periodic, with deadlines equal to periods.
+
+Using unimodal techniques. Due to the adaptive character-
+istics of the system, unimodal modeling techniques are no
+longer capable of describing the system behavior precisely. We
+therefore resorted to approximating its worst-case workloads.
+We evaluated two approaches:
+
+(U1) No consideration of the initial backlogs of the buffers
+
+when a mode change occurs.
+
+(U2) Assuming the initial backlog is at most equal to the size
+
+of the buffers (as buffers must not overﬂow).
+
+The hierarchical scheduling tree remains the same as in the
+multi-mode case; nevertheless, each of C1, C3 and C4 is a set
+of tasks instead of an MMA. The timing parameters for Ta
+(Tv) are chosen to be the worst values in all its modes. For
+C1, since either Tk and Tn, or Tk and Tns can run at any instant
+in time, we substitute Tn and Tns with a single task whose
+workload equal to the maximum between that of Tn and Tns.
+The rest of the tasks take their original (unchanged) values.
+It is worth noting that other approximating approaches might
+exist; however, we think that a more sophisticated and proven
+technique would require much effort which countervails the
+modeling convenience of unimodal models.
+Analysis Results. The interface INF(C2) of the multimedia
+component C2 is shown earlier in Fig. 5 (cf. Section IV-A).
+Each state of INF(C2) corresponds to a valid combination of
+the audio and video components, and it is associated with
+a service function presenting the service requirements of C2
+in a particular mode. Observe that the effects of internal
+triggered mode change events (i.e., buffer guards) in the
+original automata (cf. Fig. 4(b)) have been encapsulated in
+the computed service functions of the interface. On the other
+
+hand, timing guards are exposed at the interface, which can
+be used when synchronizing with other interfaces at a higher
+level. The multi-mode interface INF(C) for the entire system
+can be achieved by further composing INF(C2) with INF(C1).
+It has 8 states, corresponding to eight service levels required
+by the system depending on the trafﬁc condition. We shall
+focus on the three highest service functions.
+
+Unimodal  (U1)
+
+invalid
+
+Multi-mode
+
+PCM-15fps
+PLC-7.5fps
+ADM-7.5fps
+
+Δ (ms)  
+
+10
+
+20
+
+30
+
+40
+
+50
+
+60
+
+Fig. 11. Unimodal (U1) vs. multi-mode service requirements.
+
+Fig. 11 shows the service function β
+
+uni
+U1 computed using the
+unimodal approach (U1) in contrast to the three highest service
+uni
+functions of INF(C). Note that β
+U1 exhibits an unpredictable
+behavior where it crosses the service functions of INF(C) at
+multiple points. Clearly, by ignoring mode change effects in
+the modeling, the unimodal technique fails to safely bound the
+service requirement at any mode of the system.
+
+Unimodal (U2)
+
+PCM-15fps
+
+PLC-7.5fps
+
+ADM-7.5fps
+
+2.0
+
+0
+1
+
+ 
+)
+s
+e
+l
+c
+y
+c
+3
+
+ 
+
+(
+ 
+t
+n
+e
+m
+e
+r
+i
+u
+q
+e
+r
+ 
+e
+c
+i
+v
+r
+e
+s
+m
+u
+m
+n
+M
+
+i
+
+i
+
+ 
+
+2.5
+
+1.5
+
+1.0
+
+0.5
+
+0
+
+0
+
+ 
+t
+n
+e
+m
+e
+r
+i
+u
+q
+e
+r
+ 
+e
+c
+i
+v
+r
+e
+s
+m
+u
+m
+n
+M
+
+i
+
+i
+
+ 
+
+ 
+)
+s
+e
+l
+c
+y
+c
+3
+0
+1
+(
+
+ 
+
+10
+9
+
+8
+
+7
+
+6
+
+5
+
+4
+
+3
+
+2
+
+1
+
+0
+
+0
+
+100
+
+200
+
+300
+
+400
+
+500
+
+Δ (ms)  
+
+Fig. 12. Unimodal (U2) vs. multi-mode service requirements.
+
+Now by taking into consideration the initial backlog due to
+a mode change, the second approach (U2) improves upon (U1)
+in terms of accuracy. As illustrated in Fig. 12, the computed
+the other
+service function β
+service functions of the multi-mode interface. However, it is
+uni
+U2 is very pessimistic. Its average long-term
+observed that β
+rate is 17%, 80%, and 134% higher than that of the three
+highest service levels of INF(C).
+
+uni
+U2 using (U2) falls above all
+
+The computed multi-mode interface also provides valuable
+insights to the system behavior, which can be used for opti-
+mizing the system. For instance, the service requirement when
+the system uses PCM-15 fps scheme is much higher (twice)
+than when it uses PLC-7.5 fps, even though PLC processing
+load is more than 100 times that of PCM (Fig. 12). This shows
+that when processing load is concerned, it is more effective
+to optimize video application instead of audio. Further, for a
+ﬁxed video frame rate 7.5 fps, while switching from PCM
+to ADM increases only 3% processing load, switching from
+ADM to LPC increases 30% processing load. Thus, it is better
+to adapt from PCM to ADM than from ADM to LPC.
+
+Finally,
+
+the multi-mode interface can easily be adapted
+to use in online algorithms such as dynamic frequency and
+voltage scaling. One may, for instance, derive a frequency
+corresponding to the long-term rate of each service function,
+and adapt between different frequencies based on the same
+condition as the guard between different states.
+
+VII. CONCLUDING REMARKS
+
+We have proposed a multi-mode automata model and an
+interface-theoretic technique to enable compositional analysis
+and correct-by-construction design of multi-mode systems.
+Our results extend existing work in two dimensions: from
+performance analysis to compositional analysis of multi-mode
+systems, and from compositional analysis of unimodal to
+multi-mode models. The applicability and beneﬁts of our pro-
+posed technique have been demonstrated in a smart networked
+streaming system.
+
+It would be interesting to investigate abstraction techniques
+for reﬁning the multi-mode interface computed from an MMA
+or a composition of interfaces. One potential direction would
+be to abstract states that share similar service functions, and
+transitions that are triggered by a common set of events to
+limit the size of an interface without sacriﬁcing accuracy.
+
+REFERENCES
+
+[1] K. Albers, F. Bodmann, and F. Slomka. Advanced hierarchical event-
+
+stream model. In ECRTS, 2008.
+
+[2] J.-C. Bolot and A. Vega-Garcia. Control mechanisms for packet audio
+
+in the internet. In INFOCOM, 1996.
+
+[3] G. C. Buttazzo, G. Lipari, and L. Abeni. Elastic task model for adaptive
+
+rate control. In RTSS, 1999.
+
+[4] S. Chakraborty, Y. Liu, N. Stoimenov, L. Thiele, and E. Wandeler.
+
+Interface-based rate analysis of embedded systems. In RTSS, 2006.
+
+[5] S. Chakraborty, T. Mitra, A. Roychoudhury, and L. Thiele. Cache-aware
+timing analysis of streaming applications. Real-Time Systems, 41(1):52–
+85, 2009.
+
+[6] A. Easwaran, M. Anand, and I. Lee. Compositional analysis framework
+
+using edp resource models. In RTSS, 2007.
+
+[7] A. Easwaran, I. Shin, O. Sokolsky, and I. Lee. Incremental schedulability
+
+analysis of hierarchical real-time components. In EMSOFT, 2006.
+
+[8] G. Fohler. Changing operational modes in the context of pre run-
+time scheduling. IEICE Transactions on Information and Systems, E76-
+D(11):1333–1340, 1993.
+
+[9] K. Huang, L. Santinelli, J.-J. Chen, L. Thiele, and G. C. Buttazzo.
+Adaptive power management for real-time event streams. In ASP-DAC,
+2010.
+
+[10] L. T.X. Phan, I. Lee, and O. Sokolsky. Compositional analysis of multi-
+mode systems. http://www.cis.upenn.edu/∼linhphan/papers/ecrtsTR.pdf.
+[11] L.T.X. Phan, S. Chakraborty, and I. Lee. Timing analysis of mixed
+
+time/event-triggered multi-mode systems. In RTSS, 2009.
+
+[12] L.T.X. Phan, S. Chakraborty, and P.S. Thiagarajan. A multi-mode real-
+
+time calculus. In RTSS, 2008.
+
+[13] J. Real and A. Crespo. Mode change protocols for real-time systems:
+
+A survey and a new proposal. Real-Time Systems, 26:161–197, 2004.
+
+[14] L. Sha, R. Rajkumar, J. Lehoczsky, and K. Ramamritham. Mode change
+protocols for priority-driven preemptive scheduling. Real-Time Systems,
+1(3):244–264, 1989.
+
+[15] I. Shin, A. Easwaran, and I. Lee. Hierarchical scheduling framework
+
+for virtual clustering of multiprocessors. In ECRTS, 2008.
+
+[16] I. Shin and I. Lee. Compositional real-time scheduling framework. In
+
+RTSS, 2004.
+
+[17] I. Shin and I. Lee. Compositional real-time scheduling framework with
+periodic model. ACM Transactions on Embedded Computing Systems,
+7(3):1–39, 2008.
+
+[18] N. Stoimenov, S. Perathoner, and L. Thiele. Reliable mode changes in
+real-time systems with ﬁxed priority or edf scheduling. In DATE, 2009.
+[19] E. Wandeler and L. Thiele. Real-time interfaces for interface-based
+design of real-time systems with xed priority scheduling. In EMSOFT,
+2005.
+
+206
+
+

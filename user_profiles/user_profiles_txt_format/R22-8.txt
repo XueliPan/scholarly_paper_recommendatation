@@ -1,0 +1,2057 @@
+Code Transformation and Instruction
+Set Extension
+
+ALASTAIR C. MURRAY, RICHARD V. BENNETT, BJ ¨ORN FRANKE
+and NIGEL TOPHAM
+University of Edinburgh
+
+The demand for ﬂexible embedded solutions and short time-to-market has led to the development of
+extensible processors that allow for customization through user-deﬁned instruction set extensions
+(ISEs). These are usually identiﬁed from plain C sources. In this article, we propose a combined
+exploration of code transformations and ISE identiﬁcation. The resulting performance of such a
+combination has been measured on two benchmark suites. Our results demonstrate that combined
+code transformations and ISEs can yield average performance improvements of 49%. This outper-
+forms ISEs when applied in isolation, and in extreme cases yields a speed-up of 2.85.
+
+Categories and Subject Descriptors: B.8 [Performance and Reliability]: Performance Analy-
+sis and Design Aids; C.3 [Special-Purpose and Application-Based Systems]: Real-time and
+embedded systems; D.3.4 [Processors]: Optimization
+
+General Terms: Design, Performance
+
+Additional Key Words and Phrases: Customizable processors, ASIPs, source-level transformations,
+compilers, instruction set extension, design space exploration
+
+ACM Reference Format:
+
+Murray, A. C., Bennett, R. V., Franke, B., and Topham, N. 2009. Code transformation and instruction
+set extension. ACM Trans. Embedd. Comput. Syst. 8, 4, Article 26 (July 2009), 31 pages.
+DOI = 10.1145/1550987.1550989 http://doi.acm.org/10.1145/1550987.1550989
+
+1. INTRODUCTION
+
+High performance and short time-to-market are two of the major factors in
+embedded systems design. The goal is to deliver the best performance for a
+given cost and with the shortest possible design time. In recent years, pro-
+cessor IP vendors have addressed these goals by developing conﬁgurable and
+extensible processors such as the ARC 600 and 700, Tensilica Xtensa, ARM Op-
+timoDE, and the MIPS Pro series. These cores provide system designers with
+
+26
+
+Authors’ Address: Institute for Computing Systems Architecture (ICSA), School of Informatics,
+University of Edinburgh, Informatics Forum, 10 Crichton Street, Edinburgh EH8 9AB, Scotland,
+United Kingdom.
+Permission to make digital or hard copies of part or all of this work for personal or classroom use
+is granted without fee provided that copies are not made or distributed for proﬁt or commercial
+advantage and that copies show this notice on the ﬁrst page or initial screen of a display along
+with the full citation. Copyrights for components of this work owned by others than ACM must be
+honored. Abstracting with credit is permitted. To copy otherwise, to republish, to post on servers,
+to redistribute to lists, or to use any component of this work in other works requires prior speciﬁc
+permission and/or a fee. Permissions may be requested from Publications Dept., ACM, Inc., 2 Penn
+Plaza, Suite 701, New York, NY 10121-0701 USA, fax +1 (212) 869-0481, or permissions@acm.org.
+C(cid:2) 2009 ACM 1539-9087/2009/07-ART26 $10.00
+DOI 10.1145/1550987.1550989 http://doi.acm.org/10.1145/1550987.1550989
+
+ACM Transactions on Embedded Computing Systems, Vol. 8, No. 4, Article 26, Publication date: July 2009.
+
+26:2
+
+•
+
+A. C. Murray et al.
+
+preveriﬁed solutions, thus reducing the risk involved in and the cost of a
+new processor design. Large degrees of ﬂexibility are also offered through
+application-speciﬁc instruction set extensions (ISE), which may help improve
+performance of compute-intensive kernels. As a result of this specialization,
+an optimized application-speciﬁc processor is derived from a generic processor
+template.
+
+In order to explore different ISEs during the design stage and to trade off var-
+ious, partially contradictory design goals (e.g., performance, power, chip area)
+tool support is indispensable. Existing commercial (e.g., ARC International
+[2007b]) and academic (e.g., Leupers et al. [2006]) tools analyze an applica-
+tion written in C, identify candidate instruction templates, modify the appli-
+cation’s source code and insert handles to the newly created instructions. In
+general, the overall effectiveness of this approach depends on the designer’s
+ability to generate complex instruction templates that (a) can replace a suf-
+ﬁciently large number of simple machine instructions, (b) are frequently exe-
+cuted and (c) can be efﬁciently implemented. This article addresses problems
+(a) and (b), and we show that the selection of “good” instruction templates is
+strongly dependent on the shape of the C code presented to the ISE generation
+tool. We propose a novel methodology that combines the exploration of high-
+and mid-level program transformations and low-level instruction templates.
+Using a source-level transformation tool we generate many different—but se-
+mantically equivalent—versions of the input program. We present all of these
+generated programs to an integer linear programming (ILP), based ISE tool. For
+each program a set of new instructions is generated along with proﬁling based
+estimates of the execution time and code size resulting from the exploitation of
+the new instructions. Using such an approach we achieve remarkable perfor-
+mance improvements – on average a 1.49 speed-up across 33 computationally
+intensive embedded applications. We demonstrate that our approach enables
+the generation of more powerful ISEs than traditional, low-level techniques are
+capable of producing, with no additional ISE tool effort.
+
+1.1 Motivating Example
+
+As an example, consider the code excerpt in Figure 1(a). The function fft is
+the core kernel of the UTDSP fft benchmark and implements a fast fourier
+transform. The key features of this code are that it has loops nested three
+levels deep and a signiﬁcant amount of the code is spent on performing complex
+address calculations. Presented with this base-line code, current ISE technology
+(see Section 4) generates new instruction templates, which results in a 7.1%
+performance improvement.
+
+In Figure 1(b), the main differences due to source-level transformations of
+the code in Figure 1(a) are shown. While the code is functionally equivalent, it
+outperforms the code in Figure 1(a) by a factor of 1.31. The transformed code has
+had loop-invariant hoisting applied followed by common subexpression elimi-
+nation. Most of the code in an FFT is related to address calculation, and the
+expressions that get hoisted and eliminated are all array index calculations.
+Having moved these array index calculations to a common place the ISE algo-
+rithm was then able to generate complex address calculation instructions, such
+
+ACM Transactions on Embedded Computing Systems, Vol. 8, No. 4, Article 26, Publication date: July 2009.
+
+Code Transformation and Instruction Set Extension
+
+•
+
+26:3
+
+Fig. 1. Original UTDSP fft implementation (a) and after application of source-level transforma-
+tions resulting in best combined performance (b).
+
+ACM Transactions on Embedded Computing Systems, Vol. 8, No. 4, Article 26, Publication date: July 2009.
+
+26:4
+
+•
+
+A. C. Murray et al.
+
+Fig. 2. Complex instruction templates generated for the transformed FFT code in Figure 1(b).
+
+as those shown in Figure 2. Commercial digital signal processors hand designed
+by engineers often contain specialized addressing modes for FFT calculations,
+so it is interesting to note that automated ISE (AISE) constructs specialized
+FFT address calculation instructions.
+
+ISE generation based on the transformed code in Figure 1(b) results in a
+further 31% improvement (over just transformed code), or a total combined
+speed-up of 1.51 over the base-line. Only a certain part of the performance
+gain can be directly attributed to code transformations, the rest is due to the
+enabling effect of the source-level transformations on the ISE generation. So it
+can be seen that by transforming the code, it is not only possible to get improved
+performance on a base-line processor, but the gains that ISE provides can be
+increased as well—from 7.1% to 31% in this case.
+
+This short example demonstrates the interaction between the two techniques
+that makes it difﬁcult to predict the best source-level transformation sequence
+for a given application when ISE will be performed. Combined exploration of
+both the software and hardware design spaces generates a signiﬁcantly better
+solution than isolated optimization approaches could produce. In this article,
+we present an empirical evaluation of this HW/SW design space interaction and
+show that signiﬁcant performance improvements can be achieved by exploring
+the combined optimization space.
+
+The rest of the article is organized as follows. In Section 2, we discuss the
+large body of related work. Section 3 presents the background to our research,
+and we discuss the problem of combined HW/SW design space exploration. In
+Section 4, we describe our methodology and the experimental setup. Section 5
+discusses our results, and Section 6 concludes this article.
+
+2. RELATED WORK
+
+This article seeks to broaden the understanding of the potential for known
+transformation techniques to improve the quality of automated instruction set
+
+ACM Transactions on Embedded Computing Systems, Vol. 8, No. 4, Article 26, Publication date: July 2009.
+
+Code Transformation and Instruction Set Extension
+
+•
+
+26:5
+
+Fig. 3. The compiler-in-loop methodology for ASIP design space exploration.
+
+selection. The current state of the art in ISE is described in Section 2.1, fol-
+lowed by a description of the Source-to-Source Transformations in the context
+of embedded systems in Section 2.2. The large ﬁeld of HW/SW Codesign is
+summarized in 2.3.
+
+2.1 Automated ISE
+
+The automation of ISE exploration has been actively studied in recent years,
+leading to a number of algorithms [Peymandoust et al. 2003; Biswas et al. 2006;
+Atasu et al. 2005; Pozzi et al. 2006] that derive the partitioning of hardware
+and software under micro-architectural constraints. Work is still underway in
+deﬁning the full space of exploration even in purely arithmetic instruction set
+design [Verma and Ienne 2006]. Work to include better models in tools has
+allowed for better decisions about the performance and feasibility of exten-
+sions [Pozzi and Ienne 2005].
+
+The current exploration approach of using a range of tools operating on a
+canonical system-level ADL is described as compiler-in-loop design-space ex-
+ploration [Hohenauer et al. 2004]. It was originally motivated [Gl¨okler et al.
+2003] through the discovery that iterative and methodical exploration of ASIP
+design is very beneﬁcial in decreasing time-to-market. The CoSy [ACE Associ-
+ated Compiler Experts b.v. 2008] and Processor Designer [CoWare 2007] tools
+feature in many such frameworks; Figure 3 illustrates such a combination. The
+compiler, binary utilities such as assembler and linker, proﬁler, and simulator
+are generated from a single “Golden Model” written in LISA 2.0. This tool-chain
+may then be used to evaluate the performance of the architecture described by
+the model. The application for which the model is intended is compiled, assem-
+bled, linked, simulated and proﬁled for run-time and other statistics. The AISE
+tool is run over the application to determine a set of effective instructions to
+add to the model. The designer selects a subset of these instructions to add,
+and is able to use the generation facilities of the compiler-in-loop framework to
+
+ACM Transactions on Embedded Computing Systems, Vol. 8, No. 4, Article 26, Publication date: July 2009.
+
+26:6
+
+•
+
+A. C. Murray et al.
+
+generate a new tool-chain for further performance analysis of the program. The
+designer is then free to modify the constraints imposed on the AISE tool (such
+as register ﬁle input/output) and repeat the loop to further explore the design
+space of the application speciﬁc processor described by the Golden Model. In
+this way, the designer is freed from many drawbacks inherent in design space
+exploration without such a framework, as they may directly test the impact
+of a design decision without the need to manually reimplement a simulation
+and compilation tool-chain. This top-down automated approach to design ex-
+ploration and evaluation has been proven successful in case studies such as
+those cited in Hohenauer et al. [2004].
+
+Earlier efforts [Verma and Ienne 2004] to combine code transformation and
+ISE have been targeted at control-data ﬂow graph transformation toward a
+more efﬁcient arithmetic structure. This operates post AISE, so does not directly
+contribute to the design space search but improves upon the result.
+
+In Bonzini and Pozzi [2006], it is shown that an exploration of if-conversion
+and loop-unrolling source-to-source transformations is successful in enabling
+better performing AISE. We are motivated by this approach to perform the
+comprehensive and systematic study of this article, as it demonstrates the ef-
+fectiveness of ISE-targeted heuristics in transformation.
+
+2.2 Source-to-Source Transformations for Embedded Systems
+
+Due to their inherent portability and large scope, source-level transformations
+have been used for various ﬁelds within embedded systems such as code op-
+timizations targeting I/O performance [Wang and Kaeli 2003] or energy efﬁ-
+ciency [Chung et al. 2000; Kulkarni et al. 1998], formal veriﬁcation [Winters
+and Hu 2000], and, most notably, for single- and multicore performance opti-
+mization of computationally intensive embedded applications (e.g., Falk and
+Marwedel [2004]; Franke and O’Boyle [2003a]; Luz and Kandemir [2004]; and
+Franke and O’Boyle [2003b], respectively).
+
+ROSE [Schordan and Quinlan 2003] and Transformers [Borghi et al. 2006]
+are tools for building source-to-source transformation tools for the optimization
+of C and C++ object-oriented applications and have been used for serial loop
+optimizations and parallel message passing optimizations [Brown et al. 1999].
+An empirical study of source-level transformations for digital signal-
+processing applications is the subject of Franke and O’Boyle [2003a], and more
+comprehensive studies in the context of machine-learning-based adaptive com-
+pilation can be found in Franke et al. [2005] and Agakov et al. [2006].
+
+2.3 HW/SW Codesign
+
+HW/SW codesign was an active research area in the 1990s and has inspired
+subsequent work on electronic system level design e.g., Keutzer et al. [2000],
+Balarin et al. [2003]. A comprehensive summary of research directions, ap-
+proaches and tools can be found in Rozenblit and Buchenrieder [1995]. This
+work covers a broad scope of issues, typically ranging from the analysis of con-
+straints and requirements down to system evaluation and design veriﬁcation.
+In contrast, our work focuses on a more speciﬁc, individual problem, namely
+
+ACM Transactions on Embedded Computing Systems, Vol. 8, No. 4, Article 26, Publication date: July 2009.
+
+Code Transformation and Instruction Set Extension
+
+•
+
+26:7
+
+that of HW/SW partitioning in the context of extensible application-speciﬁc
+processors.
+
+3. BACKGROUND
+
+3.1 Extensible Processors
+
+Extensible processors are based on the premise that processor speed, die area,
+and power consumption, can be improved if the architecture of the processor is
+extended to include some features that are application-speciﬁc. This approach
+requires an ability to extend the architecture and its implementation, as well as
+the compiler and associated binary utilities, to support the application-speciﬁc
+extensions. Processors may be extended statically or dynamically. A proces-
+sor can be extended statically by augmenting the Verilog description of the
+processor prior to synthesis. Once the extensions have been incorporated and
+the design has been fabricated, the extensions cannot be modiﬁed or further ex-
+tended. A dynamically extensible processor must be implemented, either wholly
+or partly, in some form of ﬁeld programmable logic fabric, as used in the Stretch
+S6000 [Stretch Inc 2007].
+
+The simplest forms of extension, which are perhaps more properly consid-
+ered to be forms of conﬁguration, are the microarchitectural modiﬁcations that
+can be made to caches and their associated bus structures. Most embedded
+microprocessor cores provide the capability to adjust level-1 cache size, asso-
+ciativity and sometimes also block size and memory bus width. These all have a
+signiﬁcant impact on performance, die area, and power consumption. They are
+also relatively easy to exploit, as they require no changes to the instruction-set
+architecture.
+
+True architecture extensions begin with the capability to add custom in-
+structions to a base-line instruction set. In their simplest form, these may be
+predeﬁned packs of add-on instructions, such as the ARM DSP-enhanced ex-
+tensions included in the ARM9E [Francis 2001], the various ﬂavors of MIPS
+application speciﬁc extensions [MIPS Technologies 2007], or ARC’s ﬂoating-
+point extensions to the ARCompact instruction set [ARC International 2007a].
+This paper is concerned with the concept of application-speciﬁc ISEs which
+are not predeﬁned by the processor vendor but are instead identiﬁed by the
+system integrator through analysis of the application. To allow such instruc-
+tions to be incorporated into a pre-existing processor pipeline, there must be a
+well-deﬁned extension interface, allowing operands and operator information
+to be exported to the extension logic and result information to be returned to the
+processor (Figure 4). Such extension instructions may share the same operand
+constraints as regular instructions, thus being limited to two source operands
+and one or two destination operands. However, greater scope exists for identi-
+fying useful extensions if the register operand constraints are relaxed to allow
+more than two input and output operands. In addition, allowing extension in-
+structions to also extend the processor state, by deﬁning extra registers, again
+increases the opportunities to map fragments of an application directly to hard-
+ware. Practical extensible processors for the embedded computing market, such
+
+ACM Transactions on Embedded Computing Systems, Vol. 8, No. 4, Article 26, Publication date: July 2009.
+
+26:8
+
+•
+
+A. C. Murray et al.
+
+Fig. 4. A simpliﬁed system-level view of ARC700 family architecture, demonstrating the preveri-
+ﬁed base-line core and its connection to an ISE through custom registers and arithmetic units.
+
+as those from ARC and Tensilica, normally have single-issue in-order pipelines
+of ﬁve to seven stages. This permits operating frequencies in the range 400MHz
+to 700MHz at the 90nm technology node. Extension instructions may be con-
+strained to ﬁt within a single clock cycle, or may be pipelined to operate at
+the CPU clock frequency. However, current dynamically extensible cores using
+FPGA fabrics to implement the extension instructions cannot operate at these
+speeds. For example, extension instructions in the Stretch S5000 operate at one
+third of the clock rate of the processor.
+
+The representation of ISEs varies from one vendor to another, but essentially
+describes the encoding and semantics of each extension instruction in ways that
+can be understood by both a processor generator tool and all of the software tools
+(e.g., compilers, assemblers, and simulators). There follows a process of trans-
+lating the abstract representation of each extension instruction, or perhaps of
+all extension instructions simultaneously, to structural form using a hardware
+description language (HDL) such as Verilog or VHDL. This is then incorporated
+into the overall HDL deﬁnition of the processor, which is then synthesized to
+the target silicon technology or perhaps to an FPGA.
+
+3.2 Design-Space Exploration
+
+Design-space exploration (DSE) is an optimization process in the design ﬂow of
+a system-on-chip (SoC), typically operating under multiple constraints (per-
+formance, power and energy, cost and complexity, etc.), and targeting an
+often multidimensional and highly nonlinear optimization space. Multiple
+dependent levels (algorithm, SW, and HW design space exploration) of in-
+teraction make it difﬁcult to employ isolated local search approaches, but
+require a combined effort crossing the traditional boundaries between de-
+sign domains, providing feedback paths and integrating tools into larger
+frameworks.
+
+ACM Transactions on Embedded Computing Systems, Vol. 8, No. 4, Article 26, Publication date: July 2009.
+
+Code Transformation and Instruction Set Extension
+
+•
+
+26:9
+
+Conﬁgurable and extensible processor cores such as the ARC 600 and 700
+have a number of capabilities to allow their instruction set and microarchi-
+tecture to be optimized for a particular application. Design concerns guiding
+design-space exploration are often reduced to metrics such as execution speed,
+power usage, and die area; each of these metrics has an accompanying relevant
+design space in the conﬁguration and extension domain.
+
+Meeting the main execution speed requirement means that no further in-
+crease in speed is generally useful, other than to provide an overhead for devel-
+opment. Application deadlines will be met and the system built around the core
+will be able to communicate and process data without stalling due to system-
+level deadlines missed by the core.
+
+Once execution speed requirements have been met, the focus of designers
+may be switched to secondary axes of design concern, such as power usage.
+Efforts in addressing one axis of design concern may make use of excesses in
+other axes. For example, if performance exceeds requirements the clock speed of
+the ASIP may be reduced, reducing the power consumption. These secondary
+concerns have additional design spaces of the conﬁgurable core available to
+be explored for satisfactory areas; for example, clock gating, dynamic voltage
+scaling, and unit pruning. These are, however, outside the scope of instruction
+set extension and are not covered here.
+
+Unfortunately the “second order” effects of core extension are not always
+beneﬁcial and often hard to predict with any accuracy. Adding more logic to
+a core can, for example, increase the critical path and force a reduction in
+the overall clock speed. Such a complicated web of nonorthogonal trade-offs
+forms a space, which can only be explored efﬁciently through the aid of iterative
+automated means.
+
+ISEs affect all three of the aforementioned axes of design concern. The guid-
+ing metric in deriving extensions is often still application execution speed; de-
+signers will add instructions that “cover” the hottest (most frequently executed)
+sections of their application code. The intention is that by partitioning the appli-
+cation code into areas covered by ISE, subsections of microarchitecture can be
+dedicated to the servicing of these new instructions. In this highly application-
+speciﬁc design space, several sources of microarchitectural optimization are
+currently brought to bear on the hardware performance of the new instruction:
+
+(1) Operation-level/spatial parallelism. Parallel instances of arithmetic hard-
+ware in order to perform multiple operations atonce, as allowed by depen-
+dencies.
+
+(2) Reduced register-transfer overhead. due to the increased locality of
+communication within the functional unit used to represent the new
+instruction.
+
+(3) Aggregation of clock period surplus present in most arithmetic functions. In
+particular, bit-wise functions have a hardware latency far below the clock
+period in most cases.
+
+This growing catalog of optimization aims to ensure that the “hot-spot” repre-
+sented by the new instruction achieves the maximum speed possible, by trading
+
+ACM Transactions on Embedded Computing Systems, Vol. 8, No. 4, Article 26, Publication date: July 2009.
+
+26:10
+
+•
+
+A. C. Murray et al.
+
+off die area for an increase in execution speed, a decrease in power usage, and
+a decrease in code-size. Often these extensions correlate to very frequently ex-
+ecuted sections of code, so the beneﬁts for a relatively small increase in die-size
+can be very tempting to designers. The problem remains to ﬁnd a way to ac-
+curately model both the existing architecture and the full range of potential
+extensions in such a way as to efﬁciently automate exploration.
+
+It has been shown [Bonzini and Pozzi 2006] that new search methods and
+heuristics can be developed to control the application of transformations, with
+respect to the new set of goals inherent in ISE as compared to code generation.
+Transformations once targeted at the back-end would attempt to limit increas-
+ing basic block size due to register pressure [Gupta and Bodik 2004]. Now in
+ISE, the drive is toward the largest possible basic block size for analysis.
+
+3.3 Combined Design-Space
+
+The combined design space in question here is that of transformation and ISE,
+with the intention of demonstrating that there is promise for automated tech-
+niques to manage the design in such a large space. It is also important that the
+results of a cooperative automated framework can outweigh the sum of their
+separated components.
+
+The hope is, as with compilers, that the actual efforts of the search of the
+combined space can remain a phased searching of each space individually. The
+most important factors in this scenario are the accuracy and detail of the mod-
+eling employed in any decision making. This work attempts to contribute to the
+understanding of which transformations will need to be made extension-aware,
+and which are invariantly beneﬁcial under extension.
+
+The use of compiler transforms when developing automated design space
+exploration must be very carefully considered, so as not to disturb the context
+in which design-space decisions are made. Transformations that are run prior
+to an automated ISE tool must be reapplied with the same parameters to the
+areas in which the tool identiﬁed mappings. Otherwise, the ISE will not ﬁnd the
+same mapping in code-generation without having the areas explicitly deﬁned
+by manual means.
+
+4. EXPERIMENT METHODOLOGY
+
+The primary concern of our experiments was to determine which transforma-
+tions or combinations thereof infer the greatest execution speed improvement to
+application-speciﬁc software under ISE automation. Secondly, the experiments
+were to ﬁnd limits of performance gain and loss from the combined design space
+deﬁned by transformation and ISE over a base-line design employing neither.
+With this information, we are well-equipped to properly focus the efforts of
+future research toward the most beneﬁcial transformations for ISE.
+
+To represent the transformation design space in these experiments, we use a
+source-to-source transformation tool built upon the SUIF1 [Wilson et al. 1994]
+compiler framework. It is worth noting that this tool operates as a transfor-
+mation tool rather than an optimizer, so when a transformation is used, it is
+applied everywhere that it is legal to do so without any analysis of whether it is
+
+ACM Transactions on Embedded Computing Systems, Vol. 8, No. 4, Article 26, Publication date: July 2009.
+
+Code Transformation and Instruction Set Extension
+
+•
+
+26:11
+
+likely to be beneﬁcial. The tool generates large volumes of transformed source
+code samples rapidly from a deﬁnition of:
+
+(1) the source code, in C. For our purposes, a variety of single-function bench-
+
+marks are tested, as well as a few larger applications.
+
+(2) the Transform Space Deﬁnition. As the boolean inclusion or exclusion of
+transforms permitted in the space, plus the maximum number of transfor-
+mation phases for each sample. The tool supports a wide array of source-to-
+source transformations to be used in the exploration (see Appendix). Some of
+the transformations can be considered high-level transformations (e.g., loop
+unrolling), others are commonly classiﬁed as generic platform-independent
+transformations (e.g., common subexpression elimination).
+
+(3) the number of samples to take from the transformation space, and hence the
+number of transformed source codes to produce. This can be set to either
+a ﬁxed limit or be unbounded, for example, to exhaustively enumerate the
+entire transformation space (up to a given sequence length).
+
+We have used this framework to conduct two large-scale experiments:
+
+(1) Initially, samples are taken with uniform probability at random points
+across the entire space of potential transformations. A sample in this sense
+represents a single point in the transformation space and results in the
+ordered set of transformations selected at that sample point to be ap-
+plied to the code. This is our ﬁrst experiment and aims at investigating
+the scope of improvements by combining source-level transformations and
+ISEs.
+
+(2) In a second experiment, we exhaustively enumerated all transformation
+sequences of a reduced set of transformations up to length three. Here, we
+have (arbitrarily) selected the 15 most relevant transformations according
+to our analysis of the ﬁrst round of experiments, thus keeping this experi-
+ment within practical limits.
+
+The benchmarks used in this experiment were taken from the UTDSP [Lee
+1998] and SNU-RT [Seoul National University - Real-Time Research Group
+2008] suites. Those taken are listed in Table I. Some of the UTDSP benchmarks
+are available in different versions, processing different sizes of datasets—we
+used all different sizes.
+
+An overview of our proposed design ﬂow is presented in Figure 5. For each
+benchmark, store the entire set of transformed source codes representing that
+benchmark after sample points in the transformation space are applied to it.
+The set of transformations applied at each sample is also stored for later corre-
+lation in analysis.
+
+This set of transformed source codes forms a representative sampling of the
+entire search space for that benchmark, each sample is then processed by an
+automated proﬁling ISE tool based on an ILP method [Atasu et al. 2005]. The
+tool operates in three phases.
+
+(1) Instrumentation, wherein the ISE tool augments the intermediate repre-
+sentation of the application with counters for proﬁling. The CoSy-based
+
+ACM Transactions on Embedded Computing Systems, Vol. 8, No. 4, Article 26, Publication date: July 2009.
+
+26:12
+
+•
+
+A. C. Murray et al.
+
+Table I. Description of Benchmarks Chosen from the UTDSP and SNU-RT Benchmark Suites
+
+Suite
+
+Benchmark
+
+Description
+
+UTDSP
+
+histogram Image enhancement using histogram equalization.
+
+adpcm-test Adaptive differential pulse code modulation algorithm from
+
+adpcm
+
+compress
+edge-detect
+
+fft
+ﬁr
+
+iir
+
+latnrm
+lmsﬁr
+
+lpc
+mult
+
+spectral
+
+bs
+crc
+fft1
+
+fft1k
+
+ﬁr
+
+jfdctint
+
+lms
+
+ludcmp
+
+matmul
+minver
+
+Adaptive differential pulse code modulation algorithm.
+Image compression using a discrete cosine transform.
+Image edge detection.
+Radix-2 in-place decimation-in-time fast fourier transform.
+Finite impulse response ﬁlter.
+
+Inﬁnite impulse response ﬁlter.
+Normalized lattice ﬁlter.
+Least mean squared adaptive FIR ﬁlter.
+Linear predictive encoding speech encoder.
+Matrix multiplication.
+Spectral analysis using periodogram averaging.
+
+CCITT G.722.
+Binary search.
+Cyclic redundancy check.
+Performs a fast fourier transform using the Cooley-Turkey
+algorithm.
+Performs a fast fourier transform on an array of 1024 complex
+numbers.
+Finite impulse response ﬁlter with Gaussian number
+generation.
+Accurate integer implementation of the forward discrete cosine
+transform used in JPEG encoding.
+’Least mean squares’ adaptive signal enhancement.
+LU (lower upper) decomposition for simultaneous linear
+equations.
+Matrix multiplication.
+Matrix inversion.
+
+qsort-exam Non-recursive quick-sort.
+
+qurt
+select
+sqrt
+
+Computes roots of quadratic equations.
+Selects n-th largest number from a list.
+Calculates square roots by Taylor series.
+
+LOC
+377
+172
+183
+75
+56
+68
+98
+81
+94
+406
+50
+228
+847
+
+117
+133
+225
+
+158
+
+314
+
+378
+
+263
+149
+
+85
+210
+123
+171
+116
+99
+
+SNU-RT
+
+tool emits the i686 assembly for this proﬁling executable, which is then
+assembled and run using the standard GNU tool chain.
+
+(2) Execution: running the instrumented binary records per-basic-block execu-
+tion frequencies, which are stored in a ﬁle for use by the extension phase.
+(3) Extension: The IR is augmented with proﬁling statistics, which are then
+used to select the top four instructions using the Atasu ILP AISE algo-
+rithm [Atasu et al. 2005], which is brieﬂy described in Section 4.1.2. The
+ISE tool’s proﬁler combined with a latency table for the given target archi-
+tecture produces runtime and code-size performance metrics for the original
+transform-space sample. These metrics and the generated instructions are
+stored alongside the transformed code and transform-point deﬁnition.
+
+4.1 Algorithms
+
+4.1.1 Selection of Transformations. The algorithm controlling the source-
+level transformation of the input program for the ﬁrst experiment is a simple
+
+ACM Transactions on Embedded Computing Systems, Vol. 8, No. 4, Article 26, Publication date: July 2009.
+
+Code Transformation and Instruction Set Extension
+
+•
+
+26:13
+
+Fig. 5. The combined but phased searching of transformation and ISE design-spaces; our experi-
+ment methodology as a ﬂow diagram.
+
+probabilistic algorithm. It generates transformation sequences of a random
+length (up to a given maximum) and selects a transformation for inclusion in
+the sequence with a uniform probability.
+
+For the second experiment, all permutations without repetitions are gener-
+ated. Skipping sequences with repeated tranformations may result in beneﬁcial
+sequences being missed but removing them allows for clearer analysis of what
+effect each transformation has individually. Duplicates due to “noneffective”
+transformations are ﬁltered out by checking to see if the IR has changed after
+each application. Once this reduced set has been generated, the program is com-
+piled and run on an x86 platform and has its outputs compared to the original
+reference. If it does not match, then the sequence is discarded. In the case of
+ﬂoating-point benchmarks, a total of 1% of bits are allowed to be ﬂipped while
+still considering the output identical to allow for small variations in results
+due to moving code around. The output must be checked to make sure the code
+has not been accidentally damaged by an incorrect SUIF transformation pass.
+Many of the sequences considered are unusual in conventional terms, and us-
+ing them uncovers latent compiler bugs. Of the theoretical 97,548 permutations
+(across 33 benchmarks with 15 transformations in sequences of up to length
+three with no repeated applications within a sequence), 20,730 remained after
+removing duplicate sequences, and 20,394 remained after discarding sequences
+that resulted in incorrect code. This was reduced to 20,348 after ISE as the ISE
+tool failed to process some of them.
+
+ACM Transactions on Embedded Computing Systems, Vol. 8, No. 4, Article 26, Publication date: July 2009.
+
+26:14
+
+•
+
+A. C. Murray et al.
+
+4.1.2 ISE Identiﬁcation. The ILP AISE algorithm used generates data-
+ﬂow-graph templates through conversion of basic blocks to a set of constraints
+in an ILP and solution of that program. For our implementation, a tool built
+into a CoSy compiler uses the lp solve library [Berkelaar 2008] to solve such
+problems and generate a set of candidate templates for an entire program.
+Constraints are declared for each basic block to generate a template such that:
+
+(1) The template is convex (i.e., there is no dataﬂow path between two opera-
+tions in the template that includes an operation that isn’t in the template)
+so that it may be scheduled.
+
+(2) Input and output port constraints are met (i.e., the number of register input
+
+and output ports are sufﬁcient) so that it may be implemented.
+
+In addition to the constraints, a goal function is also expressed. For this
+algorithm, the goal is the estimated serial time of execution in cycles of the
+instructions covered by the template, minus the estimated critical path of the
+template. The former is denoted the “software” execution time and is indicative
+of the time the instruction would take to execute on the unextended architec-
+ture. The latter is denoted the “hardware” execution time, and is a real-valued
+factor of the cycle time taken to execute the template as a single instruction.
+A cycle time for each software and hardware operation is speciﬁed to the tool
+a-priori to ILP construction, to allow for the constraints to be generated. The
+per-template difference between software and hardware execution time is the
+per-execution gain in cycles to an architecture implementing that template. Fol-
+lowing the generation of templates from basic blocks, the templates are checked
+for isomorphism with one another using the NAUTY [McKay 2008] graph iso-
+morphism library, then ranked using the product of their estimated usage and
+per-execution gain. The top four of these instructions are then recorded along-
+side their performance estimates for inclusion in results.
+
+4.1.3 Performance Evaluation. Runtime performance statistics are esti-
+mated for the whole program, using the same proﬁling information that is used
+to rank the instruction templates by their runtime potential. The proﬁling pro-
+vides per-basic-block execution frequencies representing the number of times a
+basic block will be executed in a single execution of the whole program. Each of
+these frequencies are multiplied by the latency of their basic block as software,
+and all the resulting values are summed; this provides the base-line number
+of cycles that the program will take to execute. In the absence of performing
+a full cycle-accurate simulation, this forms a solid “worst-case” prediction of
+performance, wherein a data hazard lies between every instruction with the
+leading instruction having latency greater than one. The hardware accelerated
+performance is obtained by multiplying each basic block frequency with the
+cycle-savings made for the templates in that basic block, and summing these
+values to get the total saving in cycles made. This saving is then subtracted
+from the software runtime in cycles to produce the cycle count for the hardware
+accelerated application. The relative reduction in cycles of hardware versus
+software is taken as our “runtime improvement.” It should be noted that this
+constitutes a valid worst-case analysis in the face of not being able to determine
+
+ACM Transactions on Embedded Computing Systems, Vol. 8, No. 4, Article 26, Publication date: July 2009.
+
+Code Transformation and Instruction Set Extension
+
+•
+
+26:15
+
+absolutely accurate runtime performance. Since we are starting with a worst-
+case estimate of performance and only improving this where gains are certain,
+we can be sure of avoiding false-positive results.
+
+The most notable omission in this performance evaluation is a cache model.
+The primary reasons for not including one was to allow more accurate com-
+parisons with previous ISE work—which does not use a cache model either,
+though without considering compiler transformations there is less motivation
+to—and to avoid complicating the analysis of the results. Considering caches
+would mean that there would be additional interactions between the trans-
+formations and the cache conﬁguration, which would potentially obscure the
+effect of the transformations on ISE performance. To try and ensure that the
+lack of a cache model did not affect the results no loop-level data transfor-
+mations where considered, the only loop-level transformation considered was
+loop unrolling, which only affects the instruction cache. It is also worth noting
+that as a constant memory cost is assumed in this evaluation it is equivilent
+to having a scratch-pad memory. This is quite common for many of the digi-
+tal signal-processing applications we consider, as a data cache does not handle
+streaming data very efﬁciently.
+
+We are able to estimate the improvement in code size in a similar fashion
+to runtime performance, although we do not consider any code that is linked
+without analysis, such as system libraries. The size of each instruction is as-
+sumed to be identical, that can be achieved through implicit operands for in-
+structions with large numbers of operands, although this complicates register
+mapping. Where a complex instruction has been used, the number of original
+instructions that this covered is summed and subtracted by one to get the code
+size improvement in instructions. The total number of instructions in the pro-
+gram is summed, and then each of the calculated code size improvements are
+subtracted from this value to form the code size improvement for the entire
+application.
+
+4.2 Experimental Setup
+
+For the purposes of this experiment, we conﬁgured our latencies to those of an
+Intel XScale PXA270 processor [Intel 2007], a current high-performance embed-
+ded microarchitecture based upon the ARM7 instruction set. An input/output
+port constraint of 8/8 is set to allow a wide range of potential ISE and avoid lim-
+itations on our results due to the synthetic microarchitectural constraints set
+in the ISE algorithm. It has been shown [Pozzi and Ienne 2005] that pipelining
+of ISE extensions is possible to reduce per-cycle register ﬁle I/O to suit actual
+requirements.
+
+Therefore, we have for each benchmark,
+
+for each of up to 10,000
+
+transformation-space sample points:
+
+(1) Source code after transformation.
+(2) ISEs deﬁned as data-ﬂow templates.
+(3) A record of performance in cycles (runtime) and instructions (code-size)
+
+before and after the transformations are applied to the benchmark.
+
+ACM Transactions on Embedded Computing Systems, Vol. 8, No. 4, Article 26, Publication date: July 2009.
+
+26:16
+
+•
+
+A. C. Murray et al.
+
+(4) A record of the improvement to each of the performance metrics for each of
+
+the instructions generated by AISE for the transformed source.
+
+(5) Aggregation of the results of the top four of these instructions to calculate
+
+the overall beneﬁt to the transformed code.
+
+So that there is a control point for reference, we ensure that a base-line
+utilizing no transforms is in the transformation space. Our tool produces as
+many ISE templates as it can ﬁnd within the source code. However, we (arbi-
+trarily) limit the number used in our results to four, in order to allow only the
+inclusion of the largest and best-performing ISEs such as we expect to reveal
+through transformation. Some commercial approaches, such as the Tensilica
+XPRES [Tensilica Inc. 2005], tend to use large numbers of small instructions
+to preserve generality.
+
+This entire experiment was run on a quad-core machine running Linux 2.6,
+over the course of several days in order to allow for the large-scale sampling.
+Our tools are “pipelined” in their operation to speed up results generation, as
+illustrated in Figure 5.
+
+5. RESULTS
+
+In this section, we present and discuss our results. Initially, we concentrate on
+performance and code size improvements due to combined source-level trans-
+formation and ISE. Next, we analyze speciﬁcally the data collected from the
+exhaustive enumeration of the transformation space. Our interest is focused on
+the detailed interaction between the transformation and ISE for each bench-
+mark application before we look at the individual contributions of each trans-
+formation.
+
+5.1 Performance and Code-Size Results
+
+Figures 6 and 7 show the runtime improvements achieved on a selection of
+benchmarks from the SNU-RT and UTDSP suites and summarize the random
+and exhaustive enumeration experiments, respectively. For each benchmark,
+the ﬁrst three bars represent the best improvement seen in the search space
+for each technique: transformations alone, ISE alone, and the combination of
+the two. Peak runtime improvements by a factor of 2.70 (SNU-RT ludcmp),
+1.46 and 2.85 (both SNU-RT fft) are seen, respectively. The geometric means
+of runtime improvements across both benchmark suites (counting each bench-
+mark only once, taking its best from experiment one or two) are 1.30, 1.09, and
+1.43, respectively. For comparison with previous work the average combined
+performance across both benchmark suites and experiments is a 1.49 speed-up
+(this is the same result as the 1.43 geometric mean speed-up). It can also be
+seen that of the 25 benchmarks considered in experiment one, ﬁve of them see
+a combined transformation and ISE runtime improvement of over 2.0 and only
+seven see an improvement of less than 1.15.
+
+The fourth bar per-benchmark included in Figure 7 is the combined runtime
+speed-up achieved with the transformation sequence that resulted in the small-
+est combined code-size (i.e., the runtime speed-up associated with the results
+
+ACM Transactions on Embedded Computing Systems, Vol. 8, No. 4, Article 26, Publication date: July 2009.
+
+Code Transformation and Instruction Set Extension
+
+•
+
+26:17
+
+Fig. 6. Maximum runtime improvements on experiment one (random sampling) with transforma-
+tions alone, ISE alone, and combined transformations and ISE.
+
+in Figure 8). As one would expect, it can be seen that in general the smallest
+code is not the fastest, most notably so on the UTDSP benchmark suite.
+
+The reason for the dip in performance with SNU-RT between experiments
+one and two is a combination of fewer transformations being applied per-sample
+in experiment two and the addition of I/O code to SNU-RT between the two
+experiments. The time spent actually doing I/O or in the standard library is not
+included in the performance measurements, as it is just there to allow additional
+veriﬁcation, but the time spent in I/O related code within the benchmark itself
+is included. This I/O code is difﬁcult to improve on but accounts for a nonneglible
+proportion of the runtime and thus the improvements to the core kernel of the
+benchmark are watered down.
+
+Figures 8(a) and 8(b) show the code-size improvements achieved on the
+same benchmarks but presents a combined summary of experiments one and
+two. These graphs are not based on the same sample points that runtime
+improvement ﬁgures are, but separate transformation sequences that were
+found to be effective at reducing code-size. Peak code-size improvements of
+factors of 1.18 (SNU-RT minver), 1.46 and 1.95 (both SNU-RT crc) are seen, for
+
+ACM Transactions on Embedded Computing Systems, Vol. 8, No. 4, Article 26, Publication date: July 2009.
+
+26:18
+
+•
+
+A. C. Murray et al.
+
+Fig. 7. Maximum runtime improvements on experiment two (exhaustive enumeration) with trans-
+formations alone, ISE alone, and combined transformations and ISE.
+
+transformations alone, ISE alone and the combination of the two, respectively.
+The geometric means for code-size improvements across both benchmark suites
+are 1.20, 1.07, and 1.29, respectively.
+
+Figures 6, 7, and 8 show that, on average, the results for the SNU-RT bench-
+marks are noticeably higher than for UTDSP. The primary reason for this is
+that the SNU-RT benchmarks are smaller, so the potential selection space is
+smaller and thus better suited to uniform sampling. Although we only explore
+a tiny fraction of the overall search space (small number of combinations of
+transformations for the “random” experiment and short sequences of a reduced
+set of transformations for the exhaustively enumerated space) we still obtain
+very good results. However, it seems likely that exploring a larger portion of
+the search space will yield even better results, especially for larger programs.
+
+ACM Transactions on Embedded Computing Systems, Vol. 8, No. 4, Article 26, Publication date: July 2009.
+
+Code Transformation and Instruction Set Extension
+
+•
+
+26:19
+
+Fig. 8. Maximum code size improvements over both experiments (random and exhaustive enu-
+meration) with transformations alone, ISE alone, and combined transformations and ISE.
+
+Larger programs are also likely to beneﬁt from a more directed search technique
+that can quickly focus on the promising areas on the search space, such as the
+ones described in Franke et al. [2005] and Chow and Wu [1999].
+
+This shows that, in many cases, simply choosing transformations that allow
+effective use of an ISE will not give good overall performance. Strong examples
+of this are the UTDSP ﬁr-256 64 and ﬁr-32 1 benchmarks, where the optimal
+combined performance is given by a set of transformations that did not allow
+any runtime improvement through ISE at all. Examples where combined per-
+formance is signiﬁcantly better than either transformations or ISE alone are
+SNU-RT crc and the SNU-RT fft benchmark.
+
+ACM Transactions on Embedded Computing Systems, Vol. 8, No. 4, Article 26, Publication date: July 2009.
+
+26:20
+
+•
+
+A. C. Murray et al.
+
+Fig. 9. Performance improvement (y-axis) in relation to the number of evaluated sample
+points/program versions generated by the source-level transformation tool (x-axis).
+
+5.2 Application-Oriented Evaluation
+
+Initially, we show some examples demonstrating how many iterations of the
+“random” algorithm are required before a signiﬁcant performance improve-
+ment can be achieved. Then we look at each benchmark in turn and identify
+the best transformation sequences resulting from the exhaustive enumeration
+experiment. We are interested in ﬁnding commonalities between benchmarks
+and how the best transformation sequence changes under the inﬂuence of ISE.
+Figure 9 shows the performance of the best transformation sequence found
+so far as each point in the “random” sample space is evaluated. Figure 9(a)
+shows an example (for the SNU-RT jfdctint benchmark) that has the kind of
+characteristics that led to evaluating such a high number of samples in the
+transformation space. It contains several steps in the performance of the best
+sequence found so far, with the very best not being found until after several
+thousand samples were evaluated. However, this was not typical of most bench-
+marks; Figure 9(b) is an example (for UTDSP ﬁr-256 64) that shows the typical
+behaviour. It also has steps in the performance of the best sequence found so
+far, but they are much closer together and the very best is found in about 500
+runs, with none of the remaining sequences evaluated doing better. This sug-
+gests that considering a smaller number of samples can be sufﬁcient to produce
+acceptable results for some applications if, for example, a single transformation
+is responsible for the majority of the performance gain. Considering a larger
+number of samples may ﬁnd more steps leading to even greater performance,
+though.
+
+In Table II, the best transformation sequences as per the exhaustive enu-
+meration experiment are shown for all UTDSP and SNU-RT benchmarks. The
+most striking observation is the clear dominance of transformations T49 (loop
+unrolling), T59 (forward propagation), and T12 (dead code elimination) in the
+UTDSP applications. Notable exceptions to this rule are the adpcm, compress,
+fft and lpc benchmarks. An inspection of the source codes reveals that the ap-
+plications that beneﬁt most from T49, T59 and T12 contain one or more nested
+
+ACM Transactions on Embedded Computing Systems, Vol. 8, No. 4, Article 26, Publication date: July 2009.
+
+Code Transformation and Instruction Set Extension
+
+•
+
+26:21
+
+Table II. Overall Best Transformation Sequences for the Exhaustive Enumeration Experiment
+
+Suite
+
+Benchmark
+
+Suite
+
+Transformation
+
+Transformation
+
+UTDSP
+
+SNU-RT
+
+adpcm
+
+compress
+edge-detect
+
+fft-1024
+fft-256
+
+ﬁr-256 64
+
+ﬁr-32 1
+
+histogram
+
+iir-1 1
+iir-4 64
+
+latnrm-32 64
+
+latnrm-8 1
+lmsﬁr-32 64
+
+lmsﬁr-8 1
+
+lpc
+
+mult-10 10
+
+mult-4 4
+
+Sequence
+T51, T59, T12
+T49, T44, T51
+T49, T44, T51
+T47, T8, T49
+T47, T8, T49
+T49, T59, T12
+T49, T59, T12
+T49, T59, T12
+T37, T59, T12
+T49, T51, T59
+T49, T59, T12
+T49, T59, T12
+T49, T59, T12
+T59, T49, T12
+T49, T47, T51
+T49, T59, T12
+T49, T59, T12
+
+ﬁr
+
+jfdctint
+
+Benchmark
+adpcm-test
+
+bs
+crc
+fft1
+fft1k
+
+Sequence
+T12, T40, T59
+T59, T12, T8
+T51, T59, T12
+T51, T59, T47
+T37, T59, T12
+T46, T59, T12
+T49
+T49, T12
+T37, T59, T12
+T40, T12, T47
+T49, T59, T12
+qsort-exam T40, T59, T12
+T49, T59, T12
+T37, T12, T59
+T49, T59, T12
+
+ludcmp
+matmul
+minver
+
+qurt
+select
+sqrt
+
+lms
+
+computational loops performing linear array traversals. Benchmarks contain-
+ing loops and nonlinear array traversals, such as FFT, still beneﬁt from loop un-
+rolling, but require additional transformations, such as common subexpression
+elimination and loop invariant hoisting to develop their full performance. This
+is in line with the observations that for this benchmark (a) a signiﬁcant number
+of operations are dedicated toward address computation, (b) large amounts of
+redundancy can be exploited by moving parts of the address computations out of
+the inner loop, and (c) the remaining address calculations can be made more ef-
+ﬁcient by implementing them in ISEs. The adpcm program is more control-ﬂow
+intensive than the other codes and, hence, beneﬁts most from control-ﬂow opti-
+mizations. It is also noteworthy to mention that same transformation sequence
+generates optimal results for benchmarks differing only in the size of their
+datasets, (e.g., fft, ﬁr, and latnrm, but not iir).
+
+Transformations T49, T59, and T12 also play an important role for the SNU-RT
+benchmarks, but the situation is less obvious than with UTDSP. Still, the loop-
+and array-based codes beneﬁt in the same way from these transformations as
+before. As shown in the fft example, variations in the coding style of what is
+otherwise the same algorithm can lead to different optimal transformation se-
+quences. Analogous to UTDSP, the more control-ﬂow or bit-level manipulation
+oriented codes such as adpcm, bs, or crc react to a different set of transforma-
+tions than the loop-oriented codes.
+
+The distinct correlation between certain code characteristics (“code features”)
+and transformations enabling a performance gain suggests it may be possible to
+exploit this relationship and, for example, employ machine learning techniques
+to predict a “good” transformation sequence without the need for a costly ex-
+ploration of the optimization space. This, however, is outside the scope of this
+article.
+
+ACM Transactions on Embedded Computing Systems, Vol. 8, No. 4, Article 26, Publication date: July 2009.
+
+26:22
+
+•
+
+A. C. Murray et al.
+
+Fig. 10. Runtime improvements achieved for every transformation sequence in the search space for
+a selection of benchmarks. For each version of the program (x-axis) three speed-up values are shown:
+speed-up after ISE only (raw ISE performance), speed-up after source-level transformation only
+(raw transform performance), and speed-up after combined ISE and source-level transformation
+(combined performance). The base-line points are the performance of each technique on unmodiﬁed
+code. The code versions are ordered by increasing combined performance along the x-axis.
+
+5.3 Transformation-Oriented Evaluation
+
+The graphs in Figure 10 show the performance for each individual technique
+and the combination of the two for every sample point in the search space,
+for a small selection of benchmarks. The samples are sorted by the perfor-
+mance of combining transformations and ISE. This allows the ratio of transfor-
+mation to ISE performance to be seen and also shows where there are cor-
+relations between the performance of the two individual techniques. These
+correlations are seen where either the performance of both individual tech-
+niques improve at the same point or where one gets better but the other gets
+worse.
+
+An example of this correlation is shown on the left side of Figure 10(c) which
+shows the separated performance for sets of transformations which allow good
+ISE performance but perform poorly overall due to the performance decrease
+seen with transforms alone. A more useful example of the correlation between
+
+ACM Transactions on Embedded Computing Systems, Vol. 8, No. 4, Article 26, Publication date: July 2009.
+
+Code Transformation and Instruction Set Extension
+
+•
+
+26:23
+
+transformations and ISE is shown in our motivating example, UTDSP fft-1024,
+with the common subexpression elimination and loop invariant hoisting trans-
+formations. Sequences that make use of these transformations are marked as
+short vertical bars in Figure 10(a). It can be seen that all the best-performing
+sequences make use of both of these transformations, performance improves
+greatly when either of them are turned on, and more so when they both are.
+
+Figure 10(b) shows an almost ideal set of results (for SNU-RT fft1k), where
+the best set of transformation sequences when considered alone also allows
+the most gain from ISE. When the optimal sequences overlap in this way, the
+combined performance is very high (e.g., going from peaks of 1.11 and 1.14 with
+individual techniques to a peak of 1.28 with combined techniques for SNU-RT
+fft1k). Figure 10(d) shows the results from a benchmark where almost none of
+the overall improvement comes from transformations but almost entirely from
+ISE (UTDSP latnrm-8 1). However, the graph still shows that poor code shape
+can limit ISE.
+
+The second, exhaustive, set of results allows for each transformation to be
+evaluated individually as each gets applied a ﬁxed number of times and the
+shorter sequences means there is less “piggy-backing” along side good transfor-
+mations.
+
+Figure 11 shows for each transformation in the exhaustive results how many
+“good” sequences it appears in compared to “bad” where “good” means the per-
+formance is better than the base-line. Runtime improvements are shown in
+Figures 11(a) and 11(b), code-size improvements are shown in Figures 11(c)
+and 11(d). As with the earlier graphs code-size is presented in terms of im-
+provement, so being greater than the base-line means the code is smaller.
+Figures 11(a) and 11(d) are the improvements seen for pure transformation
+without ISE relative to the base-line (1.0). Figures 11(b) and 11(d) are the
+improvements seen for combined transformations and ISE relative to the per-
+formance of ISE on the identity code. The code-size distributions contain more
+“bad” sequences than the runtime distributions because most of the transfor-
+mations used are oriented toward performance rather code-size.
+
+The per-transformation results are presented in Tables III and IV for run-
+time improvements and code-size improvements respectively. The full name of
+each transformation ID may be found in the appendix at the end of this article.
+The “usage” column refers to how many nonduplicate and valid sequences the
+transformation appeared in. The “within 5% of best” column is the percentage
+of the sequences containing the given transformation that resulted in perfor-
+mance at least 95% as good as the very best sequence (which may or may not
+contain the given transformation). This percentage can be seen as a descrip-
+tion of the risk factor of the given transformation, the higher the percentage
+the lower the risk that a sequence containing the transformation will perform
+poorly. The “trans. perf.” column lists the best improvement achieved using only
+transformations, while the ‘combined perf.’ column lists the best improvement
+achieved by applying transformations followed by ISE. These two numbers do
+not necessarily relate to the same transformation sequence. Finally, the “ex-
+pected perf.” column is an estimate of what the combined performance should
+be based on taking the product of the best pure transformation improvement
+
+ACM Transactions on Embedded Computing Systems, Vol. 8, No. 4, Article 26, Publication date: July 2009.
+
+26:24
+
+•
+
+A. C. Murray et al.
+
+Fig. 11. Distribution of “good” and “bad” sequences containing each transformation. The greater-
+than columns are “good” and the less-than-or-equal-to columns are “bad”.
+
+and the performance of ISE on the identity code. The difference between this
+and the combined performance shows the average enabling or disabling effect
+of the transformations on ISE over all the sequences containing this transform.
+The very ﬁrst row of each table shows the performance across all sequences
+without regard to which transformations they contain.
+
+These results show many things. First, across the 20,348, sequences the com-
+bined performance is very slightly higher than expected on average for both run-
+time and code-size improvements, showing an overall additional enabling factor
+of ISE from the transformations. However, no single transformation shows a
+signiﬁcant improvement over the expected performance when considering se-
+quences across all benchmarks. Though T3 (bounds comparison substitution)
+does notably worse than expected for runtime performance. If considering the
+results on a per-transformation per-benchmark basis, however, it can be seen
+that the numbers making up these averages have a larger amount of variance.
+There are too many combinations to present them all, but a few highlights are:
+
+—T8 (common sub-expression elimination) was expected to give a 1.96 runtime
+improvement on SNU-RT matmul but only a 1.75 improvement was actually
+
+ACM Transactions on Embedded Computing Systems, Vol. 8, No. 4, Article 26, Publication date: July 2009.
+
+Code Transformation and Instruction Set Extension
+
+•
+
+26:25
+
+Table III. Runtime Improvement Information for Each Transformation Used
+
+in the Exhaustive Experiments
+
+Per Transformation Runtime Improvements
+
+Transformation Usage Within 5% of Best Trans. Perf. Combined Perf. Expected Perf.
+
+T49[4]
+
+All
+T3
+T8
+T9
+T59
+T12
+T37
+T40
+T41
+T42
+T44
+T46
+T47
+
+T51
+T58
+
+All
+T3
+T8
+T9
+T59
+T12
+T37
+T40
+T41
+T42
+T44
+T46
+T47
+
+T51
+T58
+
+T49[4]
+
+20,348
+
+177
+5,363
+
+79
+
+6,828
+6,828
+5,983
+5,795
+764
+66
+
+2,697
+5,508
+6,224
+5,174
+5,036
+5,050
+
+20,348
+
+177
+5,363
+
+79
+
+6,828
+6,828
+5,983
+5,795
+764
+66
+
+2,697
+5,508
+6,224
+5,174
+5,036
+5,050
+
+—
+7%
+13%
+1%
+48%
+37%
+9%
+24%
+16%
+0%
+8%
+23%
+25%
+62%
+24%
+21%
+
+—
+22%
+13%
+1%
+91%
+93%
+12%
+14%
+7%
+0%
+5%
+19%
+7%
+0%
+21%
+17%
+
+1.20
+1.09
+1.12
+1.00
+1.19
+1.19
+1.13
+1.15
+1.15
+1.01
+1.09
+1.15
+1.14
+1.21
+1.16
+1.15
+
+1.20
+1.16
+1.12
+0.94
+1.19
+1.19
+1.17
+1.17
+0.52
+1.00
+0.94
+1.20
+1.17
+0.82
+1.18
+1.18
+
+1.32
+1.10
+1.22
+1.07
+1.31
+1.31
+1.24
+1.26
+1.28
+1.09
+1.18
+1.26
+1.25
+1.33
+1.27
+1.26
+
+1.29
+1.20
+1.20
+1.02
+1.28
+1.29
+1.26
+1.26
+0.55
+1.07
+1.01
+1.29
+1.26
+0.92
+1.27
+1.27
+
+1.30
+1.18
+1.21
+1.09
+1.29
+1.29
+1.23
+1.25
+1.25
+1.09
+1.19
+1.24
+1.24
+1.31
+1.26
+1.25
+
+1.28
+1.24
+1.20
+1.01
+1.27
+1.28
+1.25
+1.26
+0.56
+1.07
+1.01
+1.28
+1.25
+0.89
+1.26
+1.26
+
+Table IV. Code-Size Improvement Information for Each Transformation Used
+
+in the Exhaustive Experiments
+
+Per Transformation Code-Size Improvements
+
+Transformations Usage Within 5% of Best Trans. Perf. Combined Perf. Expected Perf.
+
+achieved. However, a 1.41 runtime improvement was expected for UTDSP
+fft 1024, but a 1.51 improvement was actually achieved.
+
+—T49[4] (loop unrolling with a factor of 4) was expected to give a speed-up of
+1.81 to SNU-RT matmul but only achieved an improvement of 1.62. But for
+SNU-RT sqrt, it achieved a runtime improvement of 2.44 when only 2.21 was
+expected.
+
+Other more general results may be seen as well, such as T59 (forward and
+constant propagation), T12 (dead code elimination) and T49[4] (loop unrolling)
+are mostly likely to be part of a good transformation sequence for improving
+
+ACM Transactions on Embedded Computing Systems, Vol. 8, No. 4, Article 26, Publication date: July 2009.
+
+26:26
+
+•
+
+A. C. Murray et al.
+
+runtime when considering combined transformations and ISE. To improve code-
+size T59 (forward and constant propagation) and T12 (dead code elimination)
+are again likely to be involved in good sequences, but T44 (induction variable
+detection) and T49[4] (loop unrolling) are not. These observations are in line
+with a compiler writer’s “intuition.”
+
+6. CONCLUSIONS
+
+In this article, we have described a methodology for improved ISE generation
+that combines the exploration of high-level and generic platform-independent
+source transformations and low-level ISE identiﬁcation. We have demonstrated
+that source-to-source transformations are not only very effective on their own
+but provide much larger scope for performance improvement through ISE gen-
+eration than any other isolated low-level technique. We have integrated both
+source-level transformations and ISE generation in a uniﬁed framework that
+can efﬁciently optimize both hardware and software design spaces for extensi-
+ble processors.
+
+The empirical evaluation of our design space exploration framework is based
+on a model of the Intel XScale processor and compute-intensive kernels and
+applications from the SNU-RT and UTDSP benchmark suites. We have suc-
+cessfully demonstrated that our approach is able to outperform any other ex-
+isting approach and gives an average speed-up of 1.49. Compared to previous
+work [Bonzini and Pozzi 2006], we have covered a much broader array of ex-
+isting transformations to get a more global picture of the potential for trans-
+formation in improving ISE. In addition, we have empirically demonstrated
+that there exists a nontrivial dependence between high-level transformations
+and the generated ISEs justifying the co-exploration of the HW and SW design
+spaces.
+
+Future work will investigate the integration of machine learning techniques
+based on program features into our design space exploration algorithm and
+target a commercial extensible processor platform.
+
+APPENDIX
+
+In this section, we provide a complete list of SUIF1-based source-level trans-
+formations together with a short description of their function. Experiment two
+only made use of the reduced set of transformations in section 6, experiment
+one used all the transformations in this appendix. As the aim of experiment
+one was to consider everything and see what had an effect there are many
+transformations in Section 6 that are not pure optimisations, e.g. the “disman-
+tle” instructions perform lowerings. Some also did not ever apply to any of the
+benchmarks considered as they targeted code features that are not found in
+those benchmarks, but as they were considered in the ﬁrst experiment, they
+are listed here. For a more-detailed description of each transformation, please
+refer to the SUIF documentation.
+
+ACM Transactions on Embedded Computing Systems, Vol. 8, No. 4, Article 26, Publication date: July 2009.
+
+Code Transformation and Instruction Set Extension
+
+•
+
+26:27
+
+A.1 Most Important Transformations
+
+Bounds Comparison Substitution - T3: This replaces comparisons of upper and
+lower bounds of a loop inside the loop body with the known result of that
+comparison.
+
+Common Subexpression Elimination - T8: Simple
+
+common
+
+subexpression
+
+elimination.
+
+Control Simpliﬁcation - T9: Simplify if statements for which one branch or the
+
+other always executes. Remove for loops that are never executed.
+
+Dead Code Elimination - T12: Simple dead code eliminations.
+For Loop Normalisation - T37: Normalize all for loops to have lower bound of
+
+zero, step size of one, and less than or equal to test.
+
+Guard For - T40: This adds if nodes around some TREE FOR nodes to ensure
+that whenever any TREE FOR node is executed, the landing pad and ﬁrst
+iteration will always be executed.
+
+If Hoisting - T41: This moves certain if nodes up in the code under some cir-
+
+cumstances that can allow the test for the if to be eliminated.
+
+Imperfectly Nested Loop Conversion - T42: Turn imperfectly nested loop nests
+into perfectly nested loop nests by pulling conditionals as far out as pos-
+sible.
+
+Induction Variable Detection - T44: This does simple induction variable detec-
+tion. It replaces the uses of the induction variable within the loop by ex-
+pressions of the loop index and moves the incrementing of the induction
+variable outside the loop.
+
+Lift Call Expression - T46: This takes any calls that are within expression trees
+
+out of the expression trees.
+
+Loop Invariant Hoisting - T47: This moves the calculation of loop-invariant ex-
+
+pressions outside of loop bodies.
+
+Loop Unrolling:x - T49: Unroll loop x times. Values for x limited to 2,4,5,7.
+Move Loop Invariant Conditionals - T51: Move all loop-invariant conditionals
+
+that are inside a loop outside the outermost loop.
+
+Unstructured Control Flow Optimisation - T58: Simple optimizations on un-
+structured control ﬂow. Remove unreachable code. Remove labels that are
+not the target of any branch. Remove labels that are followed by uncon-
+ditional jumps. Remove branches to same target as “natural” control ﬂow.
+Invert condition of branch if it simpliﬁes control ﬂow.
+
+Full Copy, Forward and Const Propagation - T59: Composite
+
+transformation
+to perform copy propagation, forward propagation, constant folding, local
+constant propagation and constant extraction in this order iteratively un-
+til they stop changing the IR. These transformations were not considered
+individually in experiment two, this composite was used instead.
+
+A.2 Additional Transformations
+
+arrays.
+
+Array Delinearization - T1: Turn 1-dimensional arrays into multidimensional
+
+ACM Transactions on Embedded Computing Systems, Vol. 8, No. 4, Article 26, Publication date: July 2009.
+
+26:28
+
+•
+
+A. C. Murray et al.
+
+Bit Packing - T2: Combine local variables that are used only as single bits,
+
+packing them together into variables of type int.
+
+Break Load Constant Instruction - T4: This breaks all load constant instruc-
+tions of a symbol and nonzero offset into an explicit addition of the offset.
+Call By Reference Replacement - T5: Replace call-by-reference scalar vari-
+
+ables with copy-in, copy-out.
+
+Chain Array References - T6: Attempt to chain together multiple array refer-
+
+ence instructions in series into a single array reference instruction.
+
+Constant Propagation - T7: Propagate forward the deﬁnition of constants.
+Constant Folding - T10: Fold constants wherever possible.
+Copy Propagation - T11: Propagate forward copy operations on simple local
+
+variables.
+
+Default SUIF Transformations - T13: This performs the default passes de-
+signed to be used immediately after the front end, to turn some nonstan-
+dard SUIF that the frontend produces into standard SUIF.
+
+Dismantle Array Instruction - T14: Dismantle array instructions (into explicit
+
+base plus offset).
+
+Dismantle Div Ceil/Floor Instruction - T15: Dismantle all ceil/ﬂoor instruc-
+
+Dismantle Div Mod Instruction - T16: Dismantle all mod instructions.
+Dismantle Empty Tree For - T17: This dismantles TREE FORs with empty
+
+Dismantle Int Abs/Max/Min Instruction - T18: Dismantle all integer abs/max/
+
+min instructions.
+
+Dismantle Abs/Min/Max Instruction - T19: Dismantle all min/max instruc-
+
+Dismantle Multiway Branch - T20: Dismantles all multiway branch instruc-
+
+tions.
+
+bodies.
+
+tions.
+
+tions.
+
+Dismantle Non Constant For - T21: This dismantles TREE FORs unless the
+
+upper bound and step are both loop constants.
+
+Dismantle Tree Block - T22: This dismantles all TREE BLOCKs.
+Dismantle Tree Block Without Symbol Table - T23: This
+
+dismantles
+
+all
+
+TREE BLOCKs that have empty symbol tables.
+
+Dismantle Tree For - T24: This dismantles all TREE FORs.
+Dismantle Tree For With Modiﬁed Index Variable - T25: This
+
+dismantles
+TREE FORs for which the index variable might be modiﬁed by the
+TREE FOR body.
+
+Dismantle Tree For With Spilled Index Variable - T26: This
+
+dismantles
+
+TREE FORs with a spilled index variable.
+
+Dismantle Tree Loop - T27: This dismantles all TREE LOOPs.
+Eliminate Enumeration Types - T28: This replaces all uses of enumerated
+
+types with a corresponding plain integer type.
+
+ACM Transactions on Embedded Computing Systems, Vol. 8, No. 4, Article 26, Publication date: July 2009.
+
+Code Transformation and Instruction Set Extension
+
+•
+
+26:29
+
+Eliminate Struct Copies - T29: This gets rid of all structure copies, whether
+
+through copy instructions, load-store pairs, or memcopy instructions.
+
+Eliminate Sub Variables - T30: This removes all subvariables and replaces
+uses of them with uses of their root ancestors, with the appropriate
+offsets.
+
+Explicit Load Store - T31: This puts in explicit loads and stores for access to all
+variables that are not local, nonstatic, nonvolatile variables without the
+addr taken ﬂag set.
+
+Extract Upper Array Bounds - T32: Attempt to extract upper bound informa-
+tion for array reference instructions from the variables for the arrays being
+referenced.
+
+Find For - T33: This builds TREE FOR nodes out of TREE LOOP nodes for
+
+which a suitable index variable and bounds can be found.
+
+Fix Address Taken - T34: Set the is addr taken ﬂag of each variable to TRUE
+
+or FALSE, depending on whether or not its address is actually taken.
+
+(Strictly) Fix Bad Nodes - T35: This ﬁxes bad nodes. This is used as part of the
+
+default expansion after the front end.
+
+Fix LDC Types - T36: This puts the correct types on all ldc (load constant) in-
+
+structions that load symbol addresses.
+
+Global Variable Privatisation - T38: Do some code transformations to help with
+
+privatization of global variables across calls.
+
+Globalise Local Static Variables - T39: This changes all static local variables
+
+into global variables in the ﬁle symbol table.
+
+Improve Array Bounds - T43: Try to improve the array bound information by
+replacing variables used in array bounds with constants by looking for
+constant assignments to those variables at the start of the scope of each
+such array type.
+
+Kill Redundant Line Marks - T45: This removes all mark instructions that con-
+
+tain nothing but line information.
+
+Loop Flattening - T48: Same as loop unrolling but unrolls the loop completely
+
+if it is small enough and does not contain too many iterations.
+
+Mod Ref Annotations - T50: This puts mod/ref annotations on TREE FORs.
+Pointer Conversion - T52: Add array reference instructions in place of pointer
+
+Privatisation - T53: This privatizes every variable listed in the annotation “pri-
+
+arithmetic where possible.
+
+vatizable” on each TREE FOR.
+
+the summation out of the loop.
+
+Reduction Detection - T54: This ﬁnds simple instances of reduction. It moves
+
+Replace Constant Variables - T55: Replace uses of variables with “is constant”
+annotations with constants based on the static initialisation information.
+Scalarisation - T56: This turns local array variables into collections of element
+variables when all uses of the array are loads or stores of known elements.
+(Aggressively) Scalarise Constant Array References - T57: Overlap array ref-
+
+erences with constant indexes with scalar variable.
+
+ACM Transactions on Embedded Computing Systems, Vol. 8, No. 4, Article 26, Publication date: July 2009.
+
+26:30
+
+•
+
+A. C. Murray et al.
+
+REFERENCES
+
+ACE ASSOCIATED COMPILER EXPERTS B.V. 2008. ACE CoSy Web site.
+
+http://www.ace.nl/compiler/cosy.html.
+
+AGAKOV, F., BONILLA, E., CAVAZOS, J., FRANKE, B., O’BOYLE, M. F., THOMSON, J., TOUSSAINT, M., AND
+WILLIAMS, C. K. 2006. Using machine learning to focus iterative optimization. In Proceedings
+of the 4th Annual International Symposium on Code Generation and Optimization. 295–305.
+
+ARC INTERNATIONAL. 2007a. ARC FPX White paper.
+ARC INTERNATIONAL. 2007b. ARChitect product brief.
+ATASU, K., D ¨UNDAR, G., AND ¨OZTURAN, C. 2005. An integer linear programming approach for
+identifying instruction-set extensions. In Proceedings of the 3rd IEEE/ACM/IFIP Interna-
+tional Conference on Hardware/Software Codesign and System Synthesis. IEEE, Los Alamitos,
+172–177.
+
+BALARIN, F., WATANABE, Y., HSIEH, H., LAVAGNO, L., PASSERONE, C., AND SANGIOVANNIVINCENTELLI, A.
+2003. Metropolis: an integrated electronic system design environment. Computer 36, 4, 45–52.
+
+BERKELAAR, M. 2008. Mixed integer programming (MIP) solver.
+
+http://groups.yahoo.com/group/lp solve/.
+
+BISWAS, P., BANERJEE, S., DUTT, N. D., POZZI, L., AND IENNE, P. 2006.
+
+ISEGEN: An iterative
+improvement-based ISE generation technique for fast customization of processors. IEEE Trans.
+VLSI 14, 7, 754–762.
+
+BONZINI, P. AND POZZI, L. 2006. Code transformation strategies for extensible embedded proces-
+sors. In Proceedings of the International Conference on Compilers, Architecture and Synthesis for
+Embedded Systems (CASES). ACM, New York, 242–252.
+
+BORGHI, A., DAVID, V., AND DEMAILLE, A. 2006. C-Transformers: A framework to write C program
+
+transformations. ACM Crossroads 12, 3, 3.
+
+BROWN, D., HENSHAW, W. D., AND QUINLAN, D. J. 1999. Overture: An object-oriented framework for
+solving partial differential equations on overlapping grids. In Proceedings of the SIAM Conference
+on Object Oriented Methods for Scientiﬁc Computing. SIAM, Philadelphia.
+
+CHOW, K. AND WU, Y. 1999. Feedback-directed selection and characterization of compiler opti-
+mizations. In Proceedings of the 2nd Workshop on Feedback Directed Optimization. ACM, New
+York.
+
+CHUNG, E., BENINI, L., AND MICHELI, G. D. 2000. Energy efﬁcient source code transformation based
+on value proﬁling. In Proceedings of the International Workshop on Compilers and Operating
+Systems for Low-Power. ACM, New York.
+
+COWARE. 2007. Processor designer datasheet. http://www.coware.com/PDF/products/LISATek.pdf.
+FALK, H. AND MARWEDEL, P. 2004. Source Code Optimization Techniques for Data Flow Dominated
+
+Embedded Software. Kluwer Academic Publishers, Dordrecht, The Netherlands.
+
+FRANCIS, H. 2001. ARM DSP-enhanced extensions.
+FRANKE, B. AND O’BOYLE, M. 2003a. Array recovery and high-level transformations for DSP ap-
+
+plications. ACM Trans. Embed. Comput. Syst. 2, 2, 132–162.
+
+FRANKE, B. AND O’BOYLE, M. 2003b. Combining program recovery, auto-parallelization and locality
+analysis for C programs on multi-processor embedded systems. In Proceedings of the 12th Inter-
+national Conference on Parallel Architectures and Compilation Techniques. IEEE, Los Alamitos,
+104.
+
+FRANKE, B., O’BOYLE, M., THOMSON, J., AND FURSIN, G. 2005. Probabilistic source-level optimization
+of embedded programs. In Proceedings of the Conference on Languages, Compilers and Tools for
+Embedded Systems. ACM, New York, 78–86.
+
+GL ¨OKLER, T., HOFFMANN, A., AND MEYR, H. 2003. Methodical low-power ASIP design space explo-
+
+GUPTA, R. AND BODIK, R. 2004. Register pressure sensitive redundancy elimination. Lecture Notes
+
+ration. VLSI Signal Process. 33, 3, 229–246.
+
+in Computer Science, vol. 1575, 107–122.
+
+HOHENAUER, M., SCHARWAECHTER, H., KARURI, K., WAHLEN, O., KOGEL, T., LEUPERS, R., ASCHEID,G.,
+AND MEYR, H. 2004. Compiler-in-loop architecture exploration for efﬁcient application speciﬁc
+embedded processor design.
+http://www.iss.rwth-aachen.de/4 publikationen/res pdf/2004HohenauerDE.pdf.
+
+ACM Transactions on Embedded Computing Systems, Vol. 8, No. 4, Article 26, Publication date: July 2009.
+
+Code Transformation and Instruction Set Extension
+
+•
+
+26:31
+
+INTEL. 2007.
+
+Intel PXA270 processor for embedded computing.
+
+http://www.intel.com/design/embeddedpca/applicationsprocessors/302302.htm.
+
+KEUTZER, K., MALIK, S., NEWTON, A., RABAEY, J., AND SANGIOVANNI-VINCENTELLI, A. 2000. System-level
+design: Orthogonalization of concerns and platform-based design. IEEE Trans. Comput.-Aid. Des.
+Integr. Circ. Syst. 19, 1523–1543.
+
+KULKARNI, C., CATTHOOR, F., AND MAN, H. D. 1998. Code transformations for low- power caching in
+embedded multi-media processors. In Proceedings of the 12th International Parallel Processing
+Symposium. IEEE, Los Alamitos, 292–297.
+
+LEE, C. G. 1998.
+
+UTDSP benchmarks. http://www.eecg.toronto.edu/˜corinna/DSP/infrastructure/UTDSP.html.
+
+LEUPERS, R., KARURI, K., KRAEMER, S., AND PANDEY, M. 2006. A design ﬂow for conﬁgurable embed-
+ded processors-based on optimized instruction set extension synthesis. In Proceedings of Design
+Automation & Test in Europe (DATE’06). IEEE, Los Alamitos, 581–586.
+
+LUZ, V. D. L. AND KANDEMIR, M. 2004. Array regrouping and its use in compiling data-intensive
+
+embedded applications. IEEE Trans. Comput. 53, 1, 1–19.
+
+MCKAY, B. D. 2008. Nauty user’s guide. http://cs.anu.edu.au/˜bdm/nauty/.
+Mips TECHNOLOGIES. 2007. MIPS32(R) architecture for programmers.
+
+http://www.mips.com/products/product-materials/processor/mips-architecture.
+
+PEYMANDOUST, A., POZZI, L., IENNE, P., AND MICHELI, G. D. 2003. Automatic instruction set extension
+and utilization for embedded processors. In Proceedings of the 14th International Conference on
+Application-Speciﬁc Systems, Architectures and Processors. ACM, New York, 108–118.
+
+POZZI, L., ATASU, K., AND IENNE, P. 2006. Exact and approximate algorithms for the extension of
+embedded processor instruction sets. IEEE Trans. Comput. Aid. Des. Integr. Circ. Syst. 25, 7,
+1209–1229.
+
+POZZI, L. AND IENNE, P. 2005. Exploiting pipe-lining to relax register-ﬁle port constraints of
+instruction-set extensions. In Proceedings of the International Conference on Compilers, Archi-
+tectures, and Synthesis for Embedded Systems (CASES’05). ACM, New York, 2–10.
+
+ROZENBLIT, J. AND BUCHENRIEDER, K. 1995. Codesign – Computer-Aided Software/Hardware En-
+
+gineering. IEEE, Los Alamitos, CA.
+
+SCHORDAN, M. AND QUINLAN, D. J. 2003. A source-to-source architecture for user-deﬁned opti-
+mizations. In Proceedings of the Joint Modular Languages Conference. Springer-Verlag, Berlin,
+214–223.
+
+SEOUL NATIONAL UNIVERSITY – REAL-TIME RESEARCH GROUP. 2008. SNU real-time benchmarks.
+
+http://archi.snu.ac.kr/realtime/benchmark/.
+
+STRETCH INC. 2007. SCP architecture reference. http://www.stretchinc.com.
+TENSILICA, INC. 2005. The XPRES compiler: Triple-threat solution to code performance challenges.
+VERMA, A. K. AND IENNE, P. 2004.
+Improved use of the carry-save representation for the synthesis
+of complex arithmetic circuits. In Proceedings of the International Conference on Computer-Aided
+Design. IEEE, Los Alamitos, 791–798.
+
+VERMA, A. K. AND IENNE, P. 2006. Towards the automatic exploration of arithmetic circuit architec-
+tures. In Proceedings of the 43rd Design Automation Conference (DAC’06). IEEE, Los Alamitos,
+445–450.
+
+WANG, Y. AND KAELI, D. 2003. Source-level transformations to improve I/O data partitioning. In
+Proceedings of the International Workshop on Storage Network Architecture and Parallel I/Os.
+IEEE, Los Alamitos, 27–35.
+
+WILSON, R. P., FRENCH, R. S., WILSON, C. S., AMARASINGHE, S. P., ANDERSON, J. M., TJIANG, S. W. K., LIAO,
+S.-W., TSENG, C.-W., HALL, M. W., LAM, M. S., AND HENNESSY, J. L. 1994. SUIF: An infrastructure
+for research on parallelizing and optimizing compilers. SIGPLAN Notices 29, 12, 31–37.
+
+WINTERS, B. AND HU, A. 2000. Source-level transformations for improved formal veriﬁcation. In
+Proceedings of the IEEE International Conference on Computer Design: VLSI in Computers &
+Processors. IEEE, Los Alamitos, 599–602.
+
+Received October 2007; revised January 2008; accepted July 2008
+
+ACM Transactions on Embedded Computing Systems, Vol. 8, No. 4, Article 26, Publication date: July 2009.
+
+

@@ -6,11 +6,11 @@ The project is about recommending relevant scholarly papers to researchers based
 ## Dataset description
 The project use the [dataset 2](https://scholarbank.nus.edu.sg/handle/10635/146027) released by Kazunari Sugiyama and Min-Yen Kan in National University of Singapore. We appreciated the creator of the dataset for sharing the raw pdf files .
 
-**Raw dataset including:**
+**Raw dataset includes:**
 
 * Research interests of 50 researchers
 	* Each researcher's published papers in DBLP list (full text in pdf format)
-	* Paper IDs relevant to each researcher's interests
+	* Paper IDs relevant to each researcher's interests (ground truth)
 * Candidate papers to recommend: 95,238 (full text in pdf format)
 
 

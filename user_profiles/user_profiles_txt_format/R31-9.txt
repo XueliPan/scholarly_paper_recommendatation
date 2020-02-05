@@ -1,0 +1,1039 @@
+Adaptive Physical Design for Curated Archives
+
+Tanu Malik1, Xiaodan Wang2, Debabrata Dash3,
+
+Amitabh Chaudhary4, Anastasia Ailamaki5, Randal Burns2
+
+1 Purdue University, USA
+
+tmalik@purdue.edu
+
+2 Johns Hopkins University, USA
+
+{xwang,randal}@cs.jhu.edu
+
+3 Carnegie Mellon University, USA
+
+ddash@cs.cmu.edu
+
+4 University of Notre Dame, USA
+
+achaudha@cse.nd.edu
+
+5 Swiss Federal Institutes of Technology, Switzerland
+
+anastasia.ailamaki@epﬂ.ch
+
+Abstract. We introduce AdaptPD, an automated physical design tool that im-
+proves database performance by continuously monitoring changes in the work-
+load and adapting the physical design to suit the incoming workload. Current
+physical design tools are ofﬂine and require speciﬁcation of a representative
+workload. AdaptPD is “always on” and incorporates online algorithms which
+proﬁle the incoming workload to calculate the relative beneﬁt of transitioning
+to an alternative design. Efﬁcient query and transition cost estimation modules
+allow AdaptPD to quickly decide between various design conﬁgurations. We
+evaluate AdaptPD with the SkyServer Astronomy database using queries sub-
+mitted by SkyServer’s users. Experiments show that AdaptPD adapts to changes
+in the workload, improves query performance substantially over ofﬂine tools, and
+introduces minor computational overhead.
+
+1 Introduction
+Automated physical design tools are vital for large-scale databases to ensure optimal
+performance. Major database vendors such as Microsoft, IBM, and Oracle now include
+tuning and design advisers as part of their commercial offerings. The goal is to reduce
+a DBMS’ total cost of ownership by automating physical design tuning and provid-
+ing DBAs with useful recommendations about the physical design of their databases.
+However, current tools [1–3] provide limited automation; they take an ofﬂine approach
+to physical design and leave several signiﬁcant decisions during the tuning process
+to DBAs. Speciﬁcally, DBAs need to explicitly specify representative workloads for
+the tuning tool. DBAs are also required to know when a tuning session is needed and
+guesstimate the relative beneﬁt of implementing the recommendations.
+
+Complete automation is a critical requirement of libraries which will soon become
+data centers for curation of large scientiﬁc data. The Sloan Digital Sky Survey (SDSS)
+[4] project is a notable example in which its data will soon be curated by a library. The
+project receives a diverse workload, which exceeds a million queries every month. As
+such, ﬁnding a representative workload is challenging because query access patterns
+
+exhibit considerable evolution within a week [5]. With new discoveries, workloads also
+exhibit spikes in their loads.
+
+The straightforward approach of running an ofﬂine tool after each query or invok-
+ing it periodically for continuous evaluation of physical design achieves most of the
+automation objectives. However, this approach requires further tuning by a DBA to en-
+sure that the tool does not react too quickly or too slowly to changes in the workload
+and result in poor design choices. Recent research [6–8] on the online physical design
+problem focuses on one aspect of physical design: index design. Bruno and Chaudhari
+[8] infer costs and plan properties during the query optimization phase to efﬁciently de-
+cide between various index conﬁgurations in an online fashion. In this paper, we focus
+on vertical partitioning, which is complementary to index selection. In SDSS and other
+scientiﬁc databases, vertical partitioning is often used because it does not replicate data,
+thereby reducing space requirements [1].
+
+Contributions: To provide complete automation, we model the physical design prob-
+lem in AdaptPD as an online problem and develop algorithms that minimize the com-
+bined cost of query execution and the cost of transitioning between conﬁgurations. We
+also develop computationally-efﬁcient and accurate cost estimation modules that re-
+duce the overhead of running AdaptPD. AdaptPD is evaluated within the Astronomy
+database of SDSS. Experiments indicate up to two fold improvement in query response
+time for AdaptPD when compared with ofﬂine tuning techniques.
+
+We develop online algorithms that search the space of physical design alterna-
+tives (or conﬁgurations) without making any assumptions about the workload. Analysis
+shows that the algorithm provides a minimum level of guarantee of adapting to changes
+in the workload. Current tools provide such guarantees only for two conﬁgurations.
+
+Our algorithms assume a general transition cost model in which transition costs
+between conﬁgurations are asymmetric and positive. This is in contrast to current works
+for index design, which assume a constant cost of creating a physical design structure
+and zero cost of deleting them [8]. We validate our model through experiments and
+show that transition costs are asymmetrical and the asymmetry is bounded by a constant
+factor.
+
+We develop a novel “cache-and-reuse” technique for query cost estimation. The
+technique caches distinct query plans that do not change across several conﬁgurations
+and reuses the plans for estimating query costs. By reusing cached plans, the technique
+minimizes computationally-intensive optimizer invocations by as much as 90%. Current
+tools, both ofﬂine and online, employ no such methods for query estimation and are
+therefore much slower to run. We also develop the ﬁrst-known technique, based on
+bulk-inserts, for estimating the cost of transitioning from one conﬁguration to another.
+In current online tools, transition costs are either ﬁxed or assigned arbitrarily.
+
+Our online vertical partitioning techniques have applicability beyond the automa-
+tion of curated relational databases. For example, our algorithm for the regrouping of
+columns can also be used (along with necessary cost estimation procedures) to provide
+automation in databases using column-store [9]. In particular, the algorithm is inde-
+pendent of whether the database is implemented as a row-store or a column-store. The
+techniques also have applicability in schema design of proxy database caches. We re-
+cently showed that inefﬁciencies in the physical design of cached objects often offsets
+
+some of the beneﬁts of deploying a cache. Automated physical design techniques can
+recoup some of that loss [10].
+
+2 Related Work
+
+Automated physical design tools use cost estimates from the optimizer or analytical I/O
+cost-based models to evaluate attribute groupings [1–3] for a given query workload.
+These solutions are ofﬂine, i.e., they assume a priori knowledge of the entire workload
+stream and therefore provide a single, static physical design for the entire workload.
+
+Current research [7, 8] emphasizes the need for automated design tools that are
+always-on and, as new queries arrive, continuously adapt the physical design to changes
+in the workload [11]. Quiet [6] describes an incremental adaptive algorithm for index
+selection which is not fully integrated with the optimizer. In Colt [7], Schnaitter et al.
+present a similar algorithm which relies heavily on the optimizer for cost estimation.
+Both approaches do not take into account transition costs. Bruno et al. present a formal
+approach to online index selection [8] that takes into account transition costs. Their al-
+gorithms are limited to choosing among conﬁgurations in which the only difference is
+the set of indices being used. Our core algorithm is general purpose in that physical de-
+sign decisions are not limited to index selection. In this paper, the system is developed
+for conﬁgurations that are vertical partitions. We also assume that transition costs are
+asymmetric which is not the case in [8].
+
+Our formulation is similar to that of task systems introduced by Borodin et al. [12].
+Task systems have been researched extensively, particularly when the transition costs
+form a metric [12]. Our costs are not symmetric and do not form a metric. This asymme-
+try in transition costs exists because the sequence of operations (i.e. insertion or deletion
+of tables or columns) required for making physical design changes in a database ex-
+hibit different costs. The Work-Function algorithm [13] is an online algorithm for such
+asymmetrical task systems, but it is impractical with respect to the efﬁciency goals of
+AdaptPD. The algorithm solves a dynamic program with each query that takes θ(N 2)
+time, even in the best case, in which N is the number of conﬁgurations. In AdaptPD
+we present a simpler algorithm that takes O(N ) time at each step in the worst case.
+
+Read-optimized column-stores have been used for commercial workloads with con-
+siderable success [9, 14]. They perform better than row-stores by storing compressed
+columns contiguously on disk. Column-stores, however, pose several hurdles for SDDS
+implementation. The implementation is well-optimized for commercial row-store databases
+on existing workloads and a complete migration to column-store is prohibitively expen-
+sive. Moreover, it consists of mostly ﬂoating point data that are not compressible using
+the RLE and bitmap compression schemes used by column-stores, thereby eliminating
+a crucial advantage of column-store. Our solution is an intermediate step at the storage-
+layer that performs workload-based regrouping of columns on a row-store and avoids
+increased tuple reconstruction cost associated with a column-store.
+
+Our query cost estimation module is similar to other conﬁguration parametric query
+optimization techniques, such as INUM [15], and C-PQO [16]. These techniques ex-
+ploit the fact that the plan of a query across several conﬁgurations is an invariant and
+can be reused to reduce optimizer calls. These techniques reuse the plans when conﬁg-
+urations are limited to sets of indices on tables. In this paper, we extend plan reuse to
+conﬁgurations that correspond to vertical partitions of tables.
+
+3 The AdaptPD Tool
+
+Fig. 1. Components of AdaptPD
+
+The AdaptPD tool automates several tasks of a DBA. The DBA often performs the
+following tasks to maintain a workload-responsive physical design: a) Identiﬁes when
+workload characteristics have changed signiﬁcantly such that the current physical de-
+sign is no longer optimal. b) Chooses a new physical design such that excessive costs
+are not incurred in moving from the current physical design, relative to the beneﬁt. The
+AdaptPD tool performs these tasks in an integrated fashion by continuously monitor-
+ing the workload at the granularity of a query; DBAs often monitor at the granularity
+of thousands of queries. It uses cost-beneﬁt analysis to decide if the current physical
+design is no longer efﬁcient and a change is required. The tool consists of three compo-
+nents from Figure 1: the core algorithm behind adaptive physical design (Section 4), a
+cost estimator (Section 5), and a conﬁguration manager (Section 6).
+
+The core algorithm solves an online problem in which the objective is to adaptively
+transition between different database conﬁgurations in order to minimize the total costs
+in processing a given query sequence. Given a data model, let D = {o1, . . . , on} be
+the set of all possible physical design structures that can be constructed, which includes
+vertical partitions of tables, materialized views, and indices1. A database instance is a
+combination of physical design structures subject to a storage size constraint T and is
+termed as a conﬁguration. Let S = {S1, . . . , SN } be the set of all possible conﬁgu-
+rations on D. The cost of processing a query q in a conﬁguration Si is denoted q(Si)
+(if q cannot be processed in Si we set q(Si) = ∞). Often it is necessary to change
+conﬁgurations to reduce query processing costs. The cost for transitioning between any
+two given conﬁgurations is given by the function d : S × S → (cid:60)+. d is any function
+that satisﬁes the following properties:
+1. d(Si, Sj) ≥ 0, ∀i (cid:54)= j, Si, Sj ∈ S (positivity);
+2. d(Si, Si) = 0, ∀i ∈ S (reﬂexivity); and
+3. d(Si, Sj) + d(Sj, Sk) ≥ d(Si, Sk), ∀Si, Sj, Sk ∈ S (triangle inequality)
+In particular, d does not satisfy the symmetry property, i.e., ∃Si, Sj ∈ S d(Si, Sj) (cid:54)=
+d(Sj, Si). This asymmetry in transition costs exists because the sequence of operations
+
+1 In [11], physical design structures are referred to as access paths.
+
+Core AlgorithmCost EstimationConﬁg. ManagerList of conﬁgs.QueryWhat-if scenariosDBMSOptimizerStatisticsQueryPhysical DesignRecommendationsQueryOnline AdaptPDTool(i.e. insertion or deletion) required for making physical design changes in a database
+exhibit different costs.
+
+Given σ = q1, . . . , qn, a ﬁnite sequence of queries, the objective in AdaptPD is
+to obtain a sequence of conﬁgurations S = (S0, S1, ..., Sn), Si ∈ S such that the total
+cost of σ under S is minimized. The total cost is deﬁned as
+
+cost(σ, S) =
+
+qi(Si) +
+
+d(Si, Si+1),
+
+(1)
+
+n
+(cid:88)
+
+i=1
+
+n−1
+(cid:88)
+
+i=0
+
+in which the ﬁrst term is the sum of costs of each query in σ under the corresponding
+conﬁguration and the second term is the total cost to transition between conﬁgurations
+in S. Note, if Si+1 = Si there is no real change in the conﬁguration schedule and
+no transition cost is incurred. An ofﬂine optimal algorithm OPT knows the entire σ
+and obtains a conﬁguration schedule S with the minimum cost. An online algorithm
+ALG for AdaptPD determines S = (S0, ..., Sn) without seeing the complete work-
+load σ = (q1, ..., qn). Thus ALG determines each physical conﬁguration Si, based on
+the workload (q1, ..., qi) seen so far and makes no assumptions about the future work-
+load.
+
+In this paper we focus on conﬁgurations that arise from different vertical partitions
+in the data model [1]. Let R = {R1, . . . , Rk} be the given set of relations in the data
+model. Each conﬁguration S ∈ S now consists of a set of fragments F = {F1, . . . , FN }
+that satisﬁes the following two conditions: (1) every fragment Fi consists of an identiﬁer
+column and a subset of attributes of a relation Rj ∈ R; and (2) each attribute of every
+relation Rj is contained in exactly one fragment Fi ∈ F , except for the primary key.
+4 Algorithms in AdaptPD
+In this section we describe two online algorithms for the AdaptPD tool: OnlinePD and
+HeuPD. OnlinePD provides a minimum level of performance guarantee and makes no
+assumptions about the incoming workload. HeuPD is greedy and adapts quickly to
+changes in the incoming workload.
+
+4.1 OnlinePD
+
+We present OnlinePD, which achieves a minimum level of performance for any work-
+load. In particular, we show its cost is always at most 8(N − 1)ρ times that of the
+optimal algorithm, where N is the total number of conﬁgurations in the set S and ρ
+is the asymmetry constant of S. Further, to achieve this performance, OnlinePD does
+not need to be trained with a representative workload. OnlinePD is an amalgamation
+of algorithms for two online sub-problems: (1) the on-line ski rental problem and (2)
+the online physical design problem in which the cost function d(·) is symmetrical. We
+ﬁrst describe the sub-problems and their known algorithms. The subsection after that
+describes OnlinePD and proves the bound on its performance.
+
+Related Problems: Online ski rental is a classical rent-or-buy problem. A skier, who
+does not own skis, needs to decide before every skiing trip that she makes whether
+she should rent skis for the trip or buy them. If she decides to buy skis, she will not
+
+have to rent for this or any future trips. Unfortunately, she does not know how many
+ski trips she will make in future, if any. This lack of knowledge about the future is
+a deﬁning characteristic of on-line problems [17]. A well known on-line algorithm for
+this problem is rent skis as long as the total paid in rental costs does not match or exceed
+the purchase cost. Irrespective of the number of future trips, the cost incurred by this
+online algorithm is at most twice that of the optimal ofﬂine algorithm.
+
+If there were only two conﬁgurations and the cost function d(·) satisﬁes symme-
+try, the OnlinePD problem will be nearly identical to online ski rental. Staying in the
+current conﬁguration corresponds to renting skis and transitioning to another conﬁgu-
+ration corresponds to buying skis. Since the algorithm can start a ski-rental in any of the
+states, it can be argued that this leads to an algorithm that cost no more than four times
+the optimal.
+
+Fig. 2. Example of conversion from asymmetric transition costs to symmetric costs.
+
+In larger number of conﬁgurations, the key issue in establishing a correspondence
+with the online ski rental problem is in deciding which conﬁguration to compare with
+the current one. When the costs are symmetrical, Borodin et. al [12] use components
+instead of conﬁgurations to perform an online ski rental. In particular, their algorithm
+recursively traverses one component until the query execution cost incurred in that com-
+ponent is approximately that of moving to the other component. A decision is then made
+to move to the other component (traversing it recursively) before returning to the ﬁrst
+component and so on. To identify the components, they consider a complete, undirected
+graph G(V, E) on S in which V represents the set of all conﬁgurations, E represents the
+transitions, and the edge weights are the transition costs. By ﬁxing a minimum spanning
+tree (MST) on G, components are recursively determined by pick the maximum weight
+edge in the MST and removing it. This partitions all the conﬁgurations into two smaller
+components and the MST into two smaller trees. The traversal is deﬁned in Algorithm
+2.
+
+This algorithm is shown to be 8(N − 1)-competitive [12]. Recall, ALG is said to
+be α-competitive if there exists a constant b such that for every ﬁnite query sequence σ,
+
+cost(ALG on σ) ≤ α ∗ cost(OPT on σ) + b.
+
+(2)
+
+OPT is the ofﬂine optimal that has complete knowledge of σ. OnlinePD extends the
+above algorithm to solve the one online physical design problem in which costs are
+asymmetrical. It does so by transforming its complete, directed graph on S and d(·) into
+a complete, undirected graph and applying any algorithm for the online physical design
+problem in which costs are symmetrical. We describe the transformation in OnlinePD
+
+BAC10110103020BAC(a)(b)1010106and use Borodin’s algorithm to show that the transformation increases the cost at most
+8(N − 1)ρ times of the optimal.
+
+Transformation in OnlinePD When there are only two conﬁgurations, a simple
+transformation in which graph edges are replaced by the sum of transition costs gives
+a 3-competitive algorithm. We show this in [10]. However, adding transition costs pro-
+vides poor bounds for an N node graph. In order to achieve better competitive perfor-
+mance, we transform the directed graph into a undirected graph as follows:
+
+Let G(cid:48) be the directed graph. In G(cid:48), replace every pair of directed edges (u, v)
+and (v, u) with an undirected edge (u, v) and a corresponding transition cost equal to
+(cid:112)d(u, v).d(v, u) irrespective of the direction. This transforms G(cid:48) into H. H has the
+following two properties because of the transformation: a) If p is a path in H and p(cid:48)
+is the corresponding path in G(cid:48) (in any one direction), then the inequality cost(p)
+ρ ≤
+cost(p(cid:48)) ≤
+ρcost(p) is always true. The inequality allows us to bound the error in-
+troduced by using H instead of G(cid:48). b) H violates the triangle inequality constraint.
+This is shown by a simple three-node example in Figure 2(a). In this example, a three
+node directed, fully connected graph with ρ = 10 is transformed to an undirected graph
+in Figure 2(b). The resulting triangle does not obey triangle inequality. OnlinePD ex-
+ploits the fact that Borodin’s algorithm constructs an MST, which makes it resilient to
+the triangle inequality violation.
+
+√
+
+√
+
+Algorithm 1 details OnlinePD, which uses the Algorithm 2 as a subroutine. To
+construct the traversal before processing queries, the MST is built on a graph in which
+edge weights are rounded to the next highest power of two. Let the maximum rounded
+weight in the MST, denoted by F in the Algorithm 1, be 2M . We next establish the
+proof using F .
+
+Input: Directed Graph: G(V, Eo) with weights corresponding to d(·), Query Sequence: σ
+Output: Vertex Sequence to process σ: u0, u1, . . .
+Transform G to undirected graph H(V, E) s.t. ∀(u, v) ∈ E weight
+dH (u, v) ← (cid:112)d(u, v) · d(v, u);
+Let B(V, E) be the graph H modiﬁed s.t. ∀(u, v) ∈ E weight dB(u, v) ← dH (u, v)
+rounded to next highest power of 2;
+Let F be a minimum spanning tree on B;
+T ← traversal(F );
+u ← S0;
+while there is a query q to process do
+
+c ← q(u);
+Let v be the node after u in T ;
+while c ≥ dB(u, v) do
+c ← c − dB(u, v);
+u ← v;
+v ← the node after v in T ;
+
+end
+Process q in u;
+
+end
+
+Algorithm 1: OnlinePD(G)
+
+Input: Tree: F (V, E)
+Output: Traversal for F : T
+if E = {} then
+
+T ← {};
+
+else if E = {(u, v)} then
+
+else
+
+Return T : Start at u, traverse to v, traverse back to u;
+
+Let (u, v) be a maximum weight edge in E, with weight 2M ;
+On removing (u, v) let the resulting trees be F1(V1, E1) and F2(V2, E2), where
+u ∈ V1, and v ∈ V2;
+Let maximum weight edges in E1 and E2 have weights 2M1 and 2M2 respectively;
+T1 ← traversal(F1);
+T2 ← traversal(F2);
+Return T : Start at u, follow T1 2M −M1 times, traverse (u, v), follow T2 2M −M2
+times, traverse (v, u);
+
+end
+
+Algorithm 2: traversal(F )
+
+Lemma 1. Any edge in T of rounded weight 2m is traversed exactly 2M −m times in
+each direction.
+
+Proof. We prove by induction on the number of edges in F . For the base case, there
+are no edges in F , and the lemma is trivially true. For the inductive case, let (u, v) be
+the maximum weight edge in F used in traversal(·), and similarly let F1 and F2 be
+the trees obtained by removing (u, v). Now the edge (u, v) is traversed exactly once
+in each direction as required by the lemma. By the inductive hypothesis, each edge
+of F1 of rounded weight 2m is traversed exactly 2M1−m times in each direction in
+the traversal T1, in which M1 is the maximum rounded weight in F1. Since T includes
+exactly 2M −M1 traversals of T1, it follows that each such edge is traversed 2M −m times
+in each direction in T . The same reasoning applies to edges in F2.
+
+Theorem 1 Algorithm OnlinePD is 4(N − 1)(ρ +
+problem with N conﬁgurations and asymmetry constant ρ.
+
+√
+
+ρ)-competitive for the OnlinePD
+
+Proof. We shall prove that during each traversal of F , the following two statements are
+true: (i) the cost of OnlinePD is at most 2(N − 1)2M (1 +
+ρ), and (ii) the cost of
+the ofﬂine optimal is at least 2M −1/
+ρ. The theorem will then follow as the cost of
+OnlinePD during any single traversal is constant with respect to the length of σ. We
+prove (i) following Lemma 1 and we prove (ii) from induction. The complete proof
+appears in the Appendix.
+
+√
+
+√
+
+The bound of 8(N − 1)ρ in OnlinePDis only a worst case bound. In our exper-
+iments, OnlinePD performs much better than best known ofﬂine algorithms for this
+problem and tracks closely with the workload adaptive algorithm HeuPD.
+
+4.2 HeuPD
+
+HeuPD chooses between neighboring conﬁgurations greedily. The current conﬁgura-
+tion in HeuPD ranks its neighboring conﬁgurations based on the estimated query ex-
+ecution costs in the neighboring conﬁgurations. HeuPD keeps track of the cumulative
+
+penalty of remaining in the current conﬁguration relative to every other neighboring
+conﬁguration for each incoming query. A transition is made once HeuPD observes that
+the beneﬁt of a new conﬁguration exceeds a threshold. The threshold is deﬁned as the
+sum of the costs of the most recent transition and next transition that needs to be made.
+HeuPD is described in detail in [10] and presented brieﬂy here as an alternative al-
+gorithm in AdaptPD. AdaptPD combines HeuPD with cost-estimation procedures
+described in this paper.
+
+Let x ∈ S be the current conﬁguration and y ∈ S be the neighboring conﬁguration
+in which y (cid:54)= x. Deﬁne δy
+max(k) as the maximum cumulative penalty of remaining in
+x rather than transitioning to y at query qk (the penalty of remaining in x for qk is
+qk(x) − qk(y)). In HeuPD, this transition threshold is a function of the conﬁguration
+immediately prior to x and the alternative conﬁguration being considered. Let z be the
+conﬁguration immediately prior to x in which the threshold required for transitioning
+to an alternative conﬁguration y is d(z, x) + d(x, y). The decision to transition to a
+new conﬁguration is greedy; that is, HeuPD transitions to the ﬁrst conﬁguration y that
+satisﬁes δy
+5 Cost Estimation in AdaptPD
+OnlinePD and HeuPD require O(N logN ) time and space for pre-processing and
+O(N ) processing time per query. In this section we describe techniques to reduce N .
+However reducing N is not sufﬁcient for efﬁcient operation. Physical design tools in-
+cur signiﬁcant overhead in estimating query costs by optimizing each query. Transition
+costs are often assigned arbitrarily, providing no correlation between the considered
+costs and actual time required to make transitions. In this section we describe tech-
+niques that provide accurate and efﬁcient cost estimation for vertical partitioning.
+
+max(k) > d(z, x) + d(x, y).
+
+5.1 Transition Cost Estimation
+We present an analytical transition model that estimates the cost of transitions between
+conﬁgurations. In an actual transition, data is ﬁrst copied out of a database and then
+copied into new tables according to the speciﬁcation of the new conﬁguration. Gray
+and Heber [18] recently experimented with several data loading operations in which
+they observed that SQL bulk commands such as BULK INSERT command in SQL
+Server work much like standard bulk copy (bcp) tools but are far more efﬁcient than
+bcp as it runs inside the database. We base our analytical model on performance results
+obtained from using BULK INSERT on a 300 column table.
+
+We observe two artifacts of the BULK INSERT operation. First, copying data into
+the database is far more expensive than copying data out of the database. Second, cost
+of importing the data scales linearly with the amount of data being copied into the
+database. The ﬁrst artifact is because data is normally copied out in native format but
+is loaded into the database with type conversions and key constraints. The linear scal-
+ing is true because BULK INSERT operations mostly incur sequential IO. Using these
+artifacts, we model the cost of importing a partition P
+
+BCP (P ) = cRP WP + kRP
+
+(3)
+
+in which RP is the number of rows in a partition, WP is the sum of average column
+widths, c is the per byte IO cost of copying data into the database and k is the per row IO
+
+cost of constructing the clustered primary key index. Thus, the estimated cost is the sum
+of importing all the data and the cost of creating a clustered primary index. The cost of
+creating an index is linear due to a constant overhead with each new insert. Constants
+c and k are system dependent and can be easily determined using regression on few
+“sample” BULK INSERT operations. In this model, we assume no cost for transaction
+logging, which is routinely disabled for fast copy.
+
+The transition cost model uses Equation 3 to model the cost of moving from a con-
+ﬁguration Si to another conﬁguration Sj. Let conﬁguration Si consists of partitions
+{T1i,...,Tmi}, Sj consists of partitions {T1j,...,Tnj} and ∆ij be the partition set differ-
+ence {T1j,...,Tnj} - {T1i,...,Tmi}, The cost of transition from Si to Sj can be computed
+as:
+
+d(Si, Sj) =
+
+BCP (t)
+
+(4)
+
+(cid:88)
+
+t∈∆ij
+
+5.2 Query Cost Estimation
+We present an efﬁcient and yet accurate technique for estimating query costs across
+several conﬁgurations. The technique is based on the idea that cached query plans can
+be reused for query cost estimation. The traditional approach of asking the optimizer
+for the cost of each query on each conﬁguration is well-known to be very expensive
+[15]. By caching and reusing query plans, the technique avoids invoking the optimizer
+for cost estimation and achieves an order of magnitude improvement in efﬁciency. To
+maintain high accuracy, the technique relies on recent observations that the plan of a
+query across several conﬁgurations is an invariant. By correctly determining the right
+plan to reuse and estimating its cost, the technique achieves the complementary goals
+of accuracy and efﬁciency. We describe conditions under which plans remain invariant
+across conﬁgurations and therefore can be cached for reuse. We then describe methods
+to cache the plans efﬁciently and methods to estimate costs on cached plans.
+Plan Invariance: We illustrate with an example when the plan remains invariant across
+conﬁgurations and when it does not. Figure 3 shows three different conﬁgurations
+S1, S2, S3 on two tables T1(a,b,c,d) and T2(e,f,g,h) with primary and join
+keys as a and e, respectively. Consider a query q that has predicate clauses on c and
+d and a join clause on a and e: select T1.b, T2.f from T1, T2 where
+T1.a = T2.e and T1.c > 10 and T1.d = 0. Let the query be optimized in
+S1 with the shown join methods and join orders. The same plan is optimal in S2 and can
+be reused. This is because S2’s partitions with respect to columns c and d are identical
+to S1’s partitions. In S3, however, the plan cannot be used as columns c and d are now
+merged into a single partition. This is also reﬂected by the optimizer’s choice which
+actually comes with a different plan involving different join methods and join orders.
+
+Plan invariance can be guaranteed if the optimizer chooses to construct the same
+
+plan across different conﬁgurations.
+
+Theorem 1. The optimizer constructs the same query plan across two conﬁgurations
+S1 and S2, if the following three conditions are met:
+
+1. Conﬁgurations have the same number of partitions with respect to all columns
+
+mentioned in the query.
+
+2. The division of the predicate columns in S1 and S2 is exactly the same.
+
+Fig. 3. Plan reuse across several conﬁgurations. (Estimated cost of operations and the plan are for
+illustration only.)
+
+3. If δ(S1) and δ(S2) deﬁne the page size distributions of S1 and S2 respectively, then
+dist(δ(S1), δ(S2)) < (cid:15). Where dist function determines the distance between two
+page distributions, and (cid:15) is a DBMS dependent constant.
+
+Condition 1 guarantees the same number of joins in the plan for any two conﬁgurations.
+For instance, in the previous example, if S2 partitions T1 into three partitions, then the
+optimizer joins twice instead of once to reconstruct the rows of the original table. Since
+the resulting plan is different from that on S1, plan reuse cannot be guaranteed. If,
+however, the query does not select on b, then the same plan can still be reused.
+
+Condition 2 guarantees similar cardinality of the intermediate join results so that the
+optimizer selects the same join order and the same join method to ﬁnd the optimal plan.
+Condition 2 is illustrated in Figure 3 in which keeping c and d in different partitions
+leads to a merge joins in S1 and S2. A hash join is preferred in S3 when c and d are
+grouped together.
+
+Condition 3 avoids comparing drastically different conﬁgurations in terms of page
+distribution. The dist function can be a standard distribution distance, such as KL-
+divergence [19], and (cid:15) can be determined by experimenting over large number of plans
+on a DBMS. That is if a large table, with say 100 columns, has two conﬁgurations
+and if in the ﬁrst conﬁguration partitions are of uniform sizes, (i.e. two partitions with
+each partition containing 50 columns) and in the second conﬁguration partitions are
+highly skewed (i.e. one partition has one column and the second has all the remaining
+columns), then the optimizer does not construct the same plan. In particular, the opti-
+mizer prefers to join equi-sized partition tables earlier and delays joining skewed tables
+as long as possible. Hence reusing the plan of one conﬁguration for the other provides
+inaccurate results.
+
+If above three conditions are satisﬁed, we prove by contradiction that the optimizer
+generates the same plan for any given two conﬁgurations. Suppose the join method and
+join order for Si is J1 and for Sj is J2. By our assumption, J1 and J2 are different.
+Without loss of generality, let J1 costs less than J2 if we ignore the costs of scanning
+partitions. Since the conﬁgurations Si and Sj have the same orders (primary key orders
+for all partitions), select the same number of rows from the partitions, and the page size
+of the ﬁltered rows are similar, J1 can still be used for Sj. Since using J1 reduces the
+total cost for running the query on Sj, it implies that J2 is not the optimal plan, which
+contradicts our assumption that J2 is part of the optimal plan.
+
+HashMergeT11T12T2(a,b,c)(a,d)6040204080Total Cost = 240HashMergeT11T12T2(a,c)(a,b,d)4565204080Total Cost = 250HashHashT11T2T12(a,c,d)605050Total Cost = 2804080(a,b)Config S1Config S2Config S3The Plan Cache: We cache the query plan tree with its corresponding join methods,
+join-orders, and partition scans. The actual costs are not cached as they vary across
+conﬁgurations. In the cache, the stripped plan tree is uniquely identiﬁed by the string
+<query id, partition list, page distribution>. The ﬁrst part of the string identiﬁes
+the query for which the plan is cached, the second part speciﬁes the list of partitions in
+which columns in the predicate clause of the query occur, and the third part speciﬁes
+the page distribution of each partition.
+
+Fig. 4. The plan for S1 cached with the key [query − id, T 1((c), (d)), T 1(128, 64)] on the left.
+On the right is the estimated plan for the new conﬁguration S2, with the partitions and estimated
+costs.
+
+Cost Estimation: Cost estimation involves accurate estimation of partition scan costs
+and join costs. Thus given a new conﬁguration, we ﬁrst retrieve its corresponding plan
+from the cache using the key and then estimate the costs of partition scans and join
+methods. Partition scan costs are estimated by computing the average cost of scanning
+the partition in the cached plan and multiplying it with actual size of partition in the
+new conﬁguration. Thus if c is the I/O cost of the scanning operation in the cached
+plan, and s0 is the size of the vertical partition in the cached plan, the cost of partition
+scan in the new conﬁguration is estimated as f = c × s
+. In this s is the size of the
+s0
+new partition. To estimate the cost for joining partitions using the join methods from
+the cache, we adopt the System-R’s cost model, developed by Selinger et al. [20]. The
+System-R cost model gives us an upper bound on the actual join costs, and according
+to our experiments predicts the plan cost with 98.7% accuracy on average.
+6 Choosing the Conﬁguration Space
+The space of all potential conﬁgurations is exponential, therefore, any practical system
+needs to apply domain knowledge to choose a conﬁguration sub-space that is tractable
+in size. Several recent studies describe pruning methods to reduce the space [1–3]. We
+choose a method based on observations on Astronomy workloads which are template-
+based and can be summarized compactly through query prototypes [5]. (Note, workload
+evolution still occurs as the set of templates change over time). A query prototype is
+deﬁned as the set of all attributes a query accesses such that queries with identical
+prototypes make up an equivalence class in the workload.
+
+Candidate conﬁgurations are generated as new query prototypes appear in the work-
+load sequence. Given a table T1(a,b,c,d,e) (a is the primary key) and a prototype
+P1 = (a,c), we generate a candidate conﬁguration for P1 corresponding to tables
+
+HashMergeT1(c)T1(d)T2HashMergeT11T12T2(a,c)(a,b,d)65*20*40*45*80*Cached plan structurePlan for a matching configurationT2(a,c) and T3(a,b,d,e). Thus, each candidate is optimized for the scan cost of
+a speciﬁc class of queries. We also merge non-overlapping prototypes to generate new
+candidates. For example, given prototype P2 = (a,b), we generate a candidate from
+both P1 and P2 consisting of tables T4(a,c), T5(a,b), and T6(a,d,e). The in-
+tuition comes from enumeration-based, ofﬂine vertical partitioning algorithms [1, 21] in
+which candidates are enumerated by coalescing groups of columns in existing conﬁgu-
+rations in a pairwise manner. Resulting candidates gradually reduce the expected total
+query execution cost for the workload. We plan to examine the affect of other pruning
+strategies in more detail in future.
+
+7 Experiments
+We implement our online partitioning algorithms and cost estimation techniques in the
+Sloan Digital Sky Survey (SDSS)[4], an Astronomy database. We describe the exper-
+imental setup in detail before presenting our main results. This includes analysis of
+workload evolution over time, performance of various online and ofﬂine algorithms,
+and accuracy of our cost estimation modules.
+
+7.1 Experimental Setup
+
+Fig. 5. Afﬁnity matrix (co-access frequency) for ten select attributes from the P hotoObjAll
+table.
+
+Workload Characteristics: We use a month-long trace from SDSS consisting of
+1.4 million read-only queries. The queries consist of both simple queries on single tables
+and complex queries joining multiple tables. Despite a large number of queries, the
+workload is deﬁned by a small number of query prototypes. For instance the 1.4 million
+trace is characterized by as few as 1176 prototypes. However, fewer prototypes does not
+indicate a lack of workload evolution. On the contrary, there is considerable evolution
+in the workload in that new prototypes are introduced continually and prior prototypes
+may disappear entirely from subsequent queries in the workload sequence.
+
+Figure 5 captures workload evolution for the ﬁrst three weeks of the trace. It shows
+the afﬁnity matrix for ten attributes from a single table in which each grid entry corre-
+sponds to the frequency with which a pair of attributes are accessed together (ordering
+of attributes are the same along the row and column). The basic premise is that columns
+that occur together and have similar frequencies should be grouped together in the same
+relation [22]. The results show that column groupings change on a weekly basis. An
+online physical design tool which continuously monitors the workload can evaluate
+whether transitioning to a new conﬁguration will lead to a improvement in overall cost.
+
+Data Release 3Frequency900045000exprad_rmodelmag_uflagsextinction_uobjtypecamcolcxrzMay 2006July 2006Week 1Week 2Week 3Comparison Methods: We contrast the performance of OnlinePD with several
+online and ofﬂine algorithms. OnlinePD has polynomial-time complexity and ﬁnds
+the minimal spanning tree using the Prim’s algorithm. It is a general algorithm in that
+it makes no assumptions about the workload. However, this generality comes at a cost.
+Namely, given some knowledge about the characteristics of a speciﬁc workload, we can
+design highly tuned workload adaptive algorithms. To measure the cost of generality, we
+compare OnlinePD with HeuPD (Section 4.2). We also compare against AutoPart,
+an existing, ofﬂine vertical partitioning algorithm. AutoPart is presented with the
+entire workload as input during initialization. This incurs an initial overhead to pro-
+duce a physical design layout for the workload, but it can service the workload with no
+further tuning. Since AutoPart is not adaptive, it does not produce the optimal phys-
+ical layout. AutoPartPD is another physical design strategy that employs the ofﬂine
+AutoPart algorithm. It is online in that it reruns AutoPart on a daily basis and it is
+prescient in that the workload for each day is provided as input to the algorithm a priori.
+This provides a lower query response time compared with AutoPart in exchange for
+one transition at the beginning of each day. Finally, NoPart serves as the base case in
+which no vertical partitioning is used.
+
+Costs:
+The transition costs are estimated using the analytical model each time a new
+template is introduced. The estimates show that the asymmetry constant (Section 4) ρ
+is bounded and its maximum value is approximately 3.25. The model itself estimates
+the transition costs with 87% accuracy in which transition costs are considered accurate
+if they are within 10% of the actual costs. Query cost estimation is done using the cache
+and reuse technique, which provides 94% accuracy in our experiments.
+
+Database:
+For I/O experiments, we execute queries against a ﬁve percent sample
+(roughly 100GB in size) of the DR4 database. Although sampling the database is less
+than ideal, it is necessary to ﬁnish I/O experiments in a reasonable time for real work-
+loads. Given the time constraints, we compromised database size in order to accom-
+modate a larger workload, which captures workload evolution over a longer period. To
+sample the database, we ﬁrst sample the fact table consisting of all celestial objects
+(P hotoObjAll) and then sample the remaining tables through foreign key constraints.
+
+The data is stored in Microsoft’s SQL Server 2000 on a 3GHz Pentium IV work-
+station with 2GB of main memory and two SATA disks (a separate disk is assigned for
+logging to ensure sequential I/O). Microsoft SQL Server does not allow for queries that
+join on more than 255 physical tables. This is required in extreme cases in which the
+algorithm partitions each column in a logical relation into separate tables. Hammer and
+Namir [21] show that between the two conﬁgurations with each column stored sepa-
+rately or all columns stored together, the preferred conﬁguration is always the latter. In
+practice, this conﬁguration does not arise because the cost of joining across 255 tables
+is so prohibitive that our algorithm never selects this conﬁguration. Finally, to reduce
+the large number of conﬁgurations, we do not partition tables than are less than 5% of
+the database size. This leads to a large reduction in the number of conﬁgurations with
+negligible impact on I/O performance beneﬁt. Some other heuristics for reducing N are
+described in the technical report [23]. The total number of conﬁgurations were about
+5000 for 1176 prototypes.
+
+(a) SDSS Workload
+
+(b) Adversarial Workload
+
+Fig. 6. Distribution of response time overhead.
+
+Performance Criteria: We measure the cost of the algorithms in terms of average
+response time of queries executed in SDSS. This is the measure from the time a query
+is submitted until the results are returned. If a transition to a new conﬁguration is nec-
+essary, the algorithm undergoes a transition before executing the query. This increases
+the response time of the current query but amortizes the beneﬁt over future queries. Our
+results reﬂect average response time over the entire workload.
+
+7.2 Results
+
+We compute the query performance by measuring its response time on the proxy cache
+using the sampled database. Figure 6(a) provides the division of response time for query
+execution, cost estimation using the optimizer, and transitions between conﬁgurations.
+(The total response time is averaged over all queries). OnlinePD improves on the per-
+formance of NoPart by a factor of 1.5 with an average query execution time of 991
+ms. Not surprisingly, HeuPD, which is tuned speciﬁcally for SDSS workloads, fur-
+ther improves performance by 40% and exhibits two times speedup over NoPart. This
+improvement is low considering that OnlinePD is general and makes no assumptions
+regarding workload access patterns. NoPart suffers due to higher scan costs associated
+with reading extraneous columns from disk. Likewise, AutoPart suffers by treating
+the entire workload as an unordered set of queries and providing a single, static conﬁgu-
+ration during initialization. Even AutoPartPD did not improve response time beyond
+the ofﬂine solution because the beneﬁts of periodic physical design tuning is offset
+by high, daily transition costs. Thus, adapting ofﬂine solutions such as AutoPart to
+evolving workloads is challenging because they do not continuously monitor for work-
+load changes nor account for transition cost in tuning decisions.
+
+Another interesting feature of the results is that OnlinePD incurs much lower tran-
+sition costs than HeuPD. This artifact is due to the conservative nature of OnlinePD.
+It evaluates only two alternatives at a time and transitions only if it expects signiﬁ-
+cant performance advantages. On the other hand, HeuPD responds quicker to workload
+changes by evaluating all candidate conﬁgurations simultaneously and choosing a con-
+ﬁguration that beneﬁts the most recent sequence of queries. This optimism of HeuPD
+is tolerable in this workload but can account for signiﬁcant transition costs in workloads
+that change more rapidly relative to SDSS. To appreciate the generality of OnlinePD
+over a heuristic solution, we evaluated a synthetic SDSS workload that is adversarial
+
+with respect to HeuPD in Figure 6(b). In particular, the workload is volatile and ex-
+hibits no stable state in the access pattern, which causes HeuPD to make frequent,
+non-beneﬁcial transitions. As a result, Figure 6(b) shows that OnlinePD exhibits a
+lower query execution time and a factor of 1.4 improvement overall when compared
+with HeuPD.
+
+Figure 6(a) also shows the average response time of performing cost estimation
+(time spent querying the optimizer). For AutoPart, this is a one-time cost incurred
+during initialization. In contrast, cost estimation is an incremental overhead in OnlinePD
+and HeuPD. HeuPD incurs a ten folds overhead in cost estimation over OnlinePD (43
+ms versus 4 ms). This is because HeuPD incurs 93 calls to the optimizer per query.
+Thus, HeuPD beneﬁts immensely from QCE due to the large number of conﬁgurations
+that it evaluates for each query. Reusing cached query plans allow HeuPD to reduce
+cost estimation overhead by ten folds (from 465 ms to 43 ms) and avoid 91% of calls to
+the optimizer. In fact, without QCE, the total average response time of HeuPD is 1150
+ms, which would lag the response time of OnlinePD by 4 ms. As such, HeuPD scales
+very poorly as the number of alternative conﬁgurations increases. This make OnlinePD
+very attractive for proxy caches which receive a continuous stream of queries and deci-
+sions have to be made rapidly.
+
+Finally, we refer to the average transition cost (cost of changing between conﬁgura-
+tions) from Figure 6(a). AutoPart only incurs a single transition during initialization
+while NoPart incurs no transition cost. AutoPartPD incurs the highest overhead, re-
+quiring a complete reorganization of the database on a daily basis. HeuPD makes 768
+minor conﬁguration changes compared with 92 for OnlinePD which leads to a three
+times per query overhead in transition cost (113 ms compared with 43 ms). Thus, while
+OnlinePD is slower than HeuPD at detecting and adapting to changes in the workload,
+it beneﬁts with fewer transitions that disrupt the execution of incoming queries.
+
+Figure 7 charts the average daily response time (both query execution and tran-
+sition cost) for various physical design strategies normalized to NoPart. Across all
+algorithms, there is signiﬁcant ﬂuctuations in average response times resulting from
+workload changes over time and transition decisions. While all algorithms improve
+on NoPart, AutoPart tracks most closely with NoPart since neither implements
+changes to the physical design after initialization. OnlinePD and HeuPD further im-
+proves response time, but exhibits several performance spikes (most notably on days
+one, six, and thirteen) that perform no better than NoPart. These indicate signiﬁcant
+changes in the workload that cause more transitions to occur that delay completion of
+certain queries. The transition overhead is greatest for OnlinePD and HeuPD on day
+one and remains more stable afterward because at initialization, all tables are unparti-
+tioned.
+
+Figure 8 shows the cumulative distribution function (CDF) of the error in estimating
+costs of queries using QCE instead of calling the optimizer directly. The error in cost
+estimation is determined by computing
+
+(cid:18)
+
+(cid:18)
+
+abs
+
+1 −
+
+QCE est. query cost
+
+(cid:19)(cid:19)
+
+Optimizer est. query cost
+
+(5)
+
+Consider the dashed-line in the plot, which corresponds to the errors in cost estimation
+for all queries. Although the average cost estimation error is only 1.3%, the plot shows
+
+Fig. 7. Average daily response time overhead
+normalized to NoPart.
+
+Fig. 8. The plots for error in estimating the query
+costs using QCE. The dashed line represents all
+queries in the workload, while the solid line rep-
+resents queries with higher than 5 unit cost.
+
+that the maximum error in cost estimation is about 46%, with about 14% of the esti-
+mations with more than 10% error. Inspecting high error estimations reveals that the
+errors occur in queries with estimated costs below 5 optimizer cost units. We plot the
+CDF for errors after removing those light queries, and reducing the workload size by
+52%. The solid line in Figure 8 shows the cost estimation error for these ﬁltered set of
+queries. The maximum error for the ﬁltered queries is about 11%, and about 94% of the
+estimations have less than 5% error.
+
+The inaccuracies in the light queries comes from the approximations discussed in
+Section 5.2. Since the contribution of the light queries to the total workload cost is
+insigniﬁcant compared to the contribution of the heavy queries–only about 4% for our
+workload–the inaccuracy in estimating their costs does not affect the conﬁgurations
+selected by our algorithm.
+
+8 Summary and Future Work
+In this paper, we have presented AdaptPD, a workload adaptive physical design tool that
+automates some of the DBA tasks such as estimating when to tune the current physical
+design and ﬁnding representative workloads to feed the physical design tool. The tool
+quantitatively compares the current conﬁguration with other possible conﬁgurations,
+giving the DBA a good justiﬁcation of the usefulness of the recommended design. Au-
+tomation of such tasks reduces the cost of ownership of large database systems such as
+the SDSS in which physical design tuning is routinely performed by DBAs. Since these
+tools gradually change ownership from DBAs to curators, it is essential to minimize the
+overhead of administration and yet ensure performance similar to a system cared for by
+experienced DBAs.
+
+We have developed novel online techniques that adapt to drastic changes in the
+workload without sacriﬁcing the generality of the solution. The techniques are sup-
+ported by efﬁcient cost estimation modules that make them practical for continuous
+evaluation. Experimental results for the online algorithm show signiﬁcant performance
+improvement over existing ofﬂine methods which have full knowledge about the work-
+load and tracks closely with heuristic solution tuned speciﬁcally for SDSS workloads.
+These tuning tools are not speciﬁc to vertical partitions and can be extended to index
+design, which is our primary focus going forward.
+
+References
+1. Papadomanolakis, S., Ailamaki, A.: AutoPart: Automating Schema Design for Large Scien-
+
+tiﬁc Databases Using Data Partitioning. In: SSDBM. (2004)
+
+2. Agrawal, S., Narasayya, V.R., Yang, B.: Integrating Vertical and Horizontal Partitioning Into
+
+Automated Physical Database Design. In: SIGMOD. (2004)
+
+3. Chu, W.W., Ieong, I.T.: A Transaction-Based Approach to Vertical Partitioning for Relational
+
+Database Systems. IEEE Trans. Software Eng. 19(8) (1993) 804–812
+
+4. http://www.sdss.org: The Sloan Digital Sky Survey
+5. Wang, X., Malik, T., Burns, R., Papadomanolakis, S., , Ailamaki, A.: A Workload-Driven
+
+Unit of Cache Replacement for Mid-Tier Database Caching. In: DASFAA. (2007)
+
+6. Sattler, K.U., Geist, I., Schallehn, E.: QUIET: Continuous Query-Driven Index Tuning. In:
+
+7. Schnaitter, K., Abiteboul, S., Milo, T., Polyzotis, N.: COLT: Continuous On-line Tuning. In:
+
+VLDB. (2003)
+
+SIGMOD. (2006)
+
+8. Bruno, N., Chaudhuri, S.: An Online Approach to Physical Design Tuning. In: ICDE. (2007)
+9. Stonebraker, M., Abadi, D., Batkin, A., Chen, X., Cherniack, M., Ferreira, M., Lau, E., Lin,
+A., Madden, S., O’Neil, E., O’Neil, P., Rasin, A., Tran, N., Zdonik, S.: C-Store: A Column
+Oriented DBMS. In: VLDB. (2005)
+
+10. Malik, T., Wang, X., Burns, R., Dash, D., Ailamaki, A.: Automated Physical Design in
+
+11. Agrawal, S., Chu, E., Narasayya, V.: Automatic Physical Design Tuning: Workload as a
+
+12. Borodin, A., Linial, N., Saks, M.E.: An Optimal Online Algorithm for Metrical Task System.
+
+13. Manasse, M.S., McGeoch, L.A., Sleator, D.D.: Competitive algorithms for server problems.
+
+Database Caches. In: SMDB. (2008)
+
+Sequence. In: SIGMOD. (2006)
+
+J. ACM 39(4) (1992) 745–763
+
+J. Algorithms 11(2) (1990) 208–230
+
+They Really. In: SIGMOD. (2008)
+
+14. Abadi, D., Madden, S., Hachem, N.: Column-Stores Vs. Row-Stores: How Different Are
+
+15. Papadomanolakis, S., Dash, D., Ailamaki, A.: Efﬁcient Use of the Query Optimizer for
+
+Automated Database Design. In: VLDB. (2007)
+
+16. Bruno, N., Nehme, R.: Conﬁguration Parametric Query Optimization for Physical Design
+
+17. Borodin, A., El-Yaniv, R.: Online computation and competitive analysis. Cambridge Uni-
+
+Tuning. In: SIGMOD. (2008)
+
+versity Press, New York, NY, USA (1998)
+
+18. Heber, G., Gray,
+
+Supporting Finite Element Analysis with a Relational
+Database Backend Part
+II: Database Design and Access.
+Technical Report
+http://research.microsoft.com/apps/pubs/default.aspx?id=64571, Microsoft Research (2006)
+
+J.:
+
+19. Kullback, S., Leibler, R.A.: On information and sufﬁciency. Ann. Math. Statistics (1951)
+20. Selinger, P., Astrahan, M., Chamberlin, D., Lorie, R., Price, T.: Access Path Selection in a
+
+Relational Database Management System. In: SIGMOD. (1979)
+
+21. Hammer, M., Niamir, B.: A Heuristic Approach to Attribute Partitioning.
+
+In: SIGMOD.
+
+(1979)
+
+22. Navathe, S., Ceri, S., Wiederhold, G., Dou, J.: Vertical Partitioning Algorithms for Database
+
+Design. ACM Trans. Database Syst. 9(4) (1984) 680–710
+
+23. Malik, T., Wang, X., Dash, D., Chaudhary, A., Ailamaki, A., Burns, R.: Online physical de-
+sign in proxy caches. Technical Report http://hssl.cs.jhu.edu/fedcache/onlinepd, John Hop-
+kins University (2008)
+
+Appendix: Competitiveness of OnlinePD
+Section 4 provides an online algorithm for asymmetrical task systems, by converting the
+asymmetrical undirected transition cost graph into a symmetric graph and then using
+techniques suggested in [12]. In this section, we prove that OnlinePD algorithm is
+O(4ρ(N − 1)) competitive. Reusing the notations from Section 4, in Algorithm 1 we
+construct the graph B by rounding up the cost of edges on the undirected transition
+graph to a power of two. We build an MST on B and call it F . We then build a traversal
+on F using Algorithm 2 and denote that traversal as T . Let the maximum rounded
+weight in the tree F be 2M . The following proof is inspired by the proof in [12]
+Lemma 2. If the maximum edge weight in T is 2M , any edge in T of rounded weight
+2m is traversed exactly 2M −m times in each direction.
+Proof. We prove by induction on the number of edges in F . For the base case, there
+are no edges in F , and the lemma is trivially true. For the inductive case, let (u, v)
+be the maximum weight edge in F used in the traversal(·), and similarly let F1 and
+F2 be the trees obtained by removing (u, v). Now the edge (u, v) is traversed exactly
+once in each direction as required by the lemma. By the inductive hypothesis, each
+edge of F1 of rounded weight 2m is traversed exactly 2M1−m times in each direction in
+the traversal T1, in which M1 is the maximum rounded weight in F1. Since T includes
+exactly 2M −M1 traversals of T1, it follows that each such edge is traversed 2M −m times
+in each direction in T . Exactly the same reasoning applies for edges in F2.
+Theorem 2 Algorithm OPDA is 4(N − 1)(ρ +
+problem with N conﬁgurations and asymmetry constant ρ.
+
+ρ)-competitive for the OnlinePD
+
+√
+
+√
+
+√
+
+Proof. We shall prove that during each traversal of F , the following two statements are
+true: (i) the cost of OPDA is at most 2(N − 1)2M (1 +
+ρ), and (ii) the cost of the
+ofﬂine optimal is at least 2M −1/
+ρ. The theorem will then follow as the cost of OPDA
+during any single traversal is constant with respect to the length of σ.
+
+To prove (i), recall from Lemma 2 that any edge in T of rounded weight 2m is tra-
+versed exactly 2M −m times in each direction. Thus the total rounded weight traversed
+for an edge is 2 · 2M −m · 2m = 2 · 2M . By construction of the algorithm the total pro-
+cessing cost incurred during T at a node just before a traversal of this edge is 2·2M . The
+total transition cost incurred during T in a traversal of this edge is at most 2 · 2M √
+ρ,
+since the cost d(·) can be at most
+ρ times larger than the corresponding dB(·). This
+proves (i) as there are exactly N − 1 such edges.
+
+√
+
+√
+
+ρ) = 2M −1/
+
+We prove (ii) by induction on the number of edges in F . Suppose F has at least
+one edge, and (u, v), F1, and F2 are as deﬁned in traversal(·). If during a cycle of T ,
+OPT moves from some vertex in F1 to some vertex in F2, then since F is a minimum
+spanning tree, there is no path connecting F1 to F2 with a total weight smaller than
+ρ. Otherwise during the cycle of T , OPT only stays in
+dB(u, v)/(2
+one of F1 or F2; w.l.o.g. assume F1. If F1 consists of just one node u, and OPT stays
+there throughout the cycle of T , then by deﬁnition of the algorithm, OPT incurs a cost
+of at least dB(u, v) = 2M ≥ 2M −1/
+ρ. If F1 consists of more than one node, then
+by the induction hypothesis, OPT incurs a cost of at least 2M1−1/
+ρ per cycle of T1.
+Since during one cycle of T there are 2M −M1 cycles of T1, OPT incurs a cost of at
+least 2M −1/
+
+ρ. This completes the proof.
+
+√
+
+√
+
+√
+
+√
+
+

@@ -1,0 +1,2115 @@
+Laminar: Practical Fine-Grained
+
+Decentralized Information Flow Control
+Donald E. Porter Michael D. Bond
+
+Kathryn S. McKinley
+
+Emmett Witchel
+
+Indrajit Roy
+
+Department of Computer Sciences
+The University of Texas at Austin
+
+{indrajit, porterde, mikebond, mckinley, witchel}@cs.utexas.edu
+
+Abstract
+
+Decentralized information ﬂow control (DIFC) is a promising
+model for writing programs with powerful, end-to-end security
+guarantees. Current DIFC systems that run on commodity hard-
+ware can be broadly categorized into two types: language-level and
+operating system-level DIFC. Language level solutions provide no
+guarantees against security violations on system resources, like
+ﬁles and sockets. Operating system solutions can mediate accesses
+to system resources, but are inefﬁcient at monitoring the ﬂow of
+information through ﬁne-grained program data structures.
+
+This paper describes Laminar, the ﬁrst system to implement de-
+centralized information ﬂow control using a single set of abstrac-
+tions for OS resources and heap-allocated objects. Programmers
+express security policies by labeling data with secrecy and integrity
+labels, and then access the labeled data in lexically scoped secu-
+rity regions. Laminar enforces the security policies speciﬁed by
+the labels at runtime. Laminar is implemented using a modiﬁed
+Java virtual machine and a new Linux security module. This paper
+shows that security regions ease incremental deployment and limit
+dynamic security checks, allowing us to retroﬁt DIFC policies on
+four application case studies. Replacing the applications’ ad-hoc
+security policies changes less than 10% of the code, and incurs per-
+formance overheads from 1% to 56%. Whereas prior DIFC sys-
+tems only support limited types of multithreaded programs, Lami-
+nar supports a more general class of multithreaded DIFC programs
+that can access heterogeneously labeled data.
+
+Categories and Subject Descriptors D.2.4 [Software Engineer-
+ing]: Software/Program Veriﬁcation; D.3.3 [Programming Lan-
+guages]: Language Constructs and Features; D.4.6 [Operating
+Systems]: Security and Protection—Information ﬂow controls
+
+General Terms Languages, Performance , Security
+
+Keywords
+ating systems, security region
+
+Information ﬂow control, Java virtual machine, oper-
+
+1.
+
+Introduction
+
+As computer systems support more aspects of modern life, from ﬁ-
+nance to health care, security becomes increasingly important. Cur-
+rent security policies and enforcement mechanisms are typically
+sprinkled throughout an application, making security policies dif-
+ﬁcult to express, change, and audit. Operating system security ab-
+stractions, such as ﬁle permissions and user IDs, are too coarse to
+express many desirable policies, such as protecting a user’s ﬁnan-
+cial data from an untrusted browser plug-in. Furthermore, poor in-
+tegration of programming language (PL) constructs and operating
+
+Permission to make digital or hard copies of all or part of this work for personal or
+classroom use is granted without fee provided that copies are not made or distributed
+for proﬁt or commercial advantage and that copies bear this notice and the full citation
+on the ﬁrst page. To copy otherwise, to republish, to post on servers or to redistribute
+to lists, requires prior speciﬁc permission and/or a fee.
+PLDI’09,
+Copyright c° 2009 ACM 978-1-60558-392-1/09/06. . . $5.00
+
+June 15–20, 2009, Dublin, Ireland.
+
+system (OS) security mechanisms complicates the expression and
+enforcement of security policies. For example, a user’s credit card
+number should not be broadcast on the network, whether the num-
+ber originates in a ﬁle or a data structure. Files and data structures
+are currently governed by completely distinct security mechanisms,
+requiring developers to understand both mechanisms. This paper
+addresses these issues by integrating PL and OS security abstrac-
+tions, allowing application developers to express uniform security
+policies that are enforced at all layers of the software stack.
+
+The decentralized information ﬂow control (DIFC) security
+model [18] expresses policies based on how applications use data
+and more naturally matches how developers and users think of se-
+curity policies than traditional security mechanisms. For instance,
+traditional access control mechanisms are all-or-nothing; once an
+application has the right to read a ﬁle, it can do anything with
+that ﬁle’s data. In contrast, DIFC enforces more powerful policies,
+such as permitting an application to read a ﬁle, but disallowing
+the broadcast of the contents of that ﬁle over an unsecured net-
+work channel. A DIFC implementation dynamically or statically
+enforces end-to-end user speciﬁed security policies by tracking
+information ﬂow throughout the system.
+
+The DIFC model provides security by allowing users to asso-
+ciate secrecy and integrity labels with data and restricting the ﬂow
+of information according to these labels. Secrecy guarantees pre-
+vent sensitive information from escaping the system, and integrity
+guarantees prevent external information from corrupting the sys-
+tem.
+
+As an example of the DIFC model, consider Alice and Bob who
+want to schedule a meeting while keeping their calendars mostly
+secret. Alice and Bob each place a secrecy label on their calendar
+ﬁle, and then only a thread with those secrecy labels can read it.
+Once a thread has a secrecy label, it has been tainted by that label,
+and can no longer write to an unlabeled output, such as standard
+output or the network. If the thread has the capability to declassify
+the information, it may remove the secrecy label and then write the
+data to an unlabeled output. In the calendar example, the program
+obtains both Alice and Bob’s secrecy label to read both calendar
+ﬁles, but then it cannot remove the labels. When the thread is ready
+to output an acceptable meeting time, it must call a function that
+then declassiﬁes the result. The declassiﬁcation function checks
+that its output contains no secret information. For example, the
+output is simply a date and does not include Bob’s upcoming visit
+to the doctor.
+
+DIFC provides two key advantages—clear rules for the legal
+propagation of data through a program, and the ability to localize
+security policy decisions. In the calendar example, the secrecy la-
+bels ensure that any program that can read the data cannot leak the
+data, whether accidentally or intentionally. The label is tied to the
+data, and it restricts who may access the data. The decision to de-
+classify is localized to a small piece of code that can be closely
+audited. The result is a system where security policies are easier
+to express, maintain, and modify. DIFC can be supported at the
+language level [18, 19], in the operating system [12, 26, 28], or in
+the architecture [25, 29]. Each approach has strengths and limita-
+tions. Language-based DIFC systems rely on extensive type sys-
+
+tem changes, wrap standard libraries, augment types throughout
+the entire program, and modify the program structure. OS-based
+DIFC systems have trouble enforcing data ﬂow through program
+data structures because page mappings are an inefﬁcient mecha-
+nism to control permissions for most user-deﬁned data structures.
+Architecture-based solutions track labels on data and CPUs in hard-
+ware and signal violations, but still require trusted software to man-
+age the labels. We limit the scope of this paper to DIFC implemen-
+tations on commodity hardware.
+
+This paper introduces a new DIFC system, Laminar, that pro-
+vides a common security abstraction and labeling scheme for pro-
+gram objects and OS resources, such as ﬁles and sockets. By com-
+bining the strengths of PL and OS techniques, while minimizing
+their limitations, developers express comprehensive security poli-
+cies and then the Laminar virtual machine (VM) and OS enforce
+these policies.
+
+Laminar can be incrementally deployed—developers need only
+modify the security-sensitive portion of their programs. Trusted
+and untrusted threads, labeled and unlabeled ﬁles, sockets, data
+structures, and so on, coexist in the system. In contrast, existing
+DIFC languages require pervasive program modiﬁcations to label
+data structures, variables, functions, and return types [17, 23]. Be-
+cause they rely on whole-program static analysis for enforcement
+of DIFC rules, they also exclude features such as dynamic class
+loading and multithreading.
+
+Laminar introduces lexically scoped security regions. Security
+regions limit the scope of non-trivial DIFC enforcement, which
+makes it easier to develop, deploy, and audit DIFC programs. Secu-
+rity regions also reduce the overhead of dynamic security checks.
+All operations on labeled data must occur within security regions.
+A typical security region might read a labeled conﬁguration ﬁle
+and parse it into a labeled data structure. Since all code that manip-
+ulates the labeled conﬁguration data structures resides in a security
+region, it is easier to identify and audit. Code unrelated to the data
+structure needs no modiﬁcation.
+The contributions of this paper are:
+1. The design of Laminar, the ﬁrst system with uniﬁed PL and OS
+mechanisms for enforcing DIFC. Laminar features a novel di-
+vision of responsibilities among the programming model, VM,
+and OS.
+
+2. The introduction of security regions, an intuitive primitive that
+eases deployment, security programming, implementation, and
+auditing.
+
+3. An implementation of Laminar that makes modest additions to
+Jikes RVM [1] (a Java virtual machine), and the Linux operating
+system.
+
+4. Four case studies that retroﬁt security policies onto existing
+code. These case studies require modiﬁcation of less than 10%
+of the total code base and incur overheads from Laminar rang-
+ing from 1% to 56%.
+
+These advantages and initial results suggest that integrating PL
+and OS support incurs low overheads and allows the application
+developer to write ﬁne-grained security policies that encompass
+program data structures as well as system resources.
+
+2. Related work
+
+Previous DIFC systems have either used only PL abstractions or
+OS abstractions. Laminar instead enforces DIFC rules for Java
+programs using an extended JVM and OS. By unifying PL and
+OS abstractions for the ﬁrst time with a seamless labeling model,
+Laminar combines the strengths of previous approaches and further
+improves the DIFC programming model.
+
+all labels and approve all declassiﬁcation requests. Modern manda-
+tory access control (MAC) systems, like security-enhanced Linux
+(SELinux), also limit declassiﬁcation and require a static collec-
+tion of labels and principals. Decentralized information ﬂow con-
+trol (DIFC) systems allow individual applications to allocate labels
+and declassify data for their labels, providing a richer model for
+implementing security policies [18].
+
+Language-based DIFC. Language-based DIFC systems [17, 19,
+23] augment the type system to include secrecy and integrity con-
+straints enforced by the bytecode generator. These systems label
+program data structures and objects at a ﬁne granularity, but require
+programming an intrusive type system or an entirely new language.
+These language based systems trust the whole operating system
+and provide no guarantees against security violations on system
+resources, like ﬁles and sockets.
+
+OS-based IFC. Asbestos [26] and HiStar [28] are new operating
+systems that provide DIFC properties. Flume [12] is a user-level
+reference monitor that provides DIFC guarantees without making
+extensive changes to the underlying operating system.
+
+OS DIFC systems provide little or no support for tracking in-
+formation ﬂow through application data structures with different
+labels. Flume tracks information ﬂow at the granularity of an entire
+address space. HiStar can enforce information ﬂow at page gran-
+ularity and supports a form of multithreading by requiring each
+thread to have a page mapping compatible with its label. Using
+page table protections to track information ﬂow is expensive, both
+in execution time and space fragmentation, and complicates the
+programming model by tightly coupling memory management with
+DIFC enforcement. Laminar supports a richer, more natural pro-
+gramming model in which threads may have heterogeneous labels
+and access a variety of labeled data structures. For example, all of
+our application case studies use threads with different labels.
+
+Laminar provides DIFC guarantees at the granularity of lexi-
+cally scoped code blocks and data structures with modest changes
+to the VM. It also adds a security module to a standard operat-
+ing system, as opposed to Asbestos and HiStar, which completely
+rewrite the OS. Most of Laminar’s OS DIFC enforcement occurs
+in a security module whose architecture is already present within
+Linux (Linux security modules [27] (LSM)). The Laminar OS does
+not need Flume’s endpoint abstraction to enforce security during
+operations on ﬁle descriptors (e.g., writes to a ﬁle or pipe), as the
+kernel-level reference monitor can check the information ﬂow for
+each operation on a ﬁle descriptor.
+
+Laminar adopts the label structure and the label/capability dis-
+tinction derived from JIF and used by Flume. Capabilities in DIFC
+systems are formally deﬁned in the next section. They are distinct
+from the capabilities used in capability-based operating systems.
+Capability-based operating systems, like EROS [22], use point-
+ers with access control information to combine system and lan-
+guage mechanisms for stronger security. However, capability sys-
+tems cannot enforce DIFC rules, and programs must be completely
+rewritten to work with the capability programing model.
+
+Table 1 summarizes the taxonomy of design issues common to
+DIFC systems. Laminar combines the strengths of PL- and OS-
+based systems. Laminar handles implicit ﬂows and provides ﬁne-
+grained information ﬂow control just like PL systems but without
+resorting to whole-program static analysis. Like OS-based systems,
+Laminar can enforce security policies on system resources. Lami-
+nar makes it easier to deploy and use information ﬂow control sys-
+tems by introducing the intuitive notion of lexically scoped code
+blocks called security regions.
+
+From IFC to DIFC.
+Information ﬂow control (IFC) stemmed
+from research in multi-level security for defense projects [9]. In the
+original military IFC systems [11], an administrator must allocate
+
+Integrating language and OS-based security. Hicks et al. ob-
+serve that security-typed languages can be used to ensure that OS
+security policies are not violated by trusted system applications,
+
+Issue
+Main subsystems modiﬁed
+
+PL solution [19, 23]
+Compiler and type system
+
+Compiler, VM, and OS
+Whole-program static analysis
+
+Trusted computing base
+Securing individual appli-
+cation data structures
+Securing ﬁles and OS re-
+sources
+Termination, timing, prob-
+abilistic channels
+
+Not handled
+
+Not handled
+
+Implicit information ﬂow
+
+Static analysis
+
+Deployment issues
+
+Code must use new language or
+type system
+
+OS solution [12, 26, 28]
+(1) Complete OS [26, 28] (2) User-level refer-
+ence monitor and kernel module [12]
+OS
+Either not supported or inefﬁcient because of
+page table mechanisms
+(1) Modify entire OS or (2) User-level reference
+monitor with kernel module support
+HiStar [28] and Flume [12] handle termination
+channels by suppressing termination notiﬁca-
+tion
+Not applicable—information ﬂow tracked at
+granularity of thread [28] or address space [12]
+Excludes multithreaded applications whose
+threads have heterogeneous security needs
+
+Laminar solution
+VM and kernel module
+
+VM and OS
+Dynamic analysis and VM enforce-
+ment using read/write barriers
+Kernel module
+
+Not handled
+
+Dynamic analysis using lexically
+scoped security regions
+Incrementally deployable
+
+Table 1. Issues for DIFC systems. Laminar offers better functionality than the combination of PL and OS solutions.
+
+such as logrotate [10]. Their framework, called SIESTA, ex-
+tends Jif to enforce SELinux [15] MAC policies at the language
+level. The aims of Laminar and SIESTA are orthogonal. SIESTA
+provides developers with a mechanism to prove to the system that
+an application is trustworthy, whereas Laminar provides the devel-
+oper a uniﬁed abstraction for specifying application security poli-
+cies.
+
+Termination, timing and probabilistic channels. Vachharajani
+et al. argue that implementing DIFC with dynamic checking is as
+correct as static checking by showing that the program termina-
+tion channels of static and dynamic DIFC systems leak an arbitrary
+number of bits [25]. They prove that a correct dynamic DIFC sys-
+tem will over-approximate information ﬂow, rejecting some pro-
+grams that do not contain actual information ﬂow violations. Lam-
+inar is a dynamic DIFC system and its security regions explicitly
+over-approximate information ﬂow.
+
+DIFC systems attempt to eliminate covert channels, which may
+be used to leak information, but do not eliminate timing chan-
+nels [13] or probabilistic channels [21]. Section 4.3.3 deﬁnes and
+discusses implicit information ﬂows.
+
+3. DIFC model
+
+All DIFC systems need a mechanism to denote the sensitivity
+of information and the privileges of the participating users. This
+section describes the mechanisms used by Laminar and the DIFC
+rules that determine safe information ﬂows.
+
+In DIFC systems, the security policy is deﬁned in terms of
+principals that read and write the data in the system. Examples
+of principals in DIFC systems are users [19], processes [12] and
+kernel threads [28]. Principals in Laminar are kernel threads.
+
+3.1 DIFC abstractions
+
+Standard DIFC abstractions include tags, labels, and capabilities.
+Tags are short, arbitrary tokens drawn from a large universe of
+possible values (T ) [12]. A tag has no inherent meaning. A set of
+tags is called a label.
+
+In a DIFC system, any principal can create a new tag for se-
+crecy or integrity. For example, a web application might create one
+secrecy tag for its user database and a separate secrecy tag for each
+user’s data. The secrecy tag on the user database will prevent au-
+thentication information from leaking to the network. The tags on
+user data will prevent a malicious user from writing another user’s
+secret data to an untrusted network connection.
+
+Principals assign labels to data objects. Data objects include
+program data structures (e.g., individual objects, arrays, lists, hash
+tables) and system resources (e.g., ﬁles and sockets). Previous OS-
+based systems limit principals to the granularity of a process or
+
+support threads by enforcing DIFC rules at the granularity of a
+page. Our system is the ﬁrst to expand principals to support threads
+as principals and enforce DIFC at object granularity.
+
+Each data object or principal x has two labels, Sx for secrecy
+and Ix for integrity. A tag t in the secrecy label Sx of a data object
+denotes that it may contain information private to principals with
+tag t. Similarly, a tag t in Ix implies that a data object may contain
+data endorsed by principals with integrity tag t. Data integrity
+is a guarantee that data exists in the same state as when it was
+endorsed by a principal. For example, if Microsoft endorses a data
+ﬁle, and the integrity of the ﬁle is preserved, then a user can choose
+to trust the ﬁle’s contents if she trusts Microsoft. A principal’s
+labels restrict the interaction that the principal can have with other
+principals and data objects.
+
+A partial ordering of labels imposed by the subset relation forms
+a lattice [7]. At the bottom of the lattice are unlabeled resources,
+which have the empty label for security and integrity. An implicit
+empty label means that the program need not label every data
+structure, nor does the OS need to label every ﬁle in the ﬁle system.
+Allowing implicit empty labels makes Laminar easier to deploy
+incrementally.
+
+A principal may change the label of a data object or principal
+if and only if it has the appropriate capabilities, which generalize
+ownership of tags [18]. A principal p has a capability set, Cp, that
+deﬁnes whether it has the privilege to add or remove a tag. For
+each tag t, let t+ and t− denote the capability to add and remove
+the tag t. The capability t+ allows a principal to classify data with
+secrecy tag t, while the t− capability allows it to declassify data.
+Classiﬁcation raises data to a higher secrecy level; declassiﬁcation
+lowers its secrecy level. Principals can add t to their secrecy label
+if they have the t+ capability. If the principal adds t, then we call
+it tainted with the tag t. A principal taints itself when it wants to
+read secret data. To communicate with unlabeled devices and ﬁles,
+a tainted principal must use the t− capability to untaint itself and to
+declassify the data it wants to write. Note that DIFC capabilities are
+not pointers with access control information, which is how they are
+commonly deﬁned in capability-based operating systems [14, 22].
+DIFC handles integrity similarly to secrecy. The t+ capability
+allows a principal to endorse data with integrity tag t, and the
+t− capability allows it to drop the endorsement. A principal with
+integrity tag t is claiming to represent a certain level of integrity.
+For example, code and data signed by a software vendor could
+run with that vendor’s integrity tag. When the principal drops
+an integrity tag, for example, to read an unlabeled ﬁle of lower
+integrity, the principal drops the endorsement of the tag.
+
+Note that the capability set Cp is deﬁned on tags. A tag can be
+assigned to a secrecy or integrity label. In practice, a tag is rarely
+used for both purposes. C −
+p is the set of tags which principal p
+
+may declassify (drop endorsements), and C +
+p is the set of tags that
+p may classify (endorse). Principals and data objects have both
+a secrecy and integrity label; a data object with secrecy label s
+and integrity label i is written: {S(s), I(i)}. An empty label set
+is written: {S(), I()}. The capability set of a principal that can add
+both s and i but can drop only i is written: {C(s+, i+, i−
+3.2 Restricting information ﬂow
+
+)}.
+
+Programs implement policies to control access and propagation of
+data by using labels to limit the interaction among principals and
+data objects. Information ﬂow is deﬁned in terms of data moving
+from a source x to a destination y, at least one of which is a
+principal. For example, principal x writing to ﬁle y or sending
+a message to principal y is an information ﬂow from x to y. If
+principal x reads from a ﬁle y, then we say information ﬂows
+from source y to destination x. Laminar enforces the following
+information ﬂow rules for x to y:
+
+Secrecy rule. Bell and LaPadula [2] introduced the simple secu-
+rity property and the *-property for secrecy. These properties en-
+force that no principal may read data at a higher level (no read up)
+or write data to a lower level (no write down). Expressed formally,
+information ﬂow from x to y preserves secrecy if:
+
+Sx ⊆ Sy
+
+Note that x or y may make a ﬂow feasible by using their capabilities
+to explicitly drop or add a label. For example, x may make a ﬂow
+feasible by removing a label L from Sx if it has the declassiﬁcation
+capability for L, i.e. L ∈ C −
+x . Similarly, y may use its capabilities
+in C +
+Integrity rule. The integrity rule constrains who can alter infor-
+mation [3] and restricts reads from lower integrity (no read down)
+and writes to higher integrity (no write up). In our system, we en-
+force the following rule:
+
+y to extend its secrecy label and receive information.
+
+Iy ⊆ Ix
+
+Intuitively, the integrity label of x should be at least as strong as
+destination y. Just like the secrecy rule, x may make a ﬂow feasi-
+ble by endorsing information sent to a higher integrity destination,
+which is allowed if x has the appropriate capability in C +
+x . Simi-
+larly, y may need to reduce its integrity level, using C −
+y , to receive
+information from a lower integrity source.
+
+Label changes. According to the previous two rules, a principal
+can enable information ﬂow by using its current capabilities to drop
+or add a label. Laminar requires that the principal must explicitly
+change its current labels. Zeldovich et al. show that automatic, or
+implicit, label changes can form a covert storage channel [28].
+
+In Laminar, a principal p may change its label from L1 to L2 if
+it has the capability to add tags present in L2 but not in L1, and can
+drop the tags that are in L1 but not in L2. Formally, this is stated
+as:
+
+(L2 − L1) ⊆ C +
+
+−
+p and (L1 − L2) ⊆ C
+p
+
+3.3 Calendar example
+
+Again consider scheduling a meeting between Bob and Alice using
+a scheduling server that is not administered by either Alice or Bob.
+Alice’s calendar ﬁle has a secrecy tag, a, and Bob’s calendar ﬁle
+has a secrecy tag, b.
+
+Focusing on Alice, she gives a+ to the
+Ensuring secrecy.
+scheduling server to let it read her secret calendar ﬁle, which has
+label {S(a)}. A thread in the server uses the a+ capability to start
+a security region with secrecy tag a that reads Alice’s calendar ﬁle.
+Once the server’s thread has the label {S(a)}, it can no longer
+return to the empty label because it lacks the declassiﬁcation capa-
+bility, a−. As a result, the server thread can read Alice’s secret ﬁle,
+
+VM
+
+(cid:0)(cid:0)
+(cid:1)(cid:1)
+(cid:0)(cid:0)
+(cid:1)(cid:1)
+
+(cid:0)(cid:0)
+(cid:1)(cid:1)
+(cid:0)(cid:0)
+(cid:1)(cid:1)
+
+(cid:0)
+(cid:1)
+(cid:0)
+(cid:1)
+
+Thread
+
+SR
+
+SR
+
+(cid:0)
+(cid:1)
+(cid:0)
+(cid:1)
+(cid:0)
+(cid:1)
+(cid:0)
+(cid:1)
+(cid:0)
+(cid:1)
+
+Thread
+
+SR
+
+(cid:0)(cid:0)
+(cid:1)(cid:1)
+(cid:0)(cid:0)
+(cid:1)(cid:1)
+
+Un−
+trusted
+App
+
+User
+
+Kernel
+
+Ref. Mntr.
+
+LSM
+
+(cid:0)
+(cid:1)
+(cid:0)
+(cid:1)
+
+NET
+
+File A
+
+(cid:0)
+(cid:1)
+(cid:0)
+(cid:1)
+
+FS
+
+(cid:0)(cid:1)
+ File B
+
+(cid:0)(cid:0)
+(cid:1)(cid:1)
+(cid:0)(cid:0)
+(cid:1)(cid:1)
+
+Label
+
+(cid:0)(cid:1)
+
+Empty Label
+
+Capabilities
+
+Figure 1. Design of Laminar. Unlabeled objects have an implicit empty
+label. Trusted components are shaded.
+
+but it can never write to an unlabeled device like the disk, network,
+or display. If the server thread creates a new ﬁle, it must have label
+{S(a)}, which is unreadable to its other threads. Before the server
+thread can communicate information derived from Alice’s secret
+ﬁle to another thread, the other thread must add the a tag, and also
+becomes unable to write to unlabeled channels.
+
+Ensuring integrity. The scheduling server runs its plugins with
+an integrity tag, i, corresponding to the idea of having an au-
+thority vouch for the safety and correctness of plugins, just as
+addons.mozilla.org vouches for plugins by allowing a se-
+cure network connection. The server cannot execute or read a plu-
+gin that has an integrity label lower than {I(i)}. The server is as-
+sured that plugins and their input ﬁles have not been written by any
+principal with an integrity label lower than {I(i)}. The DIFC in-
+tegrity rule gives the server conﬁdence that its code and data ﬁles
+have not been tampered with.
+
+Sharing secrets with trusted partners. Alice and Bob collabo-
+rate to schedule a meeting while both retaining ﬁne-grained con-
+trol over what information is exposed. Both send the server a code
+module in a ﬁle that has integrity label {I(i)}. For example, they
+might have access to such an integrity label because they are both
+employed by the company running the scheduling server. Alice’s
+module has access to both her a+ and a− capabilities, so the server
+calls her code which reads her secret calendar ﬁle and selectively
+declassiﬁes parts of it, for instance, making her availability between
+10:00am and 1:30pm on Mondays and Tuesdays publicly available
+(unlabeled). Alice controls which of her data ﬂows into the sched-
+uler. Bob does the same, and the scheduler can communicate with
+both of them their possible meeting times.
+
+Discussion.
+In this example, Alice speciﬁes a declassiﬁer as a
+small code module that can be loaded into a larger server applica-
+tion, which can be completely ignorant of DIFC and requires no
+modiﬁcations to work with Alice’s DIFC-aware module. For pre-
+vious DIFC systems, this example would be more cumbersome.
+OS-based DIFC systems would require the declassiﬁer to run as a
+separate process. Language-based systems would require the entire
+application to be annotated for DIFC enforcement. By integrating
+OS and language techniques, Laminar substantially improves the
+state of the art in DIFC.
+
+4. Design
+
+This section describes how Laminar enforces DIFC in an enhanced
+VM and OS. Figure 1 illustrates the Laminar architecture. The VM
+
+enforces DIFC rules within the application’s address space. The
+OS security module mediates accesses to system resources. Only
+the VM and the OS are trusted in our model.
+
+For example, Alice may write a program in Java using the
+Laminar API to label her data. Alice’s program uses the same
+label namespace present in the ﬁle system: it can read data from a
+labeled ﬁle into a data structure with the same label. She compiles
+the code using a standard, untrusted, bytecode generator such as
+javac. The Laminar just-in-time (JIT) compiler and VM execute
+the bytecode, and the Laminar OS executes the Laminar VM.
+Laminar ensures that any accesses or modiﬁcations to labeled data
+follow the DIFC rules and occur in a security region, a lexically
+scoped region speciﬁed by the program. Security regions make
+it easier to secure and audit only the portions of a program that
+need it, making it easier to deploy Laminar incrementally. They
+also decrease the cost of dynamic security checks by the Laminar
+runtime.
+
+4.1 Enforcement mechanism
+
+The Laminar OS extends a standard operating system with a Lami-
+nar security module for information ﬂow control. The Laminar OS
+security module governs information ﬂows through all standard OS
+interfaces, including through devices, ﬁles, pipes and sockets. The
+OS regulates communication between threads of the same or differ-
+ent processes that access the labeled or unlabeled system resources
+or that use OS inter-process communication mechanisms, such as
+signals. OS enforcement applies to all applications, preventing un-
+labeled or non-Laminar applications from circumventing the DIFC
+restrictions.
+
+The Laminar VM regulates information ﬂow between heap ob-
+jects and between threads of the same process via these objects.
+These ﬂows are regulated by inserting dynamic DIFC checks in the
+application code. Because the Laminar VM regulates these ﬂows
+within the address space, the OS allows data structures and threads
+to have heterogeneous labels. All threads in multithreaded pro-
+cesses without a trusted VM must have the same labels and ca-
+pabilities.
+
+4.2 Programming model
+
+Laminar provides language extensions, a new security library, and
+new security-related system calls. The secure keyword is used to
+lexically scope a security region. Figure 2 depicts the library API,
+which includes tag creation, declassiﬁcation, and label queries.
+The Laminar OS exports security system calls to the trusted VM
+for capability and label management, as shown in Figure 3. An
+untrusted application may directly use these system calls to manage
+its capabilities and labels.
+
+Threads are the only principals in Laminar, but the thread’s la-
+bels and capabilities are modiﬁed when entering and exiting secu-
+rity regions. In Laminar, labeled data objects (ﬁles, heap allocated
+objects etc.) can be accessed only inside security regions. Hence,
+outside a security region threads always have empty labels. The
+VM and the OS do not allow code outside the security region to ac-
+cess labeled data objects. During the execution of a security region,
+the VM gives the thread the labels and capabilities of the secu-
+rity region so that the OS can mediate access to system resources
+according to the security region’s labels. Security regions are not
+visible to the OS, so the thread itself must have the labels and ca-
+pabilities. At the end of the security region, the VM restores the
+thread’s original capabilities and labels.
+
+4.3 Security regions
+
+A security region is a lexically scoped code block that has parame-
+ters for a capability set, a secrecy label, and an integrity label. The
+labels dictate which data the program may touch inside the secu-
+rity region. The capabilities dictate how a thread within a security
+
+Laminar Application Library API.
+Label getCurrentLabel(LabelType t)
+
+Return the current secrecy or integrity label of the security region.
+
+Tag createAndAddCapability()
+
+Create a new tag and add both capabilities to the current principal.
+
+void removeCapability(CapType c, Tag name,
+boolean global)
+
+Drop the given capability from the current principal.
+Setting the global ﬂag drops a capability permanently, whereas not
+setting it drops the capability for the scope of a security region.
+
+Object copyAndLabel(Object o, Label l)
+
+Return a copy of the object o with new label l.
+
+Figure 2. Laminar library API. LabelType denotes the secrecy or in-
+tegrity label. CapType denotes the plus, minus or both capabilities for a
+given tag. The API also has wrapper functions(not shown) for the new sys-
+tem calls introduced in Laminar OS.
+
+Laminar System Calls.
+tag t alloc tag(capList t &caps)
+
+Return a new tag, add the plus and minus capabilities to the calling
+principal, and write the new capabilities into caps.
+
+int set task label(tag t l, int op, int type)
+Set the type (secrecy or integrity) label of the current principal.
+
+int drop label tcb(pid t tid)
+
+Drop the current temporary labels of the thread without capability
+checks. Can be called only by threads with the special integrity tag.
+int drop capabilities(capList t *caps, int tmp)
+
+Drop the given capabilities from the current principal. Tmp is
+a ﬂag used to suspend a capability for a security region or during a
+fork().
+
+int write capability(capability t cap, int fd)
+
+Send a capability to another thread via a pipe.
+
+int create file labeled(char* name, mode t m,
+struct label *l)
+
+Create a labeled ﬁle with the given labels.
+
+int mkdir labeled(char* name, mode t m, struct
+label *l)
+
+Create a labeled directory with the given labels.
+
+Figure 3. Laminar system calls. The tag t and capability t types
+represent a single tag or capability, respectively. The struct label type
+represents a set of tags that compose a label, and the capList t type is a
+list of capabilities.
+
+region may add or remove labels. When we say a security region
+performs an action, we mean a kernel thread executing within the
+region performs the action.
+
+Only code within a security region can access labeled data. Se-
+curity regions demarcate the code regions that are security sensi-
+tive, easing the programmer’s burden when adding security policies
+to existing programs. The programmer is just required to wrap the
+pieces of code that touch labeled data in a security region, such as a
+routine that reads a sensitive ﬁle into a data structure. Usually only a
+small portion of code and data in a program is security sensitive, so
+security regions also simplify the task of auditing security-sensitive
+code.
+
+Requiring threads to access labeled data within security regions
+limits the amount of work the VM and compiler must do to enforce
+DIFC, provided that a substantial portion of the execution time is
+spent operating on unlabeled data. Every time the program reads or
+writes labeled objects or OS resources within a security region, the
+system must check the information ﬂow with respect to the current
+labels of the thread executing within the region. For example, an
+assignment w = r inside a security region R is safe if and only
+if the information ﬂow from r to the thread inside R and from the
+thread to w is legal. Note that the Laminar library API (Figure 2)
+does not include a routine for adding labels to a thread. In order to
+add labels, a thread must start a security region.
+
+Security regions provide several beneﬁts. They make it easier
+for programmers to add security policies to existing programs.
+They also make it easier for programmers to audit security code,
+and limit the effects of implicit information ﬂows (Section 4.3.3).
+Finally, they make the DIFC implementation more efﬁcient by
+reducing the amount of code that requires full DIFC checks.
+
+4.3.1 Example
+
+Figure 4 depicts code where the calendar server reads a ﬁle belong-
+ing to Alice, adds an event to the common calendar, and exports the
+common meeting schedule for Bob. As shown, the data structure
+cal has the secrecy tags a and b. The thread entering the security
+region is initialized with the secrecy label S(a, b) and therefore it
+can read secret data guarded by these tags. Its integrity label i re-
+stricts it from reading data that is not tagged with i. The thread has
+the capability C(a−
+) to declassify tag a. The line L1 is a valid in-
+formation ﬂow because the label of the thread executing at L1 is
+{S(a, b), I(i)}, which is more restrictive than f . (We adhere to the
+convention that a is the label of a).
+
+At line L2, the VM checks that the write to calendar c is legal.
+The write is legal because cal has the same secrecy label as the
+thread in the security region at that point. At line L3, the common
+meeting time is computed and stored in s2. Note that s2 has the
+same labels as the security region. At line L4, a nested security
+region is started to declassify data. The copying and relabeling of
+s2, at L5, is legal because the thread has the a− capability. Notice
+that if line L5 were copyAndLabel(s2, S(), I(i)), it
+would result in a VM exception because the thread does not have
+the b− capability. In this example, the OS checks the ﬁle operations
+in line L1 and the VM checks the operations in line L2–L5.
+
+4.3.2 Security region initialization
+
+Laminar enforces certain rules when a thread enters a security
+region. Let SR, IR, and CR be the security, integrity, and capability
+sets of a security region, R. Similarly, let SP , IP , and CP be the
+sets associated with a kernel thread P , that enters and then leaves
+R. Laminar supports arbitrary nesting of security regions. P could,
+therefore, already be inside a security region when it enters R.
+When the thread enters the security region, the following rules hold:
+
+SR ⊆ (C +
+
+p ∪ SP ) and IR ⊆ (C +
+
+p ∪ Ip)
+
+CR ⊆ CP
+
+(1)
+
+(2)
+
+The ﬁrst rule states that the creating principal P must have either
+the add capability or the label itself for any tag it will have within a
+security region.The second rule states that the principal P can only
+retain a subset of its current capabilities when it enters a security
+region.
+
+The above rules encapsulate the common sense understanding
+that a parent principal, P , has control over the labels and capabil-
+ities it passes to a security region, and that the system will not let
+the principal create a security region with security properties that
+the principal itself lacks. The rules also state that security regions
+nest in the natural way based on the labels and capabilities of the
+thread entering the nested region.
+
+4.3.3
+
+Implicit information ﬂows
+
+A major beneﬁt of security regions is that they limit the amount
+of analysis necessary to restrict implicit information ﬂows. Im-
+plicit information ﬂow leaks secret data through control ﬂow de-
+cisions [8]. For example, the code in Figure 5 shows an implicit
+ﬂow from the control variable H to the data variable L. By looking
+at the value of L, a thread can deduce the value of H. Since L is
+low secrecy and H is high secrecy, this implicit ﬂow is a violation
+of DIFC rules. The system must therefore detect and prohibit this
+ﬂow.
+
+Calendar cal; // has labels {S(a,b), I(i)}
+Output ret;
+File f;
+
+// has labels {S(b), I(i)}
+// has labels {S(a), I(i)}
+
+secure ({S(a,b), I(i), C(a−)}) {
+
+[L1] Schedule s1 = getScheduleFromFile(f);
+[L2] caladdSchedule(s1);
+[L3] Schedule s2 = cal.getCommonSchedule();
+[L4] secure({S(b), I(i), C(a−)}){
+[L5]
+[L6] }
+
+ret.val = Laminar.copyAndLabel(s2, S(b), I(i));
+
+...
+
+Figure 4. Example pseudocode to read and update a calendar. The thread
+(not shown) has the required capabilities a+, a−, b+ and i+ to initialize
+the security region.
+
+// H has labels {S(h), I()}
+// L has labels {S(), I()}
+// Invariant: y == 2x
+L = false;
+secure ({S(h), I(), C()}) {
+
+x++;
+if (H) L = true;
+y = 2 * x;
+...
+
+} catch (...) {
+
+y = 2 * x;
+
+}
+
+// H has labels {S(h), I()}
+// L has labels {S(), I()}
+L = false;
+secure ({S(h), I(), C()}) {
+
+if (H) while (true) { }
+
+} catch (...) { }
+
+Figure 5. Pseudocode that shows how implicit ﬂows are handled with
+secure/catch.
+
+Figure 6. Pseudocode that leaks data via a termination channel.
+
+Laminar has a special construct to limit implicit ﬂows—each se-
+curity region has a required catch block as shown in Figure 5. The
+catch block executes with the same labels as the security region,
+and the capability set at the time of the exception. For instance, if
+H is true and the program attempts assignment to L, then Lami-
+nar raises an exception because the security region does not have
+the right to declassify H. The catch block gives the programmer
+a chance to restore program invariants before exiting the security
+region. No ﬂow occurs between H and L because L is never as-
+signed, regardless of whether H is true or false, and control ﬂow
+continues after the secure/catch blocks. The VM suppresses all ex-
+ceptions inside a security region that are not explicitly caught, in-
+cluding exceptions within a catch block. The VM continues execu-
+tion after the security region.
+
+In addition to restricting exception control ﬂow, Laminar limits
+implicit ﬂows by restricting how a security region returns from a
+region through non-exceptional control ﬂow. In particular, the VM
+enforces that security regions must exit via fall through. Security
+regions cannot use break, return, or continue to exit, except
+in the trivial case where these expressions cause control ﬂow to
+continue from the statement immediately after the security region
+ends.
+
+Laminar thus eliminates implicit ﬂows by hiding the control
+ﬂow of a security region from code outside of the security region. In
+Figure 5, code outside of the security region cannot distinguish an
+
+execution where H is true from one where it is false. In contrast,
+DIFC systems that rely on static analysis prevent these ﬂows by
+detecting them during compilation [18].
+
+Both Laminar and static analysis DIFC systems assume that
+programs (or in Laminar’s case, security regions) terminate. Fig-
+ure 6 shows an example of an implicit ﬂow via a termination chan-
+nel, that leaks secret information based on whether the application
+terminates. If control returns from this security region, then unpriv-
+ileged code can learn that H is false. Similarly, a colluding appli-
+cation might learn that H is true if the application must be explic-
+itly killed. OS-based DIFC systems eliminate termination channels
+by ensuring that no one with whom communication is prohibited
+is notiﬁed of thread termination. In practice, termination channels
+have been low bandwidth and difﬁcult to exploit, but in a multi-
+threaded environment, exploitation might be signiﬁcantly easier.
+For instance, if H is usually false, a low security thread may de-
+duce that fact with high probability.
+
+In cases where reestablishing a program invariant is difﬁcult,
+a secure catch block can simply kill the process, for example, by
+calling System.exit(). If high-secrecy data structures become
+corrupted, programmers may want to terminate the program rather
+than require a declassiﬁer to notice the corruption. However, exit-
+ing the program in the catch block creates a termination channel. A
+more restrictive model would prevent this termination channel by
+ensuring that only a security region with full declassiﬁcation capa-
+bilities kills the process.
+
+4.4 VM-OS interface
+
+Security regions are abstractions that are not visible to the OS.
+For the OS to enforce DIFC rules on system calls made in a
+security region, the VM must set appropriate labels on the current
+kernel thread using the set task label system call. As an
+optimization, the VM omits setting the labels in the kernel thread if
+the security region does not perform a system call. When the VM
+sets the labels on a thread, the OS checks to ensure that the labels
+are legal given the thread’s capabilities.
+
+Acquiring tags and capabilities. Principals in Laminar acquire
+capabilities in three ways: they allocate a new tag, they inherit them
+through fork(), or they perform inter-process communication.
+The system carefully mediates capability acquisition, lest a princi-
+pal incorrectly declassify or endorse data.
+
+A principal can allocate a new tag via the alloc tag system
+call. The OS security module that allocates tags is trusted and
+ensures that all tags are unique. The principal that allocates a
+tag becomes the owner of the new tag. The owner can give the
+plus and minus capabilities for the new tag to any other principal
+with whom it can legally communicate. By default, a thread that
+gains a capability within a security region retains the capability
+on exit from the region. The thread must explicitly call drop -
+capability to prevent the capability from propagating to the
+calling context.
+
+Threads and security regions form a natural hierarchy of princi-
+pals. When a kernel thread forks off a new thread, it can initialize
+the new thread with a subset of its capabilities. Similarly, when a
+thread enters a security region, the thread retains only the subset of
+its capabilities speciﬁed by the region. In general, when a new prin-
+cipal is created, its capabilities are a subset of its immediate parent,
+which the VM and OS enforce.
+
+The passing of all inter-thread and inter-process capabilities is
+mediated by the kernel, speciﬁcally with the write capability
+kernel call. This system call checks that the labels of the sender and
+receiver allow communication.
+
+Removing tags and capabilities. The Laminar VM is responsi-
+ble for correctly setting thread labels and capabilities inside secu-
+
+rity regions. When a thread enters a security region, the VM ﬁrst
+makes sure that the thread has sufﬁcient capabilities to enter the re-
+gion. If it does, the VM sets the labels and capabilities of the thread
+to equal those speciﬁed by the security region. Similarly, when the
+thread exits the security region, the VM restores the labels and ca-
+pabilities it had just before it entered the region. On exiting a nested
+security region, the VM restores the labels and capabilities of the
+thread to those of the parent security region.
+
+The Laminar language API provides a method, remove-
+Capability, that removes a thread’s capability in the VM,
+which then calls the drop capability system call to notify
+the kernel. The removeCapability method takes an argument,
+global, that allows the user to specify whether the capability
+should be dropped only for the scope of the security region or
+permanently (i.e., globally). Globally dropped capabilities are not
+restored to the parent when the thread exits a security region. The
+VM uses the set task label system call to change the label of
+a thread at the beginning and end of a security region. This func-
+tion has no user API; it is called solely by the VM at the entry and
+exit of security regions. Laminar does not allow security regions
+to change their labels, because the VM relies on labels staying the
+same throughout lexically scoped regions to prevent leaks through
+local variables, as discussed in Section 5.1. To change labels in the
+middle of a security region, a thread may begin a nested security
+region.
+
+Consider an example when a thread only has the a+ capability
+and starts a security region with secrecy label {S(a)}. The Laminar
+VM will set the label of the thread as {S(a)} when the security
+region begins. When the security region ends, the thread must drop
+the secrecy label, even if it does not have the a− capability. To
+allow the thread to drop {S(a)}, the VM contains a thread, that
+is trusted by the OS, which runs code with a special integrity tag
+called tcb. Using the drop label tcb system call, this trusted
+thread may drop all current labels for a thread without having the
+appropriate capabilities.
+
+A single, high-integrity thread in the VM limits exposure to
+bugs because the OS enforces that only the thread with the tcb tag
+may drop labels within a single address space. The VM cannot drop
+the labels on other applications. Only a small, auditable portion of
+the VM is trusted to run with this special label.
+
+Capability persistence and revocation. Capability persistence
+and revocation are always issues for capability-based systems, and
+Laminar does not innovate any solutions. However, its use of capa-
+bilities is simple and stylized. The OS stores the persistent capabil-
+ities for each user in a ﬁle. On login, the OS gives the login shell all
+of the user’s persistent capabilities, just as it gives the shell access
+to the controlling terminal. If a user wishes to revoke access to a
+resource for which she has already shared a capability, she must al-
+locate a new capability and relabel the data. Because tags are drawn
+from a 64-bit address space, tag exhaustion is not a concern.
+
+4.5 Labeling data
+
+Data objects are labeled as part of their allocation to avoid races
+between creation and labeling. The VM labels objects allocated
+within a security region with the label of that region. The create -
+labeled and mkdir labeled kernel calls create labeled ﬁles
+and directories. Other system resources use the label of their creat-
+ing thread.
+
+Like most other DIFC systems, Laminar uses immutable labels.
+To change a label, the user must copy the data object. Dynamic
+relabeling in a multithreaded environment requires additional syn-
+chronization to ensure that a label check on a data-object and its
+subsequent use by principal A are atomic with respect to the relabel
+by principal B. Without atomicity, an information ﬂow rule may be
+violated. For example, A checks the label, B changes the label to be
+
+more secret, B writes secret data, and then A uses the data. Atomic
+relabeling can prevent this unauthorized ﬂow from B to A. Instead,
+Laminar uses immutable labels to avoid extra synchronization.
+
+4.6 Compatibility challenges
+
+Although Laminar is designed to be incrementally deployed, some
+implementation techniques are incompatible with any DIFC sys-
+tem. For instance, a library might memoize results without regard
+for labels. If a function memoized its result in a security region with
+one label, a later call with a different label may attempt to return
+the memoized value. Because the memoized result is secret, the at-
+tempt to return it will be prevented by the system. Such code must
+be modiﬁed to work in any DIFC system.
+
+4.7 Trusted computing base
+
+To implement Laminar, we added approximately 2, 000 lines of
+code to Jikes RVM,1 a 1, 000 line Linux security module, and 500
+lines of modiﬁcations to the Linux kernel. This relatively small
+amount of code means that Laminar can be easily audited.
+
+We rely on the standardization of the VM and the OS as the basis
+of Laminar’s trust. In addition to trusting the base VM, Laminar
+requires that the VM correctly inserts the appropriate read and write
+instrumentations called barriers for all accesses and optimizes them
+correctly. Read and write barrier insertion is localized and standard
+in many VMs. In Linux, Laminar assumes that the kernel has the
+proper hooks to call into Linux security modules (LSM). Because
+many projects rely on LSMs, the Linux code base is under constant
+audit to make sure all necessary calls are made.
+
+5.
+
+Implementation
+
+This section describes our implementation of Laminar, which mod-
+iﬁes Jikes RVM and the Linux operating system to provide DIFC.
+
+5.1
+
+JVM support
+
+We implement Laminar’s trusted VM in Jikes RVM 3.0.0,1 a high-
+performance Java-in-Java virtual machine [1]. Our implementa-
+tion of Laminar is publicly available on the Jikes RVM Research
+Archive.2 As of August 2008, Jikes RVM’s performance compared
+well with commercial VMs: the same average performance as Sun
+HotSpot 1.5; and 15–20% worse than Sun HotSpot 1.6, JRockit,
+and J9 1.93.All subsequent uses of the term JVM refer to the
+Laminar-enhanced version of Jikes RVM.
+
+The JVM controls information ﬂow by ensuring that all program
+access to labeled data occur in security regions. The JVM adds
+instrumentation called barriers at every object read and write; these
+barriers check at run time that accesses conform to the DIFC rules
+in Section 3.
+
+Starting a security region. When a thread starts a security re-
+gion, the JVM checks whether it has the capabilities to initialize
+the security region with the speciﬁed labels and capabilities, as de-
+scribed in Section 4.3.2. Thread capabilities are stored in the ker-
+nel. The JVM then caches a copy of the current capabilities of each
+thread to make the checks efﬁcient inside the security region.
+
+Restricting information ﬂow for locals and statics. The JVM
+enforces information ﬂow control for accesses to three types of
+application data: locals, which reside on the stack and in registers;
+objects, which reside in the heap; and statics, which reside in a
+global table.
+
+Because the lifetime of local variables is typically short, and
+tracking their labels would be expensive, our prototype restricts the
+
+1 http://www.jikesrvm.org
+2 http://www.jikesrvm.org/Research+Archive
+3 http://jikesrvm.anu.edu.au/ dacapo/
+
+programming model. Laminar statically (during JIT compilation)
+enforces the following restrictions on local variables: (1) a local
+variable written inside a security region may not later be read
+outside that security region if the region has secrecy labels, and
+(2) a local variable already written outside a security region may
+not be read inside the region if the region has integrity labels.
+Because a security region’s labels are dynamic, for simplicity our
+implementation requires both properties for every security region.
+An important exception to these restrictions is that local variables
+that are references may be dereferenced; however the references
+themselves may not be read or written (e.g., obj.f is allowed, but
+if (obj == null) is not). These accesses to the referenced
+object is checked by read and write barriers, which are discussed
+below.
+
+The Laminar prototype implementation requires that a security
+region be in its own method to simplify static checking of these
+restrictions. Thus, the JVM only needs to ensure statically that any
+method security region (1) does not return a value if the region has
+security labels, (2) takes only reference-type parameters, and (3)
+does not read or write the values of its parameters (dereferencing
+its parameters is allowed). However, our prototype implementation
+does not currently check these rules but instead requires programs
+to adhere to them. A production implementation of Laminar could
+decouple security regions from methods by enforcing local variable
+restrictions as part of bytecode veriﬁcation.
+
+The JVM restricts information ﬂow to and from static variables.
+The Laminar prototype implementation prevents security regions
+with secrecy labels from writing static variables, and prevents re-
+gions with integrity labels from reading statics. Compiler-inserted
+barriers at each access inside a security region enforce these restric-
+tions. A production implementation could support labeling statics
+with modest overhead because static accesses are relatively infre-
+quent compared to ﬁeld and array element accesses. The applica-
+tions in Section 7 do not need labeled static variables.
+
+Supporting information ﬂow for objects. The JVM tracks in-
+formation ﬂow for objects that live in the heap. At allocation time,
+objects may be assigned secrecy and integrity labels that are im-
+mutable. By default, objects allocated inside security regions are
+assigned the labels of the region at the allocation point. The pro-
+gram may specify alternate labels, as long as they conform to DIFC
+rules. To change an object’s labels, our implementation provides an
+API call, copyAndLabel, that clones an object with speciﬁed la-
+bels. The label change must conform to the label change rule (Sec-
+tion 3). The JVM allocates labeled objects into a separate labeled
+object space in the heap, allowing instrumentation to quickly check
+whether an object is labeled. We modify the allocator to add two
+words to each object’s header, which point to secrecy and integrity
+labels.
+
+Our implementation encapsulates labels into immutable, opaque
+objects of type Labels that support operations such as is-
+SubsetOf() and union(). For efﬁciency, Labels objects
+may be shared by objects, security regions, and threads because
+they are immutable; mutating operations such as union() return
+a new object, if needed. Internally, Labels uses a sorted array of
+64-bit integers to hold tags. Because Labels is opaque, applica-
+tions cannot observe the individual values of the tags, so they can
+read and use labels without creating a covert channel.
+
+The JVM’s compiler inserts read and write barriers [6] (instru-
+mentation at every operation) into application code to enforce DIFC
+rules. Inside security regions, the compiler inserts barriers at la-
+beled object allocation (before the constructor call) to set the labels
+and check that they conform to DIFC rules. It inserts barriers at ev-
+ery read from and write to an object ﬁeld or array element. Inside
+security regions, barriers load the accessed objects’ secrecy and in-
+tegrity Labels and check that they conform to the current secu-
+
+// credentials = {S(s1,s2),I(),C(s1
+// credentialsNew = {S(),I(),C(s1
+// newLabel
+
+= {S(),I()}
+
+−,s2
+
+−)}
+
+−,s2
+
+−)}
+
+[L1] secure(credentials){
+[L2]
+[L3]
+[L4]
+[L5]
+[L6]
+
+int m1 = student1.marks;
+int m2 = student2.marks;
+MyObject obj = new MyObject(m1+m2);
+secure(credentialsNew){
+
+ret.val = Laminar.copyAndLabel(obj, newLabel);
+...
+
+}
+
+Figure 7. Example code to read the marks of
+two students.
+The student1 and student2 objects are labeled. The object
+credentials contains the secrecy, integrity, and capabilities sets with
+which the security region is initialized.
+
+rity region’s labels and capabilities. Outside security regions, read
+and write barriers check that the accessed objects are unlabeled (or
+equivalently, have the empty label). The compiler inserts barriers
+inside security regions at static accesses to verify that static reads
+(writes) occur only in regions without integrity (secrecy) labels.
+
+The compiler inserts different barriers at an access depending
+on whether the access occurs inside or outside a security region.
+Choosing the right barrier at compile time can be difﬁcult because
+a method may be called by code inside of and outside of a security
+region. In our prototype implementation, when a method ﬁrst ex-
+ecutes and the compiler compiles it, the compiler checks whether
+the thread is in a security region and inserts barriers accordingly.
+(Subsequent recompilation at higher optimization levels reuses this
+decision.) This approach, which we call static barriers, fails if a
+method is called from both within and without a security region.
+Thus, we also support a conﬁguration where the compiler adds dy-
+namic barriers that check whether the current thread is in a security
+region or not, and then execute the correct barrier. A production im-
+plementation would use cloning to compile two versions of meth-
+ods executed from both contexts; the same approach is used in prior
+work on software transactional memory [20]. Static barriers add the
+same overhead that cloning would achieve.
+
+Because object labels are immutable and security regions cannot
+change their labels, repeated barriers and checks on the same object
+are redundant. We implement an intraprocedural, ﬂow-sensitive
+data-ﬂow analysis that identiﬁes redundant barriers and removes
+them. A read (or write) barrier is redundant if the object has been
+read (written), or if the object was allocated, along every incoming
+path. Although the optimization is intraprocedural, the compiler
+already inlines small and hot methods, increasing the scope of
+redundancy elimination.
+
+Example. The example illustrated in Figure 7 computes the sum
+of the marks obtained by two different students. The student1
+and student2 objects are labeled and have different secrecy val-
+ues associated with them. The object credentials contains a
+set of labels and capabilities. If the capabilities and labels inside
+credentials do not conform to the current thread’s capabil-
+ities, then the program terminates at L1. Once the security re-
+gion starts, the thread’s current labels become those present in
+credentials. Lines L2 and L3 are reads of labeled objects
+that will result in an error if the ﬂow from student1.marks
+or student2.marks to the thread in the security region is not
+allowed. In line L4, the JVM allocates object obj with the labels
+present in credentials. The programmer can write to the ref-
+erence obj because it is used only inside the security region. In
+line L6, the thread attempts to change the labels of the object in-
+side a nested security region. The JVM allows this change because
+the thread has the required capabilities. Note that the inner security
+region has empty secrecy label.
+
+5.2 OS support
+
+We have implemented support for DIFC in Linux version 2.6.22.6
+as a Linux Security Module (LSM) [27]. LSM provides hooks into
+the kernel to allow custom authorization rules. We also added a set
+of system calls to manage labels and capabilities (Figure 2). Some
+LSM-based systems, such as SELinux [15], manage access control
+settings through a custom ﬁlesystem similar to proc. This method
+is isomorphic to adding new system calls. The Laminar security
+module contains about 1,000 lines of code, and about 500 lines of
+modiﬁcations to the kernel to support the new system calls.
+
+Tags, labels, and capabilities. Tags are represented by 64-bit in-
+tegers and allocated via the alloc tag() system call. Labels and
+capabilities are stored in the opaque security ﬁeld of the appropriate
+Linux objects (task struct, inode, file, etc.). Secrecy and
+integrity labels for ﬁles are persistently stored in the ﬁle’s extended
+attributes. Most of the standard local ﬁlesystems for Linux support
+extended attributes, including ext2, ext3, xfs, and reiserfs.
+
+Files. Using LSM, Laminar intercepts inode and file ac-
+cesses, which are used to perform operations on unopened ﬁles and
+ﬁle handles (including sockets and pipes), respectively. The Lam-
+inar security hooks perform a straightforward check of the rules
+listed in Section 3.2. The label of an inode protects its contents
+and its metadata, except for the name and label, which are protected
+by the label of the parent directory.
+
+In a typical ﬁlesystem tree, secrecy increases from the root to the
+leaves. Creating labeled ﬁles in a DIFC system is tricky because
+it involves writing a new entry in a parent directory, which can
+disclose secret information. For example, we disallow a principal
+with secrecy label {S(a)} from creating a ﬁle with secrecy label
+{S(a)} in an unlabeled directory, because it can leak information
+through the ﬁle name. Instead, the principal should pre-create the
+ﬁle before tainting itself with the secrecy label.
+
+More formally, we allow a principal with non-empty labels
+{Sp, Ip} to create a labeled ﬁle or directory with labels {Sf , If }
+if: (1) Sp ⊂ Sf and If ⊆ Ip; (2) the principal has capabilities to
+acquire labels {Sp, Ip}; and (3) the principal can write to the parent
+directory with its current label. This approach prevents information
+leaks during ﬁle creation while maintaining a usable interface.
+
+Applying integrity labels to a ﬁlesystem tree is more complex
+than secrecy. The intuitive reason for integrity labels on directories
+is to prevent an attacker from tricking a program into opening the
+wrong ﬁle, for instance using symbolic links. The practical difﬁ-
+culty with integrity for directories is that a task with integrity label
+IA cannot read any ﬁles or directories without this label, poten-
+tially including /. If system directories, such as /home, have the
+union of all integrity labels, then an administrator cannot add home
+directories for new users without being given the integrity labels
+of all existing users. Flume solves this problem by providing a ﬂat
+namespace that applications can use to store data with integrity la-
+bels.
+
+Applying integrity labels to a traditional Unix directory struc-
+ture brings out a fundamental design tension in DIFC OS’s, be-
+tween usability and minimizing trust in the administrator. Lami-
+nar ﬁnds a middle ground by labeling system directories (e.g., /,
+/etc, /home) with a system administrator integrity label when
+the system is installed. A user may choose to trust the system ad-
+ministrator’s integrity label and read absolute paths to ﬁles, or she
+may eschew trust in the system administrator by exclusively open-
+ing relative paths. In the worst case, she creates her own chroot
+environment. Simple relative paths were sufﬁcient for all of the case
+studies in this paper. Laminar’s approach supports incremental de-
+ployability by allowing users to choose whether to trust the system
+administrator at the cost of extra work for stronger integrity guar-
+antees.
+
+Laminar (dynamic barriers)
+Laminar (static barriers)
+
+)
+
+%
+
+(
+ 
+d
+a
+e
+h
+r
+e
+v
+O
+
+60
+
+40
+
+20
+
+0
+
+antlr
+
+chart
+
+fo
+
+eclipse
+
+p
+
+hsqld
+
+jyth
+
+luin
+
+b
+
+o
+
+n
+
+p
+
+lusearch
+
+dex
+
+m
+
+d
+
+xalan
+
+pseu
+
+geo
+
+d
+ojb
+b
+
+m
+
+ean
+
+Figure 8. Laminar VM overhead on programs without security regions.
+
+Pipes. Laminar mediates inter-process communication (IPC)
+over pipes by labeling the inode associated with the pipe message
+buffer. A process may read or write to a pipe so long as its labels are
+compatible with the label of the pipe. Message delivery over a pipe
+in Laminar is unreliable. An error code due to an incorrect label or
+a full pipe buffer can leak information, so messages that cannot be
+delivered are silently dropped. Unreliable pipes are common in OS
+DIFC implementations [12, 26].
+
+Reads from a pipe in Laminar must be nonblocking to prevent
+illegal information ﬂow. Standard pipes deliver an EOF to readers
+when a writer exits. When the exiting process does not have appro-
+priate write labels, sending an EOF violates DIFC rules. Thus, reads
+should be non-blocking and readers cannot depend on an explicit
+EOF if the writer can change labels. In the common case where
+all applications in a pipeline have the same label, traditional Unix
+pipe behavior can be approximated with a timeout. Using pipes in
+programs with heterogeneous, dynamic labels may require modiﬁ-
+cation for a DIFC environment.
+
+6. Laminar overhead
+
+This section reports the overhead of Laminar’s subsystems. The
+performance loss on Java benchmarks without security regions is
+6% or 17%, depending on whether the dynamic compiler compiles
+separate versions of methods called both from inside and outside
+security regions. The Laminar OS incurs an overhead of less than
+8% on lmbench. All experiments, including those in the next
+section, were conducted on a machine with a quad-core Intel Xeon
+2.83 GHz processor. All experiments conﬁgure Jikes RVM to run
+on two cores. All results are normalized to values obtained on
+unmodiﬁed Linux 2.6.22 and Jikes RVM 3.0.0.
+
+6.1
+
+JVM overhead
+
+Figure 8 shows the overhead of our Laminar-enabled JVM for the
+DaCapo benchmarks [5] and a ﬁxed-workload version of SPEC-
+jbb2000 called pseudojbb [24]. Each experiment executes two
+iterations of the benchmark: the ﬁrst includes compilation, and the
+second disables compilation and runs only the application. We re-
+port the running time of the second iteration. Because compilation
+decisions are nondeterministic, running times vary, so we execute
+10 trials of each experiment and take the median.
+
+The darker bar shows the overhead of dynamic barriers, which
+check dynamically if they are in a security region. Dynamic barriers
+add 17% overhead on average. The lighter bar is the overhead of
+using static barriers, 6% on average. As discussed in Section 5.1,
+a mature implementation of Laminar would use method cloning
+and eliminate all dynamic barriers. Because method cloning has
+comparable overheads to static barriers, code outside of a security
+region is expected to have an average overhead of 6%.
+
+We also measure compilation time and ﬁnd that, on average,
+static barriers double it, and dynamic barriers triple it. However,
+compilation time is not our primary concern, especially for long-
+running programs. For these benchmarks, compilation time ac-
+
+Benchmark
+stat
+fork
+exec
+0k ﬁle create
+0k ﬁle delete
+mmap latency
+prot fault
+null I/O
+
+Linux
+0.92
+96.40
+300.00
+6.29
+2.54
+6,877.00
+0.24
+0.13
+
+Laminar % Overhead
+2.0
+0.6
+0.6
+4.0
+6.0
+2.0
+7.0
+31.0
+
+0.94
+97.00
+302.00
+6.56
+2.68
+7,035.00
+0.26
+0.17
+
+Table 2. Execution time in microseconds of several lmbench OS mi-
+crobenchmarks, and overhead incurred by using Laminar. Lower is better.
+
+counts for just 8-12% of running time on average, making barrier
+compilation’s effect on run time comparable to barriers’ effect on
+application execution time. The overhead is high in large part be-
+cause we instruct the compiler to inline the barriers aggressively,
+which bloats the code and slows downstream optimizations. To
+lower compilation time without increasing run time substantially,
+an implementation could choose to inline less aggressively.
+
+6.2 OS overhead
+
+We use the lmbench [16] suite of benchmarks to measure the
+overheads imposed on unlabeled applications when running on
+Laminar OS. A selection of the results is presented in Table 2.
+
+In general, the overhead of the Laminar OS modiﬁcations are
+less than 8%, which is similar to previously reported overheads
+for Linux security modules [27]. The only performance outlier is
+the “null I/O” benchmark, which has an overhead of 31%. This
+benchmark represents the worst case for Laminar in that the system
+call being measured does little work to amortize the cost of the label
+check. For the sake of comparison, Flume adds a factor of 4-35×
+to the latency of system calls relative to unmodiﬁed Linux [12].
+
+7. Application case studies
+
+This section describes four case study applications and how we
+retroﬁt them with DIFC security policies. Table 3 summarizes the
+details of the applications. Figure 9 shows the overhead of running
+the modiﬁed version with Laminar. The retroﬁtted applications
+implement more powerful security policies than their unmodiﬁed
+counterparts, and all modiﬁcations are at most 10% of the source.
+The ﬁgure breaks down the overhead of Laminar into four parts.
+Start/end SR is the overhead of application modiﬁcations to support
+DIFC, including the starting and ending of security regions and
+other security operations, such as copyAndLabel. The Alloc
+barriers conﬁguration denotes the extra time for allocating labeled
+objects and assigning their label sets. Static barriers is the overhead
+from read and write barriers when the security context is known at
+compile time. Finally, Dynamic barriers is the extra overhead from
+barriers that check context at run time. We note that Gradesheet
+and Battleship run correctly with static barriers, but Calendar and
+FreeCS require dynamic barriers because some methods are called
+from both inside and outside security regions. Method cloning
+would obviate the need for dynamic barriers (Section 5.1).
+
+In all our experiments, we disabled the GUI, as well as other
+I/O and network-related operations so that the Laminar overheads
+are not masked by them. Hence, the slowdown in deployed appli-
+cations would be less than what is reported in our experiments. For
+comparison, Flume [12] adds 34–43% slowdown on the MoinMoin
+wiki application. Flume labels data at the granularity of an address
+space, and cannot enforce DIFC rules on heterogeneously labeled
+objects in the same address space.
+
+7.1 GradeSheet
+
+GradeSheet is a small program that manages the grades of stu-
+dents [4]. It uses three types of principals: professors, TAs and stu-
+
+Application
+
+LOC
+
+GradeSheet
+Battleship
+Calendar
+FreeCS
+
+900
+1,700
+6,200
+
+Protected
+Data
+Student grades
+Ship locations
+Schedules
+
+22,000 Membership
+
+properties
+
+LOC Added % time
+in SRs
+6%
+54%
+1%
+<1%
+
+92 (10%)
+(6%)
+95
+(5%)
+290
+1,200
+(6%)
+
+Table 3. Details of the various applications, including lines of code, the
+data that needs to be secured, the lines of code that had to be added to secure
+the application using Laminar and the fraction of time spent in security
+regions.
+
+)
+
+%
+
+(
+ 
+d
+a
+e
+h
+r
+e
+v
+O
+
+80
+
+60
+
+40
+
+20
+
+0
+
+Dynamic barriers
+Static barriers
+Alloc barriers
+Start/end SR
+
+<1%
+
+freecs
+
+gradesheet
+
+battleship
+
+calendar
+
+Figure 9. Overhead of executing applications retroﬁtted with Laminar.
+
+Name
+GradeCell(i,j)
+Student(i)
+TA(j)
+Professor
+
+Security Set
+S={si}, I={pj }
+−
+C={s+
+i , s
+i }
+i=1 s+
+i , p+
+C={Si=n
+j , p
+C={Si=n,j=m
+i=1,j=1 (s+
+
+−
+j }
+−
+i , p+
+
+i , s
+
+j , p
+
+−
+j )}
+
+Table 4. The security sets associated with the principals and data objects
+in GradeSheet. S, I and C stand for security, integrity and capability sets.
+Student(i) and TA(j) refer to the ith student and jth teaching assistant,
+respectively.
+
+dents. The main data structure is a two-dimensional object array
+GradeCell. The (i, j)th object of GradeCell stores the infor-
+mation about student i and her marks in project j. A sample policy
+states that (1) the professor can read/write any cell, (2) the TA can
+read the marks of all students but only modify the ones related to
+the project that she graded, and (3) students can only view their
+own marks, but for any project.
+
+Table 4 shows how this policy can be expressed by assigning
+labels and capabilities to the data and the principals respectively.
+Speciﬁcally, we guard the (i, j)th entry in the GradeCell with
+the secrecy tag si and the integrity tag pj. Each student i has the
+capability to add or remove si, so students can read their own
+marks in any project. Each TA j has the capability to add tags si
+and the integrity tag for the project that she graded (pj). This tag
+ensures that TAs can read the marks of all students, but the integrity
+constraint prevents them from modifying grades for projects that
+they did not grade.
+
+Interestingly, Laminar found an information leak in the original
+policy. The policy allowed a student to calculate and read the
+average marks in a project, which leaks information about the
+marks of other students. After integration with Laminar, only the
+professor is allowed to calculate the average and declassify it.
+
+Our experiments measure the time taken by the server to process
+queries from different users. The Laminar-enabled version has a
+7% slowdown compared to the unmodiﬁed version.
+
+7.2 Battleship
+
+proceeds in rounds; in each round, a player shoots a location on the
+opponent’s grid. The player who ﬁrst sinks all the opponent’s ships
+wins the game.
+
+We started with JavaBattle, which is a 1,700-line Battleship
+program available on SourceForge. Each player Pi allocates a tag
+pi and labels her board and the ships with it. The capability p−
+i
+is not given to anyone else, ensuring that only the player can
+declassify the locations of her ships. In the original implementation,
+players directly inspect the coordinates of a shot to determine
+whether it hit or missed an opponent’s boat. Under Laminar, each
+player sends her guess to her opponent, who then updates his board
+inside a security region. The opponent then declassiﬁes whether
+the guess was a hit or a miss and sends that information back to the
+ﬁrst player. We had to add less than 100 lines of code to secure the
+program to run with Laminar.
+
+In our experiments, the game is played between computers on
+a 15×15 grid without a GUI. Figure 9 shows that the secured
+version adds 56% overhead with static barriers. The overhead is
+high because the benchmark spends almost 54% of its time inside
+security regions. In a deployed Battleship, which would display
+the intermediate state of the board to the players, the overhead
+would be signiﬁcantly less. In an experiment where we display the
+shot location after each move, the run time increases, and Laminar
+overhead drops to 1%.
+
+7.3 Calendar
+
+Like in the examples from earlier in the paper, we modiﬁed the
+k5nCal4 multithreaded desktop calendar to label all data struc-
+tures and .ics ﬁles that store a user’s calendar information
+with the user’s secrecy tag.All functions that access this data are
+wrapped inside security regions, including a scheduler that ﬁnds
+available meeting times for multiple users. In the original program,
+a user could view the calendar of other users, a feature we disabled.
+Our experiments measure the time to schedule a meeting, which
+includes reading the labeled calendars of Bob and Alice, ﬁnding a
+common meeting date, and then writing the date to another labeled
+ﬁle that Alice can read. The scheduling code is executed in a thread
+that has the capability to read data for both Alice and Bob, but
+can only declassify Bob’s data. The output ﬁle is protected by the
+label of Alice. Our experiment schedules 1,000 meetings. Figure 9
+shows that the secured version of Calendar runs 14% slower than
+unmodiﬁed Calendar.
+
+We note that for Calendar, idle time was high when running
+the DIFC version with two cores. We have not yet diagnosed this
+issue. However, we found that the problem is speciﬁc to our Xeon
+machine, so we report results for Calendar on a Core 2 Quad 2.4
+GHz processor running our modiﬁed kernel.
+
+7.4 FreeCS chat server
+
+FreeCS is an open-source chat server written in Java5. Multiple
+users connect to the server and communicate with each other.
+FreeCS supports 47 commands, such as creating groups, inviting
+other users, and changing the theme of the chat room. The original
+security policy consists of an authorization framework that restricts
+what commands can be used by a user. All these policies are written
+in the form of if..then checks. These authorization checks are
+actually checks on the role of a user. For example, a user who is
+in the role of a VIP and has superuser power on a group can ban
+another user in the group.
+
+We improve the security code in FreeCS by labeling sensitive
+data structures and accessing them inside security regions. We
+made most of our modiﬁcations in two classes—Group and User.
+
+Battleship is a common board game played between two players.
+Each player secretly places her ships on the grid in her board. Play
+
+4 http://k5ndesktopcal.sourceforge.net
+5 http://freecs.sourceforge.net
+
+With Laminar, we localized all security checks to these classes.
+The abstraction of a role maps naturally onto integrity labels. For
+example, we protect the banList data structure with two tags,
+one that corresponds to the notion of VIP and the other for the
+group’s superuser. Now, only users who have the add capability
+for these two tags can use the ban command. We also changed
+the authentication module to ensure that users are given the right
+capabilities when they log in. Our experiments measure the time
+to process requests from 4, 000 users, each invoking three different
+commands. Laminar’s overhead is less than 1% (Figure 9).
+
+7.5 Summary
+
+The four case studies reveal a pattern in the way applications are
+written. First, most applications have only a few key data struc-
+tures that need to be secured, like the array of student grades in
+GradeSheet or the playing boards in Battleship. Second, the inter-
+face to access these data structures is quite narrow. For example,
+InternalServer in GradeSheet and DataFile in Calendar
+contain the functions used to access the important data. These ob-
+servations support our hypothesis that only localized changes are
+needed to retroﬁt DIFC onto many types of applications. Third,
+most of the data structures require heterogeneous labeling—the sin-
+gle data structure GradeCell has different labels corresponding
+to different students. Heterogeneous labeling is impractical in OS-
+based systems [12, 26, 28], since they support a single label on the
+whole address space or require the programmer to map application
+data structures onto labeled pages. The Laminar VM easily solves
+this problem with ﬁne-grain tracking of labels on the data structure,
+for example, individual array elements and objects in GradeSheet.
+
+8. Conclusion
+
+Laminar is the ﬁrst DIFC system to unify PL and OS mechanisms
+for information ﬂow control. It provides a natural programming
+model to retroﬁt powerful and auditable security policies onto ex-
+isting, complex, multithreaded programs.
+
+Acknowledgments
+
+We thank Eddie Kohler, Maxwell Krohn, and Nickolai Zeldovich
+for their feedback on earlier drafts of this paper. We also thank the
+anonymous referees for their constructive comments.
+
+References
+
+[1] B. Alpern, C. R. Attanasio, J. J. Barton, M. G. Burke, P. Cheng, J.-D.
+Choi, A. Cocchi, S. J. Fink, D. Grove, M. Hind, Susan Flynn Hummel,
+D. Lieber, V. Litvinov, M. Mergen, T. Ngo, J. R. Russell, V. Sarkar,
+M. J. Serrano, J. Shepherd, S. Smith, V. C. Sreedhar, H. Srinivasan,
+and J. Whaley. The Jalape˜no virtual machine. IBM Systems Journal,
+39(1):211–238, 2000.
+
+[2] D. E. Bell and L. J. LaPadula. Secure computer systems: Mathemati-
+cal foundations. Technical Report MTR-2547, Vol. 1, MITRE Corp.,
+Bedford, MA, 1973.
+
+[3] K. J. Biba. Integrity considerations for secure computer systems.
+
+Technical Report ESD-TR-76-372, USAF Electronic Systems
+Division, Bedford, MA, April 1977.
+
+[4] A. Birgisson, M. Dhawan, ´Ulfar Erlingsson, V. Ganapathy, and
+L. Iftode. Enforcing authorization policies using transactional
+memory introspection. In CCS, 2008.
+
+[5] S. M. Blackburn, R. Garner, C. Hoffman, A. M. Khan, K. S.
+
+McKinley, R. Bentzur, A. Diwan, D. Feinberg, D. Frampton, S. Z.
+Guyer, M. Hirzel, A. Hosking, M. Jump, H. Lee, J. E. B. Moss,
+A. Phansalkar, D. Stefanovi´c, T. VanDrunen, D. von Dincklage,
+and B. Wiedermann. The DaCapo benchmarks: Java benchmarking
+development and analysis. In OOPSLA, pages 169–190, 2006.
+
+[6] S. M. Blackburn and A. L. Hosking. Barriers: Friend or foe? In ACM
+
+International Symposium on Memory Management, 2004.
+
+[7] D. E. Denning. A lattice model of secure information ﬂow. CACM,
+
+19(5):236–243, May 1976.
+
+[8] D. E. Denning and P. J. Denning. Certiﬁcation of programs for secure
+
+information ﬂow. CACM, 20(7):504–513, July 1977.
+
+[9] Department of Defense. Department of Defense Trusted Computer
+System Evaluation Criteria, DOD 5200.28-STD (The Orange Book)
+edition, December 1985.
+
+[10] B. Hicks, S. Rueda, T. Jaeger, and P. McDaniel. From trusted to
+secure: Building and executing applications that enforce system
+security. In USENIX, 2007.
+
+[11] P. A. Karger, M. E. Zurko, D. W. Bonin, A. H. Mason, and C. E.
+IEEE
+
+Kahn. A retrospective on the VAX VMM security kernel.
+Trans. Softw. Eng., 17(11), 1991.
+
+[12] M. Krohn, A. Yip, M. Brodsky, N. Cliffer, M. F. Kaashoek, E. Kohler,
+and R. Morris. Information ﬂow control for standard OS abstractions.
+In SOSP, 2007.
+
+[13] B. W. Lampson. A note on the conﬁnement problem. Commun. ACM,
+
+16(10):613–615, 1973.
+
+[14] Henry M. Levy. Capability-Based Computer Systems. Digital Press,
+
+Bedford, Massachusetts, 1984.
+
+[15] P. Loscocco and S. Smalley. Integrating ﬂexible support for security
+
+policies into the Linux operating system. In USENIX, 2001.
+
+[16] Larry McVoy and Carl Staelin.
+
+lmbench: Portable tools for
+
+performance analysis. In Usenix, 1996.
+
+[17] A. C. Myers. JFlow: Practical mostly-static information ﬂow control.
+
+In POPL, pages 228–241, New York, NY, USA, 1999. ACM Press.
+
+[18] A. C. Myers and B. Liskov. A decentralized model for information
+
+ﬂow control. In SOSP, pages 129–142, October 1997.
+
+[19] A. C. Myers, N. Nystrom, L. Zheng, and S. Zdancewic. Jif: Java
+information ﬂow. Software release. http://www.cs.cornell.edu/jif,
+July 2001.
+
+[20] Yang Ni, Adam Welc, Ali-Reza Adl-Tabatabai, Moshe Bach, Sion
+Berkowits, James Cownie, Robert Geva, Sergey Kozhukow, Ravi
+Narayanaswamy, Jeffrey Olivier, Serguei Preis, Bratin Saha, Ady
+Tal, and Xinmin Tian. Design and implementation of transactional
+constructs for C/C++. In OOPSLA, pages 195–212, 2008.
+
+[21] A. Sabelfeld and A. C. Myers. Language-based information-ﬂow
+security. IEEE Journal on Selected Areas in Communications, 21,
+2003.
+
+[22] Jonathan S. Shapiro, Jonathan M. Smith, and David J. Farber. EROS:
+
+A fast capability system. In SOSP, 1999.
+
+[23] V. Simonet and I. Rocquencourt. Flow Caml in a nutshell.
+
+In
+
+Proceedings of the ﬁrst APPSEM-II workshop, pages 152–165, 2003.
+
+[24] Standard Performance Evaluation Corporation. SPECjbb2000
+
+Documentation, release 1.01 edition, 2001.
+
+[25] N. Vachharajani, M. J. Bridges, J. Chang, R. Rangan, G. Ottoni, J. A.
+Blome, G. A. Reis, M. Vachharajani, and D. I. August. RIFLE: An
+architectural framework for user-centric information-ﬂow security. In
+MICRO, 2004.
+
+[26] S. Vandebogart, P. Efstathopoulos, E. Kohler, M. Krohn, C. Frey,
+D. Ziegler, F. Kaashoek, R. Morris, and D. Mazi`eres. Labels and
+event processes in the Asbestos operating system. ACM Trans.
+Comput. Syst., 25(4):11, 2007.
+
+[27] C. Wright, C. Cowan, S. Smalley, J. Morris, and G. K. Hartman. Linux
+security modules: General security support for the Linux kernel. In
+USENIX Security Symposium, 2002.
+
+[28] N. Zeldovich, S. Boyd-Wickizer, E. Kohler, and D. Mazi`eres. Making
+
+information ﬂow explicit in HiStar. In OSDI, 2006.
+
+[29] N. Zeldovich, H. Kannan, M. Dalton, and C. Kozyrakis. Hardware
+enforcement of application security policies using tagged memory. In
+OSDI, 2008.
+
+

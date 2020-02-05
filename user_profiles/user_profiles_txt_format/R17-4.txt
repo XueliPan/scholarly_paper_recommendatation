@@ -1,0 +1,850 @@
+21st International Symposium on Computer Architecture and High Performance Computing
+
+Proﬁling General Purpose GPU Applications ∗
+
+Bruno Coutinho George Teodoro Rafael Sachetto
+
+Dorgival Guedes Renato Ferreira
+Department of Computer Science
+
+Universidade Federal de Minas Gerais, Brazil
+
+{coutinho, george, sachetto, dorgival, renato}@dcc.ufmg.br
+
+Abstract
+
+We are witnessing an increasing adoption of
+GPUs for performing general purpose computa-
+tion, which is usually known as GPGPU. The main
+challenge in developing such applications is that
+they often do not ﬁt in the model required by the
+graphics processing devices, limiting the scope of
+applications that may be beneﬁt from the comput-
+ing power provided by GPUs. Even when the ap-
+plication ﬁts GPU model, obtaining optimal re-
+source usage is a complex task [1].
+
+In this work we propose a proﬁling tool for
+GPGPU applications. This tool use a proﬁling
+strategy based on performance predicates and is
+able to quantify the major sources of performance
+degradation while providing hints on how to im-
+prove the applications. We used our tool in CUDA
+programs and were able to understand and im-
+prove their performance.
+
+1
+
+Introduction
+
+Despite the evolution of the various computer
+architectures and the programming environment
+and tools, designing and implementing scalable
+and efﬁcient parallel applications, in particular ir-
+regular ones, is still a challenge [1, 2] The wide
+availability of multi and many-core architectures
+open a whole new scenario that must be better ex-
+ploited and understood.
+
+In particular, we have witnessed a contin-
+uous development and improvement
+in high-
+performance graphic cards (i.e., GPUs) that en-
+abled their use beyond image rendering and they
+
+∗This work is partially supported by CNPq, CAPES, Finep
+
+and Fapemig.
+
+became general purpose co-processors. However,
+the effective, concurrent use of all available com-
+putational power for the creation of efﬁcient paral-
+lel algorithms is a challenge, which we address in
+this work.
+
+that is,
+
+Currently, for sake of general purpose pro-
+cessing, GPUs are almost always used as co-
+processors,
+the main processor handles
+portions of the computation that needs to be per-
+formed by the GPU, in a fork-join fashion. The
+application development begins by implementing
+GPU versions of the functions of interest, called
+kernels, and changing the original application
+code to insert calls for those GPU functions. The
+CPU side of the application also performs all the
+necessary data transferring. Given this initial ver-
+sion of the application, which are normally inef-
+ﬁcient, programmers have to pursue the optimiza-
+tion steps to create a code that fully exploits the
+GPU processing power.
+
+When porting general purpose applications to
+GPUs, programmers may observe performance
+degradation during all phases of GPU usage [3, 4].
+First of all, since data may be transferred, we
+should carefully evaluate whether it is worth using
+the GPU, considering the amount of computation
+to be performed. We then need to understand to
+what extent we are being able to use its process-
+ing capacity, which depends on the SIMD paral-
+lelism opportunities exploited. Later it is impor-
+tant to observe the application data access pattern,
+as it can be used to improve the reading operations,
+for instance, with coalesced data access. The con-
+ﬁguration used to execute a code within the GPU
+is also important, because it can deeply affect the
+achieved performance [5, 3, 1].
+
+In this massive parallel programming scenario,
+where programmers are responsible for developing
+applications that can fully exploit this computa-
+
+1550-6533/09 $26.00 © 2009 IEEE
+DOI 10.1109/SBAC-PAD.2009.26
+
+11
+
+tional power, it is also important to create tools that
+assist during the application development, thus, in
+this paper we propose a proﬁling tool for GPU ap-
+plications.
+
+Our tool uses a proﬁling strategy based on
+predicates that deﬁne a set orthogonal and com-
+plete performance categories which help the pro-
+grammer to understand the potential sources of
+performance degradation. These categories are
+quantiﬁed experimentally through automatically-
+inserted instrumentation. Besides describing the
+proﬁling strategy and its implementation, we illus-
+trate out tool may be used for understanding the
+performance issues of two programs, which were
+not possible to perceive with other tools.
+
+2 Architecture Overview
+
+CUDA stands for Compute Uniﬁed Device Ar-
+chitecture and is a new hardware and software ar-
+chitecture for issuing and managing computations
+on the GPU as a data-parallel computing device.
+It provides a C extension programming language,
+alleviating the burden on the programmer [5].
+
+In the CUDA programming model, the GPU is
+viewed as a compute device suitable for data par-
+allel applications. It acts as a co-processor, accel-
+erating computations of host machine.
+
+The GPU has a high number of processors and
+its own memory and may run a very high num-
+ber of parallel threads. These threads are grouped
+in blocks which, in turn, are grouped into a grid.
+Such structured set of threads is launched on a
+kernel of code, processing the data stored in the
+device memory. Threads of the same block may
+share data through fast unsynchronized on-chip
+memory. Required access synchronization must
+be explicitly added by the programmer. Different
+blocks of threads are independent, only synchro-
+nizing at the termination of the kernel.
+
+Figure 1 depicts the architecture of an Nvidia
+GPU. For example,
+the Geforce 260 GTX has
+24 streaming multiprocessors (SM), each with 8
+streaming processors (SP), or cores [3]. Thread
+instructions are executed by the cores in a SIMD
+(single instruction, multiple data) model. The
+scheduling unit used within the GPU is the warp,
+that’s group of 32 threads, executed by the mul-
+tiprocessor every four cycles. Each multiproces-
+sor can execute up to 32 warps (1024 threads)
+in SMT, alternating warp execution while a SMT
+CPU switch threads.
+
+Figure 1. Nvidia’s GPU organization
+
+3 Proﬁling Strategy
+
+In this section we describe our strategy for pro-
+ﬁling GPU applications. We start by describing
+the measurements that are performed at the thread
+level and then how they are combined to generate
+a performance proﬁle.
+
+There are several GPU proﬁling challenges, as
+lack of interrupts and SMT. Due to lack of in-
+terruptions we chose to measure times instead
+of periodic sampling. SMT is a great challenge
+because the multiprocessor transparently switch
+threads and we don’t have a way to account how
+many cycles it spent with each thread. For now, if
+the programmer run multiple warps our tool will
+report cycles taken by a thread to do some action,
+but we can’t report the cycles taken by the multi-
+processor to perform that action.
+
+3.1 Thread Proﬁling
+
+The thread proﬁling is the basis of proﬁling
+strategy, since the other levels just combine the
+measurements taken at the thread level.
+
+We implemented a tool that reads CUDA PTX
+assembly [6] code and generate instrumented
+code. It assumes that the last argument of a kernel
+is a array of 64 bits integers (one integer for each
+thread that is running a kernel) that will be used
+to return proﬁling data to CPU. In this version the
+programmer must manually add this last argument
+and a call to a proﬁle routine that will read it to
+CPU code. Our tool adds to PTX code some reg-
+ister declarations1 and instrumentation code that
+1PTX is a virtual instruction set that abstracts some archi-
+tecture details like registers, so they are declared like C vari-
+ables.
+
+12
+
+uses only these registers. For example, to mea-
+sure explicit barriers it adds code to read time and
+store it in a register before and after the barrier;
+calculate elapsed time and add it to a third register
+whose value will be written in the last argument
+vector.
+
+As CUDA doesn’t allow CPU code calls
+from GPU,
+times are measured using the
+gettimeofday() system call when measure-
+ment is done from CPU and reading the GPU mul-
+tiprocessor %clock cycle counter register when
+we measure in the GPU.
+
+The measurements at the thread level are taken
+at a kernel basis, that is, we perform the measure-
+ments for each kernel in each thread and then com-
+bine them for obtaining the thread-level measure-
+ments. Our starting points for measurement are
+the application execution time, measured by the
+CPU and each kernel execution time, measured
+inside the GPU. We then divide the execution time
+of a kernel being executed by a thread t into the
+following eight orthogonal categories:
+Idle (I):
+t is not active. It’s calculated by sub-
+tracting the kernel execution time and communi-
+cating time from application execution time.
+Communicating (C): A data transfer is be-
+ing performed between the host CPU and GPU,
+and no processing is taking place. We use the
+gettimeofday() system call to measure the
+time spent by the CPU in cudaMemcopy() func-
+tion.
+Computing (P ):
+t is processing. It’s calculated
+by subtracting all other categories from the kernel
+execution time.
+t is reading from GPU memory.
+Reading (R):
+We use the %clock cycle counter register to mea-
+sure the time spent in load instructions.
+Writing (W ):
+t is writing to GPU memory. We
+use the %clock cycle counter register to measure
+the time spent in store instructions.
+Explicit Synchronization (B):
+t is blocked be-
+cause of an explicit synchronization, that is, exe-
+cuting the function synchthreads(). These
+barriers appears in PTX code as bar.sync in-
+struction. Thus we read the %clock cycle counter
+register to measure time spent in that instruction.
+Implicit Synchronization (S): Threads from
+the same warp may take divergent execution paths,
+and the compiler inserts barriers so that the threads
+synchronize after such event. S is the time blocked
+at such barriers. We distinguish between implicit
+and explicit synchronization because the former is
+a consequence of code characteristics. The im-
+plicit barriers don’t appear explicitly in PTX code,
+but they are always inserted after labels, so we
+
+measure the elapsed time to pass through labels. If
+it is above the single instruction count, we assign
+such time in excess to S.
+Wasted Computation (W ):
+In order to avoid
+that threads from a warp perform branches to ex-
+ecute small code segments, the GPU architecture
+allows the conditional execution of instructions,
+which may be a more efﬁcient approach for such
+scenarios. These instructions are executed only if
+a predicate (a boolean variable) is true, allowing
+the removal of branches and the threads in a warp
+to execute together. If the predicate is false, the
+instruction execution time is accounted as W .
+
+3.2 Warp Proﬁling
+
+Once we take the measurements at the thread
+level, we combine them at the warp level. We
+distinguish two groups of categories here. The
+ﬁrst group comprises those thread categories that
+are basically averaged, providing the quantitative
+measure at the warp level: Communicating (C),
+Computing (P ), Reading (R), Writing (W ), Ex-
+plicit Synchronization (B), Implicit Synchroniza-
+tion (S), and Wasted Computation (W ). The Idle
+(I) time is split among Inactive and GPU Idle.
+
+Inactive is characterized by the existence of
+some threads computing and some idle, meaning
+that there are not enough threads to keep all GPU
+multiprocessors busy. For instance, for an efﬁcient
+use of a multiprocessor, it should execute a mini-
+mum of 512 threads (50% occupation). Consider-
+ing that current GPUs contain up to 30 multipro-
+cessors, an application should be split into 15360
+threads, which is a parallelism level that may not
+be possible to many applications.
+
+GPU Idle is characterized by the simultaneous
+inactivity of all threads. Such inactivity is associ-
+ated with portions of code that are not executed in
+the GPU. The intuition here is that we measure the
+amount of GPU computational power that is not
+being used.
+
+3.3 Application Proﬁling
+
+The overall application proﬁle is determined by
+combining the warp proﬁles in two dimensions:
+kernel and application. The kernel proﬁle just av-
+erages the warp level proﬁle for all warps, provid-
+ing a GPU-wide perspective. The proﬁles of all
+kernels, as well as the time the GPU was idle are
+combined as the application proﬁle, which is the
+starting point for understanding the performance
+of GPU applications.
+
+13
+
+4 Experimental evaluation
+
+The experiments were run in a machine with
+dual AMD Opteron 2350 2 GHz processors, 16
+GB DDR2 667 MHz ECC RAM in dual chan-
+nel, 500 GB SATA disk and Gigabit Ethernet, and
+NVIDIA Geforce 260 GTX, with 24 SMs, 896 MB
+GDDR3 memory (111.9 GB/s bandwidth) con-
+nected in a PCI-Express x16 Gen 1 slot. This bus
+connection provides up to 4GB/s bandwidth.
+
+4.1 Kernels
+
+In this section, we present the programs used to
+evaluate our framework: (i) Matrix multiplication,
+and (ii) Quicksort. The Matrix multiplication was
+chose as it is the canonical example for GPU pro-
+gramming development and its optimization steps
+are well known. On the other hand, Quicksort [7]
+was evaluated because it is an irregular and highly
+optimized application, which performance is more
+difﬁcult to understand. In the following subsection
+we discuss each of these programs.
+
+4.1.1 Matrix Multiplication (MM)
+
+Matrix multiplication is widely using in many sce-
+narios and, as discussed before, it is a canonical
+example of GPU programming optimizations.
+It
+is an operation of multiplying a given matrix to a
+scalar or another matrix, without loss of generality,
+in our example we multiply two square matrices
+(A and B), and store the result to a third matrix C.
+
+4.1.2 GPU-Quicksort (QS)
+
+GPU-Quicksort [7] is an efﬁcient sort algorithm
+suitable for highly parallel multi-core graphics
+processors.
+It is designed to take advantage of
+the high bandwidth of GPUs by minimizing the
+amount of bookkeeping and inter-thread synchro-
+nization needed. It achieves this by using a two-
+phase design to keep the inter-thread synchroniza-
+tion low and coalescing read operations and con-
+straining threads so that memory accesses are kept
+to a minimum. It can also take advantage of the
+atomic synchronization primitives found on newer
+hardware to, when available, further improve its
+performance.
+
+In each partition iteration a new pivot value is
+picked and as a result two new subsequences are
+created that can be sorted independently. After a
+
+while, there will be enough subsequences avail-
+able that each thread block can be assigned to one.
+For this reason, the algorithm has two, albeit rather
+similar, phases: the ﬁrst when there are less par-
+titions than thread blocks, so the threads need to
+work together on the same sequences and the sec-
+ond, where each thread block works on one parti-
+tion.
+
+This algorithm doesn’t use in place sorting be-
+cause it would require expensive thread synchro-
+nization, that would quickly increase as the appli-
+cation in GPU can use thousands of threads and the
+main reason to use in place sorting is good cache
+locality, but GPUs doesn’t have caches. The algo-
+rithm writes sorted data in an auxiliary buffer and
+in the end of each iteration, the buffers change their
+roles.
+
+In partitioning, to allocate space for writing
+data, each thread counts the number of elements
+greater and smaller than the pivot and then they
+compute a preﬁx-sum to calculate where each
+thread will write its data. This is a expensive op-
+eration and its used even when each thread block
+work on its own partition.
+
+4.2 Results
+
+4.2.1 Matrix multiplication
+
+In order to evaluate the development process
+guided by our proﬁler, we created two versions of
+MM kernel, while we optimized the second ver-
+sion and shown the time spent in each proﬁling cat-
+egory for each of them. During this process, each
+kernel was instrumented and normally executed
+in the GPU.
+
+The ﬁrst version of the matrix multiplication,
+whose code is shown in Figure 2(a), is a multiple
+blocks kernel. This version creates a thread to cal-
+culate each single element of the result matrix, but
+these threads are grouped into multiple blocks that
+are responsible for different regions of the result
+matrix, called tiles or sub-matrices. Thus, at the
+beginning of the kernel each thread have to iden-
+tify the data index it should process according to
+its block and thread ids.
+
+The experiments for this kernel version of
+MM were performed using matrices 4096 ele-
+ments (64 ∗ 64), which are divide in 16 blocks of
+16 ∗ 16. The conﬁguration with 16 blocks have
+been chosen to avoid concurrency between blocks
+into a same multiprocessor, thus each multiproces-
+sor is responsible for just one block. In Figure 3
+we present the time spent by each warp in cate-
+
+14
+
+// Renaming
+// TILE_WIDTH -> T_W
+// Calc row index in A
+ARow = blockIdx.y * T_W
+
+// Calc column index of B
+BCol = blockIdx.x * T_W
+
++ ty;
+
++ tx;
+
+float Vtemp = 0;
+// each thread computes one
+// element block sub-matrix
+for (k = 0; k < Width;++k)
+
+Vtemp += A[ARow*Width+k]*
+B[k*Width+BCol];
+
+(a) Multiple Blocks
+
+Figure 2. Matrix multiplication kernel codes
+
+Ctemp = 0;
+for (...) {
+
+__shared__ float As[T_W][T_W];
+__shared__ float Bs[T_W][T_W];
+// load input tile elements
+As[ty][tx] = A[indexA];
+Bs[ty][tx] = B[indexB];
+indexA += T_W;
+indexB += T_W * widthB;
+__syncthreads();
+// compute results for tile
+for (i = 0; i < T_W; i++) {
+
+Ctemp += As[ty][i]
+
+* Bs[i][tx];
+
+}
+__syncthreads();
+
+}
+C[indexC] = Ctemp;
+
+(b) Shared memory tiled version
+
+MM by dividing the source matrices (A and B) in
+tiles that are read to shared memory, and reused
+between the threads. As shown in Figure 2(b),
+threads of the same block read data element to
+shared memory, synchronize to guarantee that the
+whole tile have been read, and latter compute the
+multiplication using data in shared memory. It do
+not only provides faster access as data is stored in a
+faster memory, but also optimize the global mem-
+ory loads as data accesses are contiguously.
+
+Figure 4. MM: shared memory
+
+Finally, the results for MMs last version are
+shown in Figure 4. The average execution time of
+this kernel warps have been reduced by a factor of
+2. It also shows categories that have not appeared
+or were negligible: barriers, implicit barriers, and
+stores. The barriers are related to the synchroniza-
+tion instructions introduced behind warp threads,
+
+15
+
+Figure 3. MM: multiple blocks/per
+warp
+
+gories. In this conﬁguration, the kernel is able to
+execute 128 warps, that are divide among 16 SMs
+in groups of 8 warps in each. The time spent by
+categories shows that memory loads are the most
+expensive category.
+
+When memory access is identiﬁed as the ap-
+plication bottleneck, the programmer should ver-
+ify how efﬁciently the application is exploiting the
+GPU memory architecture. A simple analysis of
+the multiple blocks version of MM is sufﬁcient
+to perceive that it reads each element of matrices
+A and B from the global memory, what may not
+be an efﬁcient approach. Thus, reading it to the
+shared memory and reusing the data could reduce
+the amortized memory access cost.
+
+Therefore, we optimized the memory access of
+
+06121824303642485460667278849096391521273339455157636975818793991021051081111141171201231260102030405060Implicit barriersStoresLoadsComputationwarptime (µs)06121824303642485460667278849096102391521273339455157636975818793991051081111141171201231260510152025BarriersLoadsStoresImplicit barriersComputationwarptime (µs)the implicit barriers are more signiﬁcant as kernel
+is faster, and stores’ cost have increased because
+we have a higher level of concurrency over the I/O
+mechanism. It is important to understand that the
+optimization presented could be easily detected as
+the kernel is simple, but more complex kernels
+require better proﬁlers as may be difﬁcult to un-
+derstand their performance.
+
+4.2.2 Quicksort
+
+The implementation of QS algorithm, discussed in
+Section 4.1.2, to GPU been divided in two phases,
+which can further be implemented using multiple
+kernels. The ﬁrst algorithm’s phase was imple-
+mented using three kernels:
+(i) preﬁx-sum that
+counts how many number are smaller than pivot,
+(ii) data copy kernel implements the step of copy-
+ing data to the one of the partitions a new pivot
+creates, and (iii) pivot writer which only write the
+pivot to its position after copying data. The second
+phase of the QS is implemented by lqsort kernel,
+that does the same of last three kernels dividing
+the partitions in blocks which are executed in mul-
+tiple SMs. For performance reasons, when the par-
+titions’ size are equal or smaller than 512 items it
+uses bitonic sort to each of them.
+
+In this section we evaluate our three time rele-
+vant QS kernels: copy data, preﬁx-sum, and lq-
+sort. Although our GPU has 24 SMs, experiments
+were executed with 16 blocks because the second
+phase of QS requires power of 2 number of blocks,
+and we would like to evaluate all kernels under
+the same hardware resources, for instance, 16 SMs
+are used as one thread block can not be executed
+in multiple SMs. Thus input data we used in the
+experimentation has 16 million unsigned integers.
+In Figures 5(a) and 5(b), we show the results for
+preﬁx-sum and data copy kernels. As presented,
+the last warps have a higher idle time, which is due
+to application’s intrinsic characteristics as it uses
+less threads in the last calls of these kernels during
+ﬁnal iterations of the ﬁrst phase.
+
+In Figures 5(c) and Figure 6, respectively, we
+can see the second phase kernel and the entire
+quicksort execution.
+It becomes evident that the
+second phase dominates the execution time, being
+responsible for 85% of it. Is also important to note
+that both results show a high load unbalancing be-
+tween thread warps 0-7 and 8-15, as the second set
+of warps time is dominated by idle category.
+
+The reasons for the detected load unbalanc-
+ing was directly related to the pivot choice strat-
+egy. When we analyzed the application’s ﬁrst pivot
+
+Figure 6. QS: entire application
+
+Figure 7. QS: entire application - bal-
+anced partition
+
+choice we saw that ﬁrst two partitions have 72%
+and 28% of the numbers, respectively, which were
+responsible for the GPU sub-utilization. In order
+to verify our hypothesis, we manually modiﬁed the
+ﬁrst pivot value to get a balanced division in ﬁrst
+two partitions, actually with 53% and 47% of the
+values. The performance of this new execution,
+presented in Figure 7, have reduced the execution
+time in 13%, while we used the same hardware re-
+sources. These gains were derived from a better
+utilization of the GPU, as load unbalancing (idle
+time) has been reduced.
+
+In GPU, a common approach to optimize appli-
+cation’s execution time is to execute the maximum
+number of threads in parallel, as it may better ex-
+ploit the available resources because, for instance,
+warps running in a same SM may be in I/O oper-
+ations while others are doing computations. Due
+to that, we also evaluated the QS application as we
+increased the number of warps executing in each
+SM. Figure 8 shows the average time spent by all
+threads warps per category as the number of warps
+are increased.
+
+16
+
+012345678910111213141500.511.522.53StoresLoadsImplicit barriersComputationInactiveIdle timeComunication CPU/GPUwarptime (s)012345678910111213141500.511.522.5BarriersStoresLoadsImplicit barriersComputationInactiveIdle timeCommunication CPU/GPUwarptime (s)(a) QS: preﬁx-sum
+
+(b) QS: data copy kernel
+
+(c) QS: lqsort
+
+Figure 5. QS kernels evaluation
+
+tions which dominate the total run-time.
+
+Another tool is Paradyn [9], a parallel applica-
+tion proﬁler. This tool is able to insert instrumen-
+tation dynamically, restricting the intrusion only to
+parts of the code that are being analyzed. The tool
+was ﬁrst implemented to proﬁle only distributed
+applications, but was modiﬁed by Xu et al. [10] to
+support multithreaded applications.
+
+Beside the CPU proﬁlers,
+
+there are recent
+works about the power of multithreaded GPUs and
+how speciﬁc applications can beneﬁt from it, al-
+though few of them address general techniques or
+tools for developing and optimizing applications
+into such a complex environment.
+
+Boyer et al. present an automated system [11]
+for analyzing two classes of common problems:
+race conditions and shared memory bank conﬂicts.
+They employed an approach of automatic instru-
+mentation of CUDA codes, which are latter ex-
+ecuted under emulation mode (running on CPU).
+Although this proﬁler is interesting as it can iden-
+tify the analyzed classes, the work fails to measure
+the impact of the memory bank conﬂicts to the ap-
+plication because it is not running on GPU. In this
+work we present an approach to proﬁling CUDA
+applications, where we instrument the intermedi-
+ary assembly code of the applications and are able
+to measure the impact of the most important tasks
+performed by the applications during execution on
+the GPU.
+
+The NVIDIA CUDA Visual Proﬁler [12] (CVP)
+is provided by NVIDIA for helping the applica-
+tion development process.
+It creates the appli-
+cation kernels proﬁle using different counters as:
+coalesced and uncoalesced accesses to the global
+memory;
+local loads and stores; and divergent
+branches. This proﬁle has at least three impor-
+tant limitations we address in this work: (1) the
+counters it uses are based on events within a warp,
+so it has an indication of the actual performance
+
+Figure 8. QS: increasing the warps per
+SM
+
+These results ﬁrst show that increasing number
+of threads running in parallel may be efﬁcient, as
+the execution time have be reduced by a factor of 3.
+It is also important to see that as we increased the
+number of thread warps (parallelism), some cate-
+gories that were negligible as barriers and stores
+become important to the whole execution time. It
+also shows the most expensive tasks, as computa-
+tion and load, impact less to the application as they
+are diluted between the threads running in parallel.
+
+5 Related work
+
+There are several works about proﬁling sequen-
+tial and parallel CPU programs and how program-
+mers can optimize code, based on proﬁling infor-
+mations.
+
+The GNU proﬁler (gprof) is a tool for mea-
+suring the performance of a CPU program.
+It
+records the number of calls to each function and
+the amount of time spent for them, on a per-
+function basis [8]. Functions which consume a
+large fraction of the run-time can be identiﬁed eas-
+ily from the output of gprof. Efforts to speed up
+a program should concentrate ﬁrst on those func-
+
+17
+
+012345678910111213141500.020.040.060.080.10.120.14storesloadsimplicit_barrierscomputationinactivewarptime(s)012345678910111213141500.050.10.150.20.25storesloadsimplicit_barrierscomputationinactivewarptime(s)012345678910111213141500.511.522.5storesloadsimplicit_barrierscomputationIdlewarptime (s)124800.511.522.53Idle timeInactiveComputationImplicit barriersStoresLoadsBarriersComunication CPU/GPUwarps/SMtime (s)of the application but not the real impact of each
+category of performance it measures, while we
+show the number of cycles spent in each of them;
+(2) the analysis is based on only one multiproces-
+sor, so it is not useful for irregular applications
+where different warps running on several multi-
+processors do not have the same proﬁle; and, (3)
+our system is able to create a proﬁle for each
+threads/warp/multiprocessor, and the CVP only
+shows the proﬁle for the entire kernel on a speciﬁc
+multiprocessor.
+
+The work [3] studies the GeForce 8800 GTX
+processor’s organization, features, and the opti-
+mization strategies adopted by the developers to
+achieve high performance.
+
+6 Conclusions and Future Work
+
+The paper addressed the performance proﬁling
+of GPGPU applications. Our approach deﬁnes a
+complete and orthogonal set of categories and how
+they may be measured in current GPUs. We il-
+lustrate the effectiveness of our approach through
+two programs, where we were able to detect, mea-
+sure, and understand their sources of performance
+degradation.
+
+Future work includes analyzing other pro-
+grams, as well as improve the instrumentation,
+for instance, to distinguish between coalesced and
+non-coalesced memory accesses. Finally, we also
+intend to investigate whether the integration of dy-
+namic and static proﬁles are a better option for
+sake of performance understanding.
+
+References
+
+[1] S. Ryoo, C. I. Rodrigues, S. S. Stone, S. S.
+Baghsorkhi, S.-Z. Ueng, J. A. Stratton, and
+W. mei W. Hwu, “Program optimization
+space pruning for a multithreaded GPU,” in
+CGO ’08: Proc. of the 6th symposium on
+Code Generation and Optimization. New
+York, NY, USA: ACM, 2008, pp. 195–204.
+
+[2] S. Lee, S.-J. Min, and R. Eigenmann,
+“OpenMP to GPGPU: a compiler framework
+for automatic translation and optimization,”
+in Proc. of the 14th symposium on Principles
+and Practice of Parallel Programming. New
+York, NY, USA: ACM, 2009, pp. 101–110.
+
+[3] S. Ryoo, C. I. Rodrigues, S. S. Baghsorkhi,
+S. S. Stone, D. B. Kirk, and W. mei W. Hwu,
+
+18
+
+“Optimization principles and application per-
+formance evaluation of a multithreaded GPU
+using CUDA,” in Proc. of the 13th sympo-
+sium on Principles and Practice of Parallel
+Programming. New York, NY, USA: ACM,
+Feb. 2008, pp. 73–82.
+
+[4] P. B. No¨el, A. Walczak, K. R. Hoffmann,
+J. Xu, J. J. Corso, and S. Schafer, “Clin-
+ical Evaluation of GPU-Based Cone Beam
+Computed Tomography,” in Proceedings of
+High-Performance Medical Image Comput-
+ing and Computer-Aided Intervention (HP-
+MICCAI), 2008.
+
+[5] NVIDIA CUDA
+
+Programming Guide,
+
+NVIDIA Corp., Dec. 2008, version 2.1.
+
+[6] NVIDIA Compute PTX: Parallel Thread Ex-
+ecution, NVIDIA Corp., Jun. 2008, ISA ver-
+sion 1.2.
+
+[7] D. Cederman and P. Tsigas, “A practical
+quicksort algorithm for graphics processors,”
+in ESA ’08: Proceedings of the 16th an-
+nual European Symposium on Algorithms.
+Berlin, Heidelberg: Springer-Verlag, 2008,
+pp. 246–258.
+
+[8] S. L. Graham, P. B. Kessler, and M. K. Mcku-
+sick, “Gprof: A call graph execution pro-
+ﬁler,” in Proc. of the conf. on Programming
+Language Design and Implementation. New
+York, NY, USA: ACM, 1982, pp. 120–126.
+
+[9] B. P. Miller, M. D. Callaghan, J. M. Cargille,
+J. K. Hollingsworth, R. B. Irvin, K. L. Kara-
+vanic, K. Kunchithapadam, and T. Newhall,
+“The Paradyn Parallel Performance Mea-
+surement Tool,” IEEE Computer, vol. 28,
+no. 11, pp. 37–46, 1995.
+
+[10] Z. Xu, B. P. Miller, and O. Naim, “Dynamic
+instrumentation of threaded applications,” in
+Proc. of the 7th symposium on Principles and
+Practice of Parallel Programming.
+New
+York, NY, USA: ACM, 1999, pp. 49–59.
+
+[11] M. Boyer, K. Skadron, and W. Weimer,
+“Automated dynamic analysis of cuda pro-
+grams,” in Third Workshop on Software Tools
+for MultiCore Systems - STMCS 2008, 2008.
+
+[12] NVIDIA Corp.,
+
+“Cuda Visual Proﬁler,”
+http://www.nvidia.com/object/cuda get.html.
+
+

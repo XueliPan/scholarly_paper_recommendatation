@@ -1,0 +1,1140 @@
+11th International Workshop on Software & Compilers for Embedded Systems (SCOPES) 2008
+
+Fast Source-Level Data Assignment to Dual Memory Banks ∗
+
+Alastair Murray
+
+Bj¨orn Franke
+
+a.c.murray@sms.ed.ac.uk
+
+bfranke@inf.ed.ac.uk
+
+University of Edinburgh
+School of Informatics
+
+Institute for Computing Systems Architecture
+
+Abstract
+
+Due to their streaming nature memory bandwidth is crit-
+ical for most digital signal processing applications. To ac-
+commodate for these bandwidth requirements digital signal
+processors are typically equipped with dual memory banks
+that enable simultaneous access to two operands if the data
+is partitioned appropriately. Fully automated and com-
+piler integrated approaches to data partitioning and mem-
+ory bank assignment, however, have found little acceptance
+by DSP software developers. This is partly due to their in-
+ﬂexibility and inability to cope with certain manual data
+pre-assignments, e.g. due to I/O constraints. In this paper
+we present a different and more ﬂexible approach, namely
+source-level dual memory assignment where code genera-
+tion targets DSP-C, a standardised C language extension
+widely supported by industrial C compilers for DSPs. Ad-
+ditionally, we present a novel partitioning algorithm based
+on soft colouring that is more efﬁcient and scalable than
+the currently known best integer linear programming algo-
+rithm, whilst achieving competitive code quality. We have
+evaluated our scheme on an Analog Devices TigerSHARC
+DSP and achieved speedups of up to 1.57 on 13 UTDSP
+benchmarks.
+
+1. Introduction
+
+Digital signal processors are domain speciﬁc micropro-
+cessors optimised for embedded digital signal processing
+applications. The demand for high performance, low power
+and low cost has led to the development of specialised ar-
+chitectures with many non-standard features exposed to the
+programmer. With the recent trend towards more com-
+plex signal processing algorithms and applications high-
+level programming languages, in particular C, have become
+a viable alternative to the predominant assembly coding of
+earlier days. This, however, comes at the price of efﬁciency
+when compared to hand-coded approaches [6].
+
+∗ c(cid:13) 2008 by EDAA.
+
+Optimising compiler technology has played a key role
+in enabling high-level programming for DSPs. Many of
+the newly developed approaches to code generation for spe-
+cialised DSP instructions [4], DSP speciﬁc code optimisa-
+tion [12] and instruction scheduling [17] have transitioned
+out of the research labs and into product development and
+production.
+
+The situation, however, is different with compiling tech-
+niques targeting one of the most distinctive DSP features:
+dual memory banks. Designed to enable the simultaneous
+fetch of two operands of, e.g., a multiply-accumulate oper-
+ation they require careful partitioning and mapping of the
+data to unfold their full potential. While the dual mem-
+ory bank concept has found active interest in the academic
+community this work does not seem to have found its way
+into production compilers. Instead, DSP speciﬁc language
+extensions of the ISO C language such as DSP-C [2] and
+Embedded C [9] that shift the responsibility for data par-
+titioning and mapping to the programmer are widely em-
+braced by industry. We believe this is partly due to the fact
+that fully automated and compiler integrated approaches to
+memory bank assignment ignore that programmers require
+control over the mapping of certain variables, for example,
+used for I/O buffering and tied to a speciﬁc bank. Addition-
+ally, programmers would frequently like to specify a partial
+mapping to achieve a certain effect on particular regions of
+code, and leave the rest to the compiler. To our knowledge,
+none of the previously published memory bank assignment
+schemes allows for this level of interaction.
+
+Here we follow a different approach, namely explicit
+memory bank assignment as a source-level transformation
+operating on ISO C as input language and generating out-
+put in DSP-C. Next to its inherent portability the advan-
+tage of this high-level approach is the ease with which man-
+ual pre-assignment of variables, i.e. coercing them into a
+speciﬁc user-directed bank, can be accomplished. On the
+other hand, a high-level approach like the one presented in
+this paper needs to address the difﬁculty of having to cope
+with “unpredictable” later code optimisation and generation
+stages that may interact with the earlier bank assignment.
+
+43
+
+11th International Workshop on Software & Compilers for Embedded Systems (SCOPES) 2008
+
+v o i d l m s f i r ( f l o a t
+f l o a t
+f l o a t g a i n )
+
+i n p u t [ ] ,
+e x p e c t e d [ ] ,
+
+f l o a t o u t p u t [ ] ,
+
+f l o a t
+
+c o e f f i c i e n t [ ] ,
+
+{ /
+
+∗
+
+V a r i a b l e d e c l a r a t i o n s o m i t t e d
+
+/
+
+∗
+
+sum = 0 . 0 ;
+f o r ( i = 0 ;
+
+sum += i n p u t [ i ]
+
+c o e f f i c i e n t [ i ] ;
+
+i < NTAPS ; ++ i )
+
+{
+
+}o u t p u t [ 0 ] = sum ;
+e r r o r = ( e x p e c t e d [ 0 ]
+f o r ( i = 0 ;
+
+i < NTAPS
+
+c o e f f i c i e n t [ i ] += i n p u t [ i ]
+
+e r r o r ;
+
+sum )
+∗
+1; ++ i )
+
+−
+−
+
+g a i n ;
+
+{
+
+∗
+
+∗
+
+−
+
+}c o e f f i c i e n t [ NTAPS
+
+1] = c o e f f i c i e n t [ NTAPS
+
+i n p u t [ NTAPS
+
+1]
+
+−
+
+∗
+
+2] +
+−
+e r r o r ;
+
+}
+
+Figure 1. lmsfir function with four memory bank assignments resulting in different execution times.
+
+In this paper we model possible interactions and ex-
+tend the variable interference graph introduced in [15] with
+non-dataﬂow edges, effectively introducing “uncertainty”
+into our model. This also helps balance the memory bank
+utilisation. Where previous approaches, e.g. [13, 7], aim
+for optimality of the generated partitioning we show that
+an optimal solution according to the standard interference
+graph model does not necessarily result in the fastest pro-
+gram in practice. We have exhaustively enumerated all le-
+gal memory bank assignments for a set of benchmark ap-
+plications and demonstrate that (a) there is room for im-
+provements over “optimal” algorithms, and (b) different so-
+lutions equally “optimal” in the standard model may result
+in greatly different actual performance. Finally, we replace
+an expensive integer linear programming based algorithm
+(as in [13]) with a more efﬁcient and scalable stochastic soft
+colouring algorithm. Not only is compiler efﬁciency im-
+proved, but we demonstrate that the achievable code quality
+is highly competitive.
+
+1.1. Motivation
+
+Efﬁcient assignments of variables to memory banks can
+have a signiﬁcant performance impact, but are difﬁcult to
+determine. For instance, consider the example in ﬁgure 1.
+It shows the lmsfir function from the UTDSP lmsﬁr 8 1
+benchmark. This function has ﬁve parameters that can be
+allocated to two different banks. Local variables are stack
+allocated and outside the scope of explicit memory bank
+assignment. On the right side of ﬁgure 1 four of the pos-
+sible legal assignments are shown. In the ﬁrst case, as il-
+lustrated in ﬁgure 1(a), all data is placed in the X memory
+bank. This is the default case for many compilers when
+no explicit memory bank assignment is speciﬁed. Clearly,
+no advantage of dual memory banks can be taken and this
+assignment results in an execution time of 100 cycles for
+
+our Analog Devices TigerSHARC TS-101 platform. The
+best possible assignment is shown in ﬁgure 1(b), where
+input and gain are placed in X memory and output,
+expected, and coefficient in Y memory. Simultane-
+ous accesses to the input and coefficient arrays have
+been enabled and, consequently, this assignment reduces
+the execution time to 96 cycles. Interestingly, an “equiva-
+lent” assignment scheme as shown in ﬁgure 1(c) that simply
+swaps the assignment between the two memory banks does
+not perform as well. In fact, the “inverted” scheme derived
+from the best assignment results in an execution time of
+104 cycles, a 3.8% slowdown over the baseline. The worst
+possible assignment scheme is shown in ﬁgure 1(d). Still,
+input and coefficient are placed in different banks
+enabling parallel loads, but this scheme takes 110 cycles to
+execute, a 9.1% slowdown over the baseline.
+
+This example demonstrates how difﬁcult it is to ﬁnd the
+best source-level memory bank assignment. Source-level
+approaches cannot analyse code generation effects that only
+occur later in the compile chain, but must operate a model
+generic enough to cover most of these. In this paper, we
+propose a reﬁned variable interference graph construction
+together with a fast and scalable soft colouring algorithm
+capable of handling complex DSP applications and allow-
+ing for partial pre-assignments where required.
+
+The rest of this paper is structured as follows. In sec-
+tion 2 we discuss the large body of related work. Relevant
+background material is explained in section 3. The source-
+level memory bank assignment scheme is introduced in sec-
+tion 4, with two different colouring techniques described in
+sections 5 and 6 before we present our results in section 7.
+Finally, we summarise and conclude in section 8.
+
+44
+
+11th International Workshop on Software & Compilers for Embedded Systems (SCOPES) 2008
+
+2. Related Work
+
+An early attempt to solve the dual memory bank as-
+signment problem was undertaken by Saghir et al. [15].
+They produced a low-level solution that performs a greedy
+minimum-cost partitioning of the variables using the loop-
+nest depth of each interference as a priority heuristic. The
+problem was formulated as an interference graph where two
+nodes interfere if they represent a potentially parallel access
+in a basic block. This is a very intuitive representation of the
+problem and has been used in many other solutions since.
+
+Gr´ewal et al. used a highly-directed genetic algorithm
+to provide a solution to dual memory bank assignment [8].
+They used a constraint satisfaction problem as a model, with
+hard constraints such as not being able to exceed memory
+capacity, and soft constraints such as not wanting interfering
+variables in the same memory. The genetic algorithm is
+then used to ﬁnd the optimal result in terms of this model.
+Due to technical limitations, however, this method was only
+evaluated on randomly generated synthetic benchmarks.
+
+Another approach by Ko and Bhattacharyya uses syn-
+chronous data ﬂow speciﬁcations and the simple conﬂict
+graphs that accompany such programs. Three techniques
+were proposed, a traditional colouring algorithm, an integer
+linear programming based algorithm and a low complex-
+ity greedy heuristic using variable size as a priority metric.
+Though for all benchmarks the techniques were evaluated
+against there exists a two-colouring, so the techniques are
+not demonstrated to work on hard problems.
+
+Leupers and Kotte described an integer linear program-
+ming solution [13] prior to Ko and Bhattacharyya [10].
+While the other techniques described worked at level of the
+compiler IR, this technique runs after the compiler back-
+end has generated object code. This lets it consider spill
+code and ignore accesses which don’t reach memory. The
+assignment problem is modelled as an interference graph
+where two variables interfere if they are in the same basic
+block and there is no dependence between them. The inter-
+ference is weighted according to the number of potentially
+parallel memory accesses.
+
+More recently Gr´ewal et al. described a more accurate
+integer linear programming model for DSP memory as-
+signment [7]. The model described here is considerably
+more complicated than the one previously presented by Le-
+upers and Kotte [13] but provides larger improvements.
+Both of these techniques were evaluated using DSPstone
+but with different base architectures, however the two archi-
+tectures used are sufﬁciently similar for a comparison to be
+meaningful. The simpler integer linear program achieved
+speedups between 4% and 17%, the more complex model
+achieved speedups between 7% and 42%.
+
+Finally Sipkov`a describes a technique [16] that operates
+at a higher-level than the previously described methods. It
+performs memory assignment on the high-level IR, thus al-
+lowing the colouring method to be used with each of the
+
+Figure 2. Example DSP processor architec-
+ture with dual-input memory data path and
+MAC unit [3].
+
+back-ends within the compiler. The problem is modelled as
+an independence graph and the weights between variables
+take account of both execution frequency and how close the
+two accesses are in the code. Several different solutions,
+based on a max-cut formulation, were evaluated on a subset
+of the DSPstone benchmark suite and two ﬁxed-point FFTs.
+
+3. Background
+
+3.1. Dual Memory Banks
+
+Typical digital signal processing operations such as con-
+volution ﬁltering, dot product computations and various
+matrix transformations make intensive use of multiply-
+accumulate (MAC) operations, i.e. computing the product
+of two numbers and adding the product to an accumulator.
+Digital signal processors are application-specialised mi-
+croprocessors designed to most efﬁciently support digital
+signal processing operations. Among the most prominent
+architectural features of DSPs are support for MAC oper-
+ations in the instruction set and dual memory banks that
+enable simultaneous fetching of two operands. Provided
+the data is appropriately partitioned across the two mem-
+ory banks this effectively doubles the memory bandwidth
+and ensures efﬁcient utilisation of the DSP datapath.
+
+Figure 2 shows a generic DSP architecture with dual
+memory banks X and Y. These two banks are accessed via
+the X and Y addressing units, which may support DSP spe-
+ciﬁc post-increment addressing modes.
+
+3.2. DSP-C and Embedded C
+
+DSP-C [2] and its later extension Embedded C [9, 3] are
+sets of language extensions to the ISO C programming lan-
+guage that allow application programmers to describe the
+
+45
+
+MEMYMEMMEMXMEMMACGPRXARXAUYAUYARAR11th International Workshop on Software & Compilers for Embedded Systems (SCOPES) 2008
+
+key features of DSPs that enable efﬁcient source code com-
+pilation. As such, DSP-C includes C-level support for ﬁxed
+point data types, circular arrays and pointers, and, in partic-
+ular, divided or multiple memory spaces.
+
+DSP-C uses address qualiﬁers to identify speciﬁc mem-
+ory spaces in variable declarations. For example, a variable
+declaration like
+
+int X a[32];
+
+deﬁnes an integer array of size 32, which is located in the X
+memory. In a similar way, the address qualiﬁer concept ap-
+plies to pointers, but now up to two address qualiﬁers can be
+provided to specify where the pointer and the data it points
+to is stored. For example, the following pointer declaration
+
+int X * Y p;
+
+describes a pointer p that is stored in Y memory and points
+to integer data that is located in X memory. For unquali-
+ﬁed variables a default rule will be applied (e.g.
+to place
+this data in X memory). A common constraint on assign-
+ing variables to memory banks is that only global variables
+may be placed on a speciﬁc memory bank. This is the case
+on our target architecture, as the compiler is unable to split
+the stack across both memory banks so all stack allocated
+variables must be placed in the ﬁrst memory bank.
+
+Note that DSP-C does not specify any predeﬁned key-
+words to be used as address qualiﬁers, as the actual mem-
+ory segmentation is left to the implementation. Commonly
+used address qualiﬁers are, for example, X and Y, or pm and
+dm.
+
+4. Methodology
+
+Our memory bank assignment schemes comprises the
+
+following the stages:
+
+1. Group Forming. In this stage groups of variables that
+must be allocated to the same memory bank due to
+pointer aliasing are formed.
+
+2. Interference Graph Construction. An edge-labelled
+graph representing potential simultaneous accesses be-
+tween variables is constructed during this stage.
+
+3. Colouring of the Interference Graph. Finally, the
+nodes of the interference graph are coloured with two
+colours (representing the two memory banks) such as
+to maximise the beneﬁt from simultaneous memory
+accesses.
+
+Of these three stages only stage one is critical for correct-
+ness, whereas approximations are acceptable for stages two
+and three, i.e. an inaccurate interference graph or a non-
+optimal colouring still result in correct code that, however,
+may or may not perform optimally.
+
+4.1. Group Forming
+
+Group forming is the ﬁrst stage in our memory bank as-
+signment scheme. It is based on pointer analysis and sum-
+marises those variables in a single group that arise through
+the points-to sets of one or more pointers. All variables in a
+group must be allocated to the same bank to ensure type cor-
+rectness of the memory qualiﬁers resulting from our mem-
+ory bank assignment.
+
+Figure 3 illustrates this concept. In ﬁgure 3(a) the pointer
+p may point to c or d. However, c and d are stored in mem-
+ory banks X and Y, respectively. This eventually causes a
+conﬂict for p because both the memory bank where p is
+stored and the bank where p points to must be statically
+speciﬁed. Thus, p must only point to variables located in
+a single bank. A legal assignment would place c and d in
+the same bank as a result of previous grouping. This group-
+ing is shown in ﬁgure 3(b) for two pointers p and q. In this
+example p may point at variables x and z at various points
+in the execution of a program and, similarly, q is assumed
+to point at x and y. Grouping now ensures that x and z are
+always stored in the same bank (due to p), and also x and y
+(due to q). By transitivity, x, y and z have to be placed in
+the same memory bank. Note that p and q themselves can
+be stored in different memory banks, only their targets must
+be grouped and located in a single memory bank.
+
+Algorithm 1 Group Forming(Variables V)
+Require: Points-to for all pointers
+Ensure: Type-safe variable grouping
+
+Form singleton group gk containing vk
+
+1: for all vk ∈ V do
+2:
+3: end for
+4: L ← {p|p is a pointer ∧ p ∈ V }
+5: while L 6= ∅ do
+Select p ∈ L
+6:
+7: Merge groups(points-to(p))
+8: end while
+
+In algorithm 1 a working list algorithm for group form-
+It is assumed that points-to sets for all
+ing is presented.
+pointer variables are available, e.g.
+through prior pointer
+analysis of the program. The algorithm operates on the set
+of variables V to group. Initially, the algorithm places each
+variable vk in a singleton group gk, these are then merged
+into larger groups. For each pointer p in the set of variables
+V the points-to set is calculated and the groups of the cor-
+responding variables merged. This process is repeated until
+all pointer have been visited. The algorithm can be efﬁ-
+ciently implemented and the main costs usually arise from
+the required pointer analysis phase.
+
+“Aliasing” of different actual parameters from multiple
+call sites to a single set of formal function parameters are
+handled analogously.
+
+46
+
+11th International Workshop on Software & Compilers for Embedded Systems (SCOPES) 2008
+
+(a) Incompatible pointer assignments.
+
+(b) Pointer induced variable grouping.
+
+Figure 3. Incompatible pointer assignments and pointer induced grouping.
+
+(a) Expression dependence tree
+
+(b) Expression interference graph
+
+(c) Coloured interference graph
+
+(d) Alternate colouring
+
+Figure 4. Mapping dependances to potential interferences.
+
+4.2. Interference Model
+
+To be able to effectively assign groups of variables to
+memory banks it is necessary to build an interference graph
+that represents the memory accesses in the program. This is
+done statically by taking the dataﬂow dependence graph for
+each expression and marking each pair of memory or vari-
+able accesses with no dependence between them as poten-
+tially interfering (see ﬁgure 4). This represents cases where
+loads or stores could be scheduled in parallel. Each of these
+potential interferences is given a weight that is equal to the
+estimated number of times that the expression will be ex-
+ecuted. This estimate is determined by calculating each
+loop’s iteration count (or using a value of 100 if the ex-
+act count can not be statically determined), and assuming
+all branches are taken with 50% probability. The estimated
+call count for each function is also calculated this way by
+calculating how many times each call site is executed. This
+variable interference graph is then reduced to a group in-
+terference graph using the previous assignments. This ap-
+proximate information is sufﬁcient for determining which
+groups of variables are the most important.
+
+We optionally extend this model to be able to handle
+variables that must be assigned to a ﬁxed memory bank,
+e.g. automatic variables which must be placed on the stack
+or variables which the programmer has already assigned to
+a speciﬁc memory bank. We extend the model with a single
+
+additional node per ﬁxed groups of variables, if this group
+is the automatic variables we name the node the automatic
+node. It is not possible to assign these nodes to a memory
+bank, they are always placed on a ﬁxed one, but it is possi-
+ble to interfere with them. Thus it may be possible to more
+accurately determine assignments for other groups.
+
+5. ILP Colouring
+
+5.1. Single Solution
+
+A reference Integer Linear Programming (ILP) colouring
+approach that is approximately equivalent to the model by
+Leupers and Kotte [13] is implemented. An ILP model is
+constructed from the interference graph, I = (G, E) where
+G is the set of groups of variables (vertices in the graph)
+and E is the weighted interferences between them.
+
+∀gi ∈ G : Xi, Yi =
+
+(cid:26) 1,
+
+if gi is placed in bank X/Y
+
+0, otherwise
+
+Xi + Yi = 1
+
+This ensures that each group gi is placed in exactly one
+memory bank as if it was placed on neither or both then
+Xi + Yi would not equal 1.
+
+47
+
+XYpcdXYpxyzqABCDEABCDEBCDEABCDEA11th International Workshop on Software & Compilers for Embedded Systems (SCOPES) 2008
+
+∀gi, gj ∈ G : Uij =
+
+(cid:26) 1,
+
+if Xi = Yj or Yi = Xj
+
+0, otherwise
+
+Uij ≤ 2 − Xi − Xj
+Uij ≤ 2 − Yi − Yj
+Uij ≥ Xi − Xj
+Uij ≥ Yi − Yj
+
+The above constraints ensure that Uij is set to 1 if and
+only if groups gi and gj are placed in different memory
+banks. The ﬁrst two constraints ensure that Uij ≤ 1 if gi
+and gj are in different banks or 0 otherwise. The next two
+constraints set Uij ≥ 1 if gi and gj are on different banks
+or 0 otherwise. When combined these ensure that Uij is
+always set correctly.
+
+The linear program solver then optimises the following
+objective function while obeying the above constraints. As
+the values of the Uij variables are set by the values of the
+Xi and Yi variables it is only these latter variables that the
+solver may set to attempt to optimise the objective function.
+Thus it is effectively assigning variables to memory banks
+and attempting to maximise the available parallelism.
+
+max
+
+Uij · Wij
+
+where Wij ∈ E
+
+  i
+
+X
+
+X
+
+j
+
+0
+
+0
+
+!
+
+Here Wij is the interference weight associated with each
+edge (gi, gj) ∈ E calculated as described in section 4.2,
+if there is no edge between gi and gj in E then a weight
+of 0 is used. By maximising the above equation the linear
+programming solver is ﬁnding a set of assignments for the
+variables in G that favours placing variables with a high
+interference on different memory banks. This means that
+it should be possible to perform the most critical memory
+operations in parallel.
+
+This set of assignments is not necessarily truly optimal
+though, it is only an optimal solution in terms of the interfer-
+ence graph. This ILP model is based on the model described
+in the Leupers and Kotte paper [13], their model used an in-
+terference graph built after the back-end of the compiler had
+run so it is a reasonably accurate model of the potential par-
+allelism in the program. However, in our technique we build
+the interference model based on the program’s source-code,
+the entire target compiler still has to be run on the program
+after variables have been assigned to memory banks. Thus
+this technique is re-evaluated in section 7 to ensure that it is
+still a valid colouring model at the high-level.
+
+5.2. Multiple Solutions
+
+Building the interference graph at a high-level also
+means that the problem is less constrained, this means that
+there may be many optimal solutions to the ILP model
+above. For example, if a node is completely disconnected
+
+48
+
+in the interference graph then the score to be maximised by
+the linear solver will be the same whichever memory bank
+that group of variables is assigned to.
+
+Integer linear program solvers generally work by ﬁrst re-
+ducing as much of the program to a non-integer linear prob-
+lem that can be solved quickly and then using a branch-and-
+bound technique to solve what remains. If there are multi-
+ple optimal solutions then they may only be found during
+the branch-and-bound stage, where it is possible to keep on
+searching even after an optimal solution has been found.
+However, in the process of reducing the integer problem to
+a non-integer one many of the alternate optimal solutions
+may be lost and there will be fewer solutions for the branch-
+and-bound technique to ﬁnd.
+
+For the above memory bank assignment ILP model the
+branch-and-bound technique always only found a single
+optimal solution, as the problem reduced to a non-integer
+problem very well. This reduction is a crucial part of the
+ILP optimisation process and skipping it would make all
+but the most trivial problems intractable. So we use an al-
+ternative method to ﬁnd multiple optimal solutions.
+
+Our alternative approach is to ﬁnd sets of nodes that may
+be inverted, where each node is a variable group. All the
+variable groups in a set are connected to at least one other
+node in the set (equation 1. below) and every node that is
+connected to a node in the set belongs to the set (equation
+2. below).
+
+∀gi ∈ S ⊆ G : ∃gj ∈ S s.t. (gi, gj) ∈ E
+
+∀gi /∈ S, ∀gj ∈ S : @(gi, gj) ∈ E
+
+(1)
+(2)
+
+These sets have now been deﬁned such that if we take an
+optimal solution to the ILP program then the memory as-
+signment of every node within a set may be ﬂipped simul-
+taneously to give a new solution that will still be optimal in
+terms of the ILP model. The exception to this is that any
+set that contains a node which is ﬁxed to a speciﬁc memory
+bank (e.g. the automatic node belongs to the set) then that
+group is not invertible. If we take |S| to be the number of
+sets in G that may be inverted then there are at least 2|S|
+different possible optimal memory assignments for G.
+
+As an example of this consider the interference graph
+in ﬁgure 4(b), this would be split into two sets: {A} and
+{B, C, D, E}. If we assume all the edges have equal weight
+then ﬁgure 4(c) contains one possible optimal set of mem-
+ory assignments. Some potential parallelism between ac-
+cesses to D and E has been blocked due to them being as-
+signed to the same memory bank, but as this graph is not
+two-colourable this is inevitable. There are 3 additional op-
+timal assignments that can be found by inverting groups, as-
+suming that none of the nodes are ﬁxed to a speciﬁc mem-
+ory. The ﬁrst additional assignment can be found by ﬂip-
+ping the assignment of {A}, the second by ﬂipping the as-
+signments of {B, C, D, E} and the third by ﬂipping both.
+Figure 4(d) shows the assignment after ﬂipping both sets.
+
+11th International Workshop on Software & Compilers for Embedded Systems (SCOPES) 2008
+
+This simple example also allows us to see that the set
+of optimal solutions found by inverting sets is not neces-
+sarily the full set of optimal solutions. In ﬁgure 4(b) there
+are 6 optimal ways of colouring {B, D, E}, C will always
+be the opposite of B meaning there are 6 optimal ways of
+colouring {B, C, D, E}. Combine this with the 2 ways of
+colouring {A} and you have 12 different optimal solutions
+instead of the 22 = 4 found by inverting sets. However,
+as our aim is not to ﬁnd every possible optimal solution to
+the ILP program but only a representative set for evaluation
+this approximation is sufﬁcient. In fact, we do not even take
+all 2|S| colourings as there would be too many possibilities
+for many benchmarks, instead we just take |S| + 1. Specif-
+ically the colouring found by inverting all sets and then the
+colourings found by inverting each set individually.
+
+6. Soft Colouring
+
+As the previously described ILP assignment solution
+ﬁnds an optimal solution to an NP-hard problem it has ex-
+ponential run-time. For small and simple problems the ILP
+solver is generally able to reduce most of the integer prob-
+lem to a linear problem, this part can then by solved in poly-
+nomial time. However, for larger and more complex prob-
+lems (or interference graphs) the reduction is less effective.
+This means that small changes to the interference graph can
+change its reducibility, resulting in a large increase in the
+time it takes to solve the model. Both the exponential run-
+time and the unpredictability of the solving time make the
+ILP assignment solution undesirable in many cases. A so-
+lution which ﬁnds good colourings quickly and with more
+predictable solving time would seem advantageous.
+
+6.1. Single Solution
+
+Graph colouring is well established within compilers,
+primarily for register allocation. However, graph colouring
+in terms of memory bank assignment is slightly different
+from graph colouring for register allocation. In register al-
+location the colouring is done under the ‘hard’ constraint
+that two interfering registers must not be placed in the same
+register. For memory bank assignment we operate under the
+‘soft’ constraint that we would prefer two interfering vari-
+ables to not be placed in the same memory bank.
+
+Therefore conventional graph colouring approaches are
+unlikely to be adequate. Instead we make use of an algo-
+rithm designed for a distributed environment where colour-
+ing problems frequently operate under soft constraints. We
+serialise a distributed stochastic soft-colourer [5].
+
+Here, Ci is the current colouring of gi and C opt
+
+is the
+current locally optimal colouring of gi. The results of step
+5 for all nodes allows the central controller to make a de-
+cision for step 3.
+If every node is already at an optimal
+colour then the algorithm terminates, as the colouring will
+
+i
+
+Algorithm 2 Soft Colouring(Variable Groups G)
+Require: An interference graph
+Ensure: Locally-optimal memory assignment
+
+1: for all gi ∈ G do
+2:
+3:
+4:
+
+Ci ← rand({0, 1})
+while G is still not a local optimum do
+
+Determine C opt
+Inform central controller whether Ci = C opt
+With probability P : Ci ← C opt
+
+i
+
+i
+
+i
+
+5:
+
+6:
+7:
+8: end for
+
+end while
+
+no longer change. If any node still isn’t an optimal colour
+then it may change, which would then cause other nodes to
+change colour in the next iteration, so the loop continues to
+execute. It is also worth noting that in step 6 Ci may already
+be equal to C opt
+
+.
+
+Step 4 can be calculated using the equation below, where
+Xi, Yi and Wij are deﬁned as for ILP in section 5.1 and gi
+refers to the current node as in the above algorithm.
+
+i
+
+∀e =(gi, gj) ∈ E :
+X
+
+costX =
+
+Xj · Wij
+
+costY =
+
+Yj · Wij
+
+X
+
+cost = min(costX, costY )
+
+Essentially this calculates the weighted value of how
+many of the neighbours of gi are on memory banks X and Y
+and then picks the colour with the lowest value, i.e. the one
+with the fewest conﬂicts. Although this method of minimis-
+ing conﬂicts is different from the ILP optimisation metric,
+where we try to maximise the potential parallelism, they are
+actually equivalent.
+
+6.2. Changes To Interference Graph
+
+In addition to using a different algorithm from ILP we
+also make some changes to the interference graph I =
+(G, E) for soft colouring. The set of vertices G stays the
+same, but some additions are made to the set of weighted in-
+terferences E. Speciﬁcally we make the graph fully weakly
+connected by connecting every unconnected pairs of nodes
+in G with an edge with a very low weight. This weight is
+set low enough that it will always be lower than any weight
+relating to an actual detected interference.
+
+This low weight means that these extra nodes never
+change a colouring decision between two interfering nodes.
+What it does do is provide a balancing metric for all uncon-
+nected nodes (such as {A} in ﬁgure 4(b)) so that they will
+be roughly equally distributed between the X and Y memo-
+ries.
+
+49
+
+11th International Workshop on Software & Compilers for Embedded Systems (SCOPES) 2008
+
+6.3. Multiple Solutions
+
+As there are stochastic elements in the soft colouring al-
+gorithm it is possible to get a range of colourings by re-
+peated execution of the technique. Every set of assignments
+returned will be some local optimum.
+
+7. Experimental Evaluation
+
+7.1. Platform and Benchmarks
+
+We implemented our source-level C to DSP-C compiler
+using the SUIF compiler framework [18]. The C program
+is converted into the SUIF intermediate format which is
+then annotated with aliasing information using the SPAN
+tool [14]. We use this information to form groups of vari-
+ables as described in section 4.1 and output DSP-C with
+group identiﬁers in place of memory qualiﬁers. The C pre-
+processor may be used to assign a group of variables to a
+speciﬁc memory bank according to the generated group to
+memory bank mapping.
+
+Both the soft colourer and the ILP colourer are im-
+plemented in Java. The ILP colourer makes use of the
+lp solve [1] library, which is implemented as a native bi-
+nary, with the default pre-solve and optimisation settings.
+
+The colourings were done on a Linux system with
+two dual-core 3.0GHz Intel Xeon processors and 4GB of
+memory. The experiments where run on an Analog De-
+vices TigerSHARC TS-101 DSP operating with a clock of
+300MHz, the DSP-C programs were compiled using the
+Analog Devices VisualDSP++ compiler. We evaluated our
+technique using the UTDSP benchmark suite [11]. Each
+colouring was only run once as the TigerSHARC’s static
+pipeline and lack of cache results in deterministic hardware.
+
+7.2. Results
+
+Initially we evaluated the effectiveness of the colourings
+provided by ILP against exhaustive results. These exhaus-
+tive results were obtained by running every possible colour-
+ing for each benchmark (except for lpc, where only 2833
+different colours were tried, representing 8.6% of the total
+colourings). Figure 5(a) shows the speed-up achieved by
+the various different equivalent ILP colourings described in
+section 5.2. The ‘best’ and ‘worst’ bars in the ﬁgure cor-
+respond to the highest and lowest speed-ups, relative to the
+performance of ISO C, in the set of equivalent ILP solutions
+found per benchmark. It can be seen that most of the bench-
+marks see a signiﬁcant range of results, and lmsﬁr 8 1, lpc
+and spectral see performance improvements for some ILP
+colourings but degradations for others. Another observation
+is that for all benchmarks except adpcm the ILP colourer
+was able to ﬁnd the optimal solution. On average the range
+
+of speed-ups due to ILP was between 1.030 and 1.103, com-
+pared to 1.104 for the best of the exhaustive results.
+
+After this we compared the soft colouring technique
+against the ILP colourer. The results of this are shown in
+ﬁgure 5(b), where the ranges of both the ILP and the soft
+colouring results are shown. Here we see that despite not
+being guaranteed to solve the colouring model optimally
+soft colouring does just as well as the ILP colourer, ﬁnd-
+ing almost exactly the same range of results. However,
+the range is still quite wide so we attempt to constrain the
+assignments by adding the additional automatic node de-
+scribed in section 4.2. The effects of this are shown in ﬁg-
+ure 5(c). The automatic node does shorten the range of
+solutions for both ILP and soft colouring, but not in the
+same way. For ILP colouring mostly good results are elimi-
+nated (going from 1.030-1.103 to 1.032-1.096 on average),
+for soft colouring mostly bad results are eliminated (going
+from 1.031-1.103 to 1.039-1.101 on average). Also, the au-
+tomatic node allows soft colouring to always ﬁnd the truly
+optimal solution for ﬁr 256 64 and to ﬁnd better solutions
+than the ILP colourer for lpc and spectral.
+
+The ﬁnal thing to consider is how long it takes to exe-
+cute the two colouring algorithms. Figure 5(d) shows the
+time taken by both the ILP and soft colourers for the largest
+of the UTDSP benchmarks. The remaining benchmarks all
+had total colouring times of under a second. The time re-
+ported is the time taken to perform alias analysis and then
+to execute the colouring algorithm, the alias analysis takes
+a notable amount of time for these benchmarks, up to 7 sec-
+onds for adpcm. The Glob timings are the time it takes to
+perform colouring if as many automatic variables as possi-
+ble are made global (any declared in non-recursive func-
+tions). This is an artiﬁcial change that always results in
+slower code, however it allows results to be obtained for
+larger interference graphs, without the difﬁculties of get-
+ting larger programs to run on the target architecture.
+It
+roughly doubles to quadruples the number of nodes in the
+interference graph. The larger interference graph due to
+globalisation exposes the dangers of the ILP solvers optimi-
+sation strategies and exponential run-time. Although for the
+non-globalised code ILP and soft colouring take roughly the
+same time, for the globalised code the soft colourer is hun-
+dreds of times faster. Most notably for the globalised adpcm
+the soft colourer takes 7.2 seconds, but the ILP colourer
+takes over one and half hours (5873 seconds). Figure 5(e)
+shows the affect that adding the additional automatic node
+to the interference graph has on the time it takes to do the
+colouring. There is little change for soft colouring, but it has
+a dramatic effect on the ILP colourer for globalised code,
+adpcm is now coloured in under a minute (57 seconds). This
+possibly means that this single extra node allowed a larger
+part of the integer problem to be reduced to a linear prob-
+lem, demonstrating the fragility of ILP colouring.
+
+50
+
+11th International Workshop on Software & Compilers for Embedded Systems (SCOPES) 2008
+
+(a) A comparison of the range of ILP solutions against the true optimum.
+
+(b) A comparison of the range of ILP solutions against the range of soft colouring solutions.
+
+(c) Figure 5(b) with an additional automatic node.
+
+(d) Time taken to perform memory assignment.
+
+(e) Figure 5(d) with an additional automatic node.
+
+Figure 5. Various results for ILP and soft colouring.
+
+51
+
+    adpcm    fir_32_1    fir_256_64    fft_256    iir_1_1    iir_4_64    latnrm_8_1    latnrm_32_64    lmsfir_8_1    mult_10_10    lpc    mult_4_4    spectral    AVG0.911.11.21.31.41.51.6Exhaustive BestILP BestILP WorstBenchmarkSpeed-Up     adpcm     fir_32_1     fir_256_64     fft_256     iir_1_1     iir_4_64     latnrm_8_1     latnrm_32_64     lmsfir_8_1     mult_10_10     lpc     mult_4_4     spectral     AVG0.911.11.21.31.41.51.6Soft BestSoft WorstILP BestILP WorstBenchmarkSpeed-Up     adpcm     fir_32_1     fir_256_64     fft_256     iir_1_1     iir_4_64     latnrm_8_1     latnrm_32_64     lmsfir_8_1     mult_10_10     lpc     mult_4_4     spectral     AVG0.911.11.21.31.41.51.6Soft BestSoft WorstILP BestILP WorstBenchmarkSpeed-Upadpcmlpcspectral110100100010000ILPSoftGlob+ILPGlob+SoftBenchmarkTime (Seconds)adpcmlpcspectral110100100010000ILPSoftGlob+ILPGlob+SoftBenchmarkTime (Seconds)11th International Workshop on Software & Compilers for Embedded Systems (SCOPES) 2008
+
+digital-signal processors. SIGARCH Computer Architecture
+News, 31(1):49–59, March 2003.
+
+[9] JTC1/SC22/WG14. Programming languages - C - exten-
+sions to support embedded processors. Technical report,
+ISO/IEC, 2004.
+
+[10] M.-Y. Ko and S. S. Bhattacharyya. Data partioning for
+DSP software synthesis. In Proceedings of the International
+Workshop on Software and Compilers for Embedded Sys-
+tems, pages 344–358, September 2003.
+
+[11] C. G. Lee.
+
+UTDSP benchmark suite.
+
+http:
+
+//www.eecg.toronto.edu/∼corinna/DSP/
+infrastructure/UTDSP.html, 1998.
+
+[12] R. Leupers. Novel code optimization techniques for DSPs.
+In Proceedings of the 2nd European DSP Education and Re-
+search Conference, 1998.
+
+[13] R. Leupers and D. Kotte. Variable partioning for dual mem-
+ory bank DSPs. In Proceedings of the IEEE International
+Conference on Acoustics, Speech and Signal Processing,
+volume 2, pages 1121–1124, May 2001.
+
+[14] R. Rugina and M. Rinard. Pointer analysis for multithreaded
+In Proceedings of the ACM SIGPLAN Confer-
+programs.
+ence on Programming Language Design and Implemena-
+tion, pages 77–90, May 1999.
+
+[15] M. A. R. Saghir, P. Chow, and C. G. Lee. Exploiting dual
+In Pro-
+data-memory banks in digital signal processors.
+ceedings of the 7th International Conference on Architec-
+tural Support for Programming Languages and Operating
+Systems (ASPLOS-VII), pages 234–243, September 1996.
+
+[16] V. Sipkov`a. Efﬁcient variable allocation to dual memory
+In Proceedings of the 7th International
+banks of DSPs.
+Workshop on Software and Compilers for Embedded Sys-
+tems, pages 359–372, September 2003.
+
+[17] A. Timmer, M. Strik, J. van Meerberger, and J. Jess. Conﬂict
+modelling and instruction scheduling in code generation for
+in-house DSP cores. In Proceedings of the Design Automa-
+tion Conference (DAC), 1995.
+
+[18] R. P. Wilson, R. S. French, C. S. Wilson, S. P. Amarasinghe,
+J. M. Anderson, S. W. K. Tjiang, S.-W. Liao, C.-W. Tseng,
+M. W. Hall, M. S. Lam, and J. L. Hennessy. SUIF: An infras-
+tructure for research on parallelizing and optimizing compil-
+ers. SIGPLAN Notices, 29(12):31–37, December 1994.
+
+8. Summary, Future Work and Conclusions
+
+We have presented a method for performing dual mem-
+ory bank assignment at the source-level, using a C to DSP-C
+compiler. We have demonstrated an assignment technique
+that performs as well as ILP colouring but returns a shorter
+range of results and has a lower and more predictable ex-
+ecution time. We evaluated our technique on the UTDSP
+benchmark suite where we achieved up to a 1.103 speed-up
+on average.
+
+The colouring techniques that have been applied to the
+problem are mature, and the comparisons against exhaus-
+tive results show this. However, the range of equivalent op-
+timal results that these techniques ﬁnd and the effect that
+adding the automatic node to the interference graph can
+have – both on the range of solutions found and the time
+it takes to ﬁnd them – suggests that further developing the
+interference model is likely to provide further results. We
+intend to investigate applying machine learning in this area.
+Our technique may be easily introduced to an existing
+DSP tool-chain due to operating at the source-level. The
+shorter range of returned results and the more predictable
+colouring times compared to ILP makes this technique less
+risky to include than previous methods. Also, the results are
+demonstrated to be very close to the true optimum meaning
+it should be able to do as well as hand-colouring, but au-
+tomatically. Combined, these make it seem likely that our
+technique would be effective in an industrial scenario.
+
+References
+
+[1] lp solve package. http://lpsolve.sourceforge.
+
+net/5.5/, 2007.
+
+[2] ACE. DSP-C, an extension to ISO/IEC IS 9899:1990. Tech-
+
+nical report, ACE Associated Compiler Experts bv, 1998.
+
+[3] M. Beemster, H. van Someren, W. Wakker, and W. Banks.
+The Embedded C extension to C. http://www.ddj.
+com/cpp/184401988, 2005.
+
+[4] S. Bhattacharyya, R. Leupers, and P. Marwedel. Software
+synthesis and code generation for signal processing systems.
+IEEE Transactions on Circuits and Systems II: Analog and
+Digital Signal Processing, 47(9), 2000.
+
+[5] S. Fitzpatrick and L. Meertens. An experimental assess-
+ment of a stochastic, anytime, decentralized, soft colourer
+for sparse graphs. In Proceedings of the International Sym-
+posium on Stochastic Algorithms, pages 49–64, December
+2001.
+
+[6] A. Frederiksen, R. Christiansen, J. Bier, and P. Koch. An
+evaluation of compiler-processor interaction for DSP appli-
+cations. In Proceedings of the 34th IEEE Asilomar Confer-
+ence on Signals, Systems, and Computers, 2000.
+
+[7] G. Gr´ewal, S. Coros, A. Morton, and D. Banerji. A multi-
+objective integer linear program for memory assignment in
+the DSP domain. In Proceedings of the IEEE Workshop on
+Memory Performance Issues, pages 21–28, February 2006.
+[8] G. Gr´ewal, T. Wilson, and A. Morton. An EGA approach to
+the compile-time assignment of data to multiple memories in
+
+52
+
+

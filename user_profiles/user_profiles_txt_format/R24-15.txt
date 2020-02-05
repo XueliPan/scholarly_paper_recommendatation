@@ -1,0 +1,1016 @@
+The Visual Computer manuscript No.
+(will be inserted by the editor)
+
+Jiaping Wang · Kun Xu · Kun Zhou · Stephen Lin · Shimin Hu ·
+Baining Guo
+
+Spherical Harmonics Scaling
+
+Abstract In this paper, we present a new SH opera-
+tion, called spherical harmonics scaling, to shrink or ex-
+pand a spherical function in frequency domain. We show
+that this problem can be elegantly formulated as a lin-
+ear transformation of SH projections, which is eﬃcient
+to compute and easy to implement on a GPU. Spherical
+harmonics scaling is particularly useful for extrapolat-
+ing visibility and radiance functions at a sample point
+to points closer to or farther from an occluder or light
+source. With SH scaling, we present applications to low-
+frequency shadowing for general deformable object, and
+to eﬃcient approximation of spherical irradiance func-
+tions within a mid-range illumination environment.
+
+Keywords Signal Processing
+Illumination
+
+Rendering
+
+·
+
+·
+
+Spherical Harmonics
+
+·
+
+Fig. 1 Scaling operation. Top row: Scale a spherical func-
+tions around p. Bottom row: The corrsponding spherical har-
+monics scaling.
+
+1 Introduction
+
+practical for computer graphics, especially for real-time
+rendering of global illumination eﬀects.
+
+Spherical harmonics (SHs) oﬀer an eﬃcient representa-
+tion for a band-limited spherical signal. This represen-
+tation has been widely used in computer graphics for
+modeling illumination distributions [3], visibility func-
+tions [5], and BRDFs [7]. Because of the properties of
+a spherical harmonics basis, there are several operations
+deﬁned on spherical harmonics projections that can be
+eﬃciently computed and that makes spherical harmonics
+
+Jiaping Wang†
+Institute of Computing Technology, Chinese Academy of
+Science. Graduated School of Chinese Academy of Science
+E-mail: e boris2002@hotmail.com
+Kun Xu† · Shimin Hu
+Tsinghua University
+E-mail: xu-k@mails.tsinghua.edu.cn,shimin@tsinghua.edu.cn
+
+Kun Zhou · Stephen Lin · Baining Guo
+Microsoft Research Asia
+E-mail: {kunzhou,stevelin,bainguo}@microsoft.com
+
+†This work was done while Jiaping Wang and Kun Xu
+were interns at Microsoft Research Asia.
+
+1.1 Related Work
+
+For global illumination, the integral of the rendering
+equation is computationally expensive and impractical
+for real-time rendering. An eﬃcient solution to this prob-
+lem is to represent irradiance and surface reﬂectance
+as spherical harmonics projections, and then solve their
+spherical convolution by a SH dot product of their SH co-
+eﬃcient vectors [3]. This approach was utilized in work
+on precomputed radiance transfer (PRT) [5], which con-
+volves the SH vectors of a BRDF kernel and transferred
+radiance that accounts for visibility and interreﬂections.
+The basic formulation of PRT was presented for static
+scenes. To extend the functionality of PRT, operations
+on spherical harmonics have been proposed to facilitate
+some change in lighting conditions or object conﬁgura-
+tions. In [5], spherical harmonic rotations are described
+for run-time rotation of environment maps without re-
+projection. SH rotation was also employed in the shadow
+
+2
+
+Jiaping Wang et al.
+
+ﬁelds technique [8] for rotation of local light sources and
+occluding objects. For PRT with a locally deformable
+object, Sloan et al. [6] presented zonal harmonics (ZH),
+and demonstrated that a ZH basis is more eﬃcient for
+rotation and can be implemented in current GPUs.
+
+In [2], a PRT method is introduced for fast evaluation
+of radiance as a SH triple product of lighting, reﬂectance,
+and visibility. The triple product presents an operation
+on spherical harmonic projections that is equivalent to an
+element-wise multiplication of two spherical functions.
+Unlike a dot product, the triple product results in a new
+spherical harmonic projection instead of a scalar.
+
+The triple product is somewhat cumbersome to com-
+pute, and would be expensive to employ when a large
+number of spherical functions are involved. Recently, an
+new operation on spherical harmonics called spherical
+harmonics exponentiation [4] was proposed for eﬃcient
+evaluation of visibility in a scene with deformable ob-
+jects. Instead of computing an expensive SH product per
+blocker as in previous work, they perform inexpensive
+vector sums to accumulate the log of blocker visibility.
+SH exponentiation then yields the product visibility vec-
+tor over all blockers. With this approach, the visibility
+functions associated with numerous occluders can be ef-
+ﬁciently aggregated.
+
+1.2 Overview
+
+In this paper, we propose a new SH operation called
+spherical harmonics scaling to shrink or expand a spher-
+ical harmonics projected function around a given point
+on the sphere. The result of this procedure is illustrated
+in Fig. 1 for the input spherical function shown in the
+top-center, which is scaled with respect to the point p.
+Scaling this spherical function smaller should contract
+its region boundary towards p, while a larger scaling
+should extend its boundaries away from p. Here we ad-
+dress the problem of how to compute a spherical scaling
+on a spherical harmonics projection, as illustrated in the
+bottom row of Fig. 1. We have found that spherical har-
+monics scaling can be formulated as a linear transforma-
+tion of SH projections, which is cheap to compute and
+can be easily implemented on a GPU.
+
+Spherical harmonics scaling brings a new functional-
+ity to PRT by extrapolating visibility and radiance func-
+tions from a sample point to other points located farther
+from or closer to a light source or occluding object. We
+present two real-time applications that take advantage
+of this property. One is a low-frequency shadowing tech-
+nique for general object deformation, which constructs
+approximate shadow ﬁelds on the ﬂy by sampling visi-
+bility at only a single radial distance from the object and
+then rapidly scaling these functions to other radii. The
+second application utilizes spherical harmonics scaling
+to eﬃciently approximate spherical irradiance functions
+for mid-range illumination, such as from an environment
+map deﬁned on a ﬁnite sphere.
+
+2 Spherical Harmonics Scaling
+
+In polar coordinates, shrinking and expanding of a spher-
+ical function Fr(θ, φ) around the θ = 0 axis into a new
+function Fd(θ, φ) can be expressed as
+
+Fd(θ, φ) = Fr(τ (θ), φ)
+
+(1)
+
+) is a monotonically increasing angular scaling
+where τ (
+·
+function that rescales the polar angle θ independently of
+azimuth angle φ. For a spherical function Fr that repre-
+sents visibility from a given point, moving closer to an
+occluder results in a scaling of the visibility function in
+which τ (θ) < θ. Likewise, moving farther from the oc-
+cluder corresponds to an angular scaling function with
+τ (θ) > θ.
+
+For some spherical functions, such those representing
+radiance, the change in solid angle due to scaling must be
+considered for energy preservation. Accounting for solid
+angles, Eq. (1) can be rewritten as
+
+Fd(θ, φ) sin θdθdφ = Fr(τ (θ), φ) sin τ (θ)dτ (θ)dφ
+
+= Fr(τ (θ), φ) sin τ (θ)τ ′(θ)dθdφ. (2)
+Combining Eq. (1) and Eq. (2), we deﬁne spherical
+
+scaling as
+
+Fd(θ, φ) sin θdθdφ = Fr(τ (θ), φ)η(θ)dθdφ
+
+(3)
+
+where η(θ) = sin θ without energy preservation, and
+η(θ) = sin τ (θ)τ ′(θ) with energy preservation.
+
+2.1 Scaling with SH Representation
+
+When a spherical function is represented by spherical
+harmonics coeﬃcients, spherical scaling can also be done
+directly in the spherical harmonics domain. We refer to
+this operation as Spherical Harmonics Scaling. When
+both Fd(θ, φ) and Fr(θ, φ) are represented by vectors Sd
+and Sr of spherical harmonics coeﬃcients, Sd can be ex-
+pressed as a linear transformation of Sr with respect to
+SH basis functions Ψ :
+
+Sd(i) =
+
+Fd(θ, φ)Ψi(θ, φ)η(θ)dθdφ
+
+Fr(τ (θ), φ)Ψi(θ, φ)η(θ)dθdφ
+
+Z ZΩ
+
+Z ZΩ
+
+=
+
+=
+
+=
+
+=
+
+j∈I
+X
+
+Z ZΩ 
+
+Sr(j)
+
+j (cid:18)
+
+X
+
+Z ZΩ
+
+(Sr(j)
+
+i,j)
+
+· M
+
+j
+
+X
+
+Ψj(τ (θ), φ)Sr(j)
+
+Ψi(θ, φ)η(θ)dθdφ
+
+
+
+
+
+Ψj(τ (θ), φ)Ψi(θ, φ)η(θ)dθdφ
+
+(cid:19)
+
+(4)
+
+Spherical Harmonics Scaling
+
+3
+
+For a given angular scaling function τ (
+), spherical
+·
+harmonics scaling can be reduced to a matrix-vector
+product:
+
+where
+the SH scaling transformation matrix.
+
+i,j =
+
+M
+
+·
+
+Ψi(θ, φ)η(θ)dθdφ is called
+
+ST
+r
+
+Sd =
+
+M ·
+Ω Ψj(τ (θ), φ)
+
+RR
+
+(5)
+
+2.2 SH Scaling Transformation Matrix
+
+From Eq. (4), the SH scaling transformation matrix
+is deﬁned as
+
+M
+
+i,j =
+
+M
+
+Z ZΩ
+
+Ψj(τ (θ), φ)
+
+Ψi(θ, φ)η(θ)dθdφ
+
+(6)
+
+·
+
+An interesting property of this transformation matrix
+is that less than one-ﬁfth of its elements are non-zero,
+and that the matrix locations of these non-zero elements
+are independent of the angular scaling function τ (
+), as
+·
+proven in the Appendix. Regardless of whether energy
+is being preserved, exactly N (2N 2 + 1)/3 of the N 4 ele-
+are non-zero for an N th-order spherical har-
+ments in
+monics representation. For example, with fourth-order
+spherical harmonics there are only 44 non-zero elements
+that are located in the matrix as shown in Fig. 2. Since
+the locations of non-zero elements in the transformation
+matrix are independent of angular scaling function τ (
+),
+·
+computational savings can be gained by reducing the
+matrix-vector product of Eq. (5) to a set of multipli-
+cations and sums for only the non-zero elements.
+
+M
+
+2.3 Angular Scaling Function
+
+Analogous to the backward warping function used in im-
+age processing, the angular scaling function τ (
+) repre-
+·
+sents a backward mapping of polar angles that is deﬁned
+according to the application. Typically, a series of angu-
+lar scaling functions τk(
+) parameterized by k is provided
+·
+to perform scaling for diﬀerent instances. Correspond-
+ingly, there are diﬀerent scaling transformation matrices
+
+Fig. 2 Locations of non-zero elements in fourth-order SH
+scaling transformation matrices. X represents the non-zero
+elements.
+
+Fig. 3 Plot of six randomly selected elements in M with
+respect to k for scaling visibility functions.
+
+M
+
+k with respect to diﬀerent k. In most cases,
+
+k cannot
+M
+be expressed analytically, and even if an analytical form
+exists, such as for τk(θ) = kθ,
+k is often too expen-
+sive to calculate. We choose to numerically compute
+k
+M
+for sampled values of k, and then linearly interpolate for
+intermediate values. As shown in Fig. 3, elements in dif-
+ferent scaling transformation matrices change smoothly
+with respect to k, and we have empirically found it suf-
+ﬁcient to sample 40 values of k in an exponential distri-
+bution.
+
+M
+
+3 Applications of SH Scaling
+
+3.1 Shadow Fields for Deformable Objects
+
+Traditionally, soft shadows are directly computed from
+the relative positions of a light source and an occluder.
+Because of this dependence on scene conﬁguration, pre-
+computation becomes diﬃcult due to the large number
+of possible object arrangements in a dynamic scene. To
+enable some amount of precomputation in soft shadow
+generation for dynamic scenes, the shadow ﬁelds tech-
+nique [8] decouples lighting and visibility by modeling
+the shadowing eﬀects of illuminants and occluders indi-
+vidually. This decoupling allows precomputation that is
+independent of arrangement. At run time, these precom-
+puted shadowing eﬀects are then eﬃciently combined ac-
+cording to scene arrangement to give fast performance.
+For a light source, its shadow ﬁeld is called a source
+radiance ﬁeld (SRF), and is precomputed by sampling
+the incoming radiance distribution at points in an empty
+space surrounding the illuminant. These points are sam-
+pled at uniform intervals angularly and radially. Points
+at a given radial distance from the center of the light
+source form a sphere, which is sampled angularly in a
+uniform distribution. At each of these sample points, the
+incoming radiance distribution is recorded as a cube map
+of incoming radiance values from diﬀerent directions.
+For shadow ﬁelds of occluding objects, called object oc-
+clusion ﬁelds (OOFs), cube maps are similarly sampled
+but instead record visibility information as alpha values.
+
+4
+
+Jiaping Wang et al.
+
+Fig. 4 Cone geometric approximation. vr is a sampled point
+on the bounding sphere, whose visibility is extrapolated to
+a point vd in the same angular direction but at a diﬀerent
+θd is our approximation to the
+radial distance. The angle
+actual angle θd of the object silhouette.
+
+b
+
+For intermediate locations within the sampled points of
+a shadow ﬁeld, cube maps are trilinearly interpolated
+from the cube maps of the eight nearest sample points.
+These cube maps are represented in terms of fourth-order
+spherical harmonics to facilitate processing.
+
+For a deformable object, precomputation of shadow
+ﬁelds becomes infeasible due to the large number of pos-
+sible object conﬁgurations. To address this problem, we
+take advantage of the observation that as one views a
+shadow ﬁeld entity from increasing (decreasing) distances,
+the form of the visibility function or radiance distribu-
+tion appears approximately the same, but at decreasing
+(increasing) scale, as illustrated in the top row of Fig. 5.
+Based on this property, we propose to sample shadow
+ﬁelds at a single radial distance and then rapidly extrap-
+olate samples at other radii by SH scaling. In principle,
+the geometry of the object must be known in order to
+obtain a precise angular scaling function τ . Since this
+information is generally unknown, we utilize a cone ge-
+ometric approximation that the object surface forms a
+cone that faces the sample point as shown in Fig. 4. The
+angle α of this virtual cone from the radial direction is
+
+set to π/4 in our implementation, but may be adjusted
+by the user to obtain a better approximation for a given
+object. With this geometric approximation, the angular
+scaling function τk from θd to θr is given by
+
+θr = τk(θd) =
+
+θ′
+
+θ′
+
+0
+θ′ + π θ′ < 0
+
+≥
+
+(cid:26)
+
+where
+
+θ′ = arctan
+
+k tan θ
+
+,
+
+(k = d/r)
+
+1 + tan θ
+
+k tan θ
+
+−
+
+(cid:19)
+
+(cid:18)
+
+The result of this geometric approximation is exhibited
+for the bird model in Fig. 5, where the approximated vis-
+ibility functions in the bottom row closely resemble the
+actual visibility functions given in the top row. While
+some slight discrepancies exist in the approximated vis-
+ibility function, the approximation is nevertheless ade-
+quate for low-frequency shadowing.
+
+For OOFs of occluding objects, we utilize the SH scal-
+ing function of Eq. (1). For SRFs of light sources, the
+spherical functions also express radiant energy in terms
+of unit solid angle instead of binary visibility. To account
+for radiant intensity with respect to solid angle, we use
+the energy preserving SH scaling function in Eq. (2).
+
+Our rendering algorithm is performed at run time
+for each frame in two stages. In the ﬁrst stage, visibil-
+ity/radiance functions are computed on the ﬂy at 6*8*8
+sample points on the bounding sphere of scene entities.
+At each sample point, we rasterize a rectangle of 32*32
+pixels towards the center of the object or light source,
+then use the glReadPixels function in OpenGL to read
+back the visibility or radiance functions. Next, the visi-
+bility/radiance functions are converted into fourth-order
+spherical harmonic coeﬃcients Sr. In the second stage,
+for each scene vertex, the SH visibility function with re-
+spect to each object and the SH radiance function with
+respect to each light source Sd are scaled from the cor-
+is the
+responding Sr by computing
+corresponding SH scaling transformation matrix. Soft
+shadow values are then computed according to the al-
+gorithm given in [8].
+
+r , where
+
+M ·
+
+ST
+
+M
+
+Since visibility functions of deformable objects are
+
+sampled and extrapolated on-the-ﬂy by SH scaling, shadow
+ﬁelds of deformable objects/lights are computed at real-
+time rates. Moreover, self-shadowing on object surfaces
+can be also approximated within the bounding sphere us-
+ing ratios of k < 1, which expand the original visibility
+function instead of shrinking it.
+
+3.2 Mid-Range Environment Lighting
+
+Fig. 5 Approximate visibility by scaling of visibility func-
+tions. Top row: actual visibility at diﬀerent radii. Bottom row:
+corresponding visibility computed by cone geometry approx-
+imation from visibility acquired from the bounding sphere
+(radius r). From left to right, the radius is 0.5r, 0.7r, 0.9r,
+1.3r, and 2r.
+
+For eﬃcient rendering of global illumination eﬀects with
+complex distant lighting, several methods based on pre-
+computed radiance transfer have been proposed (e.g., [5,
+2]). These PRT techniques address the transfer of dis-
+tant directional illumination from environment maps to
+
+Spherical Harmonics Scaling
+
+5
+
+Table 1 Performance data of deformable shadow ﬁelds.
+
+Scene
+Flying Dragon
+Egg + Deform Light
+Bending Sponge
+Teapot Plane
+
+Vert. Model/Plane FPS
+35.4
+14.2
+13.4
+26.8
+
+1.1k/10k
+0.5k/10k
+8.4k/10k
+10k/10k
+
+Our rendering algorithm involves two steps at each
+vertex. First, we scale the radiance function Fr(θ, φ) at
+the sphere’s center to the vertex’s position to obtain
+Fd(θ, φ). Since the vertex can be in arbitrary direction
+relative to the sphere’s center, Fr is ﬁrst rotated to that
+direction and scaled then rotated back. Second, we com-
+bine the incoming radiance Fd(θ, φ) represented in a SH
+basis with the precomputed transport vector/matrix at
+the vertex to calculate the soft shadow value as described
+in [5].
+
+4 Experimental Results
+
+We have implemented the two applications described in
+Sec. 3 on a 2.8-GHz Pentium IV PC with 1GB RAM
+and an nVidia FX6800GT graphics card. A fourth-order
+spherical harmonics representation is used in all the pre-
+sented experiments. The overall performance data is listed
+in Table 1.
+
+Deformable shadow ﬁelds We display rendered frames
+for sequences of a ﬂying dragon in Fig. 8, a transforming
+egg in Fig. 9, and a bending sponge block in Fig. 10. For
+complete sequences of these scenes, we refer the reader
+to the supplementary video. The scene in Fig. 8 contains
+a deformable local light source that consists of a planar
+red emitter and a green emitter that are connected and
+have an adjustable angle. In all of these examples, the
+visibility functions approximated by spherical harmonics
+scaling generate soft shadows consistent with the defor-
+mations of the animated object. Fig. 7 compares the re-
+sult of our approximation with a fully sampled shadow
+ﬁeld as used in [8].
+
+Mid-Range environment lighting We show in Fig. 11 some
+rendered images of a teapot on a plane with mid-range
+environment lighting. In this example, we only sample
+the irradiance distribution at the center of the scene; the
+irradiance distribution at each vertex is then extrapo-
+lated using SH scaling. The upper-left corners of each
+image illustrate the lighting distribution, which consists
+of a red and a green source, and also shows the position
+and orientation of the teapot within the environment
+lighting sphere. Notice that the shadow and shading are
+changing when the teapot plane is moving in the scene.
+
+Fig. 6 SH scaling for mid-range environment lighting.
+
+an object or a ﬁxed surrounding scene, but do not eﬀec-
+tively handle lighting from non-distant sources, for which
+the distribution of incoming source illumination can vary
+from point to point in a scene. To eﬃciently address this
+issue, Annen et al. [1] approximate the incident lighting
+over an object by sampling the illumination distribution
+at only a few points (about 8 samples per object) and
+then interpolating them for other points using gradients
+of spherical harmonic coeﬃcients.
+
+With spherical harmonic scaling, we present a sub-
+stantially more eﬃcient technique for the case of environ-
+ment map illumination that is not distant but originates
+from a sphere of radius R. By capturing the single irra-
+diance function Fr(θ, φ) at the center vr of the sphere,
+the irradiance function at any other locations within the
+sphere can be scaled from Fr(θ, φ). As shown in Fig. 6,
+θr of vr corresponds to θd of vd. By denoting the vector
+from vr to vd as a signed quantity d, the angular scaling
+function τk from θd to θr is given by
+
+θr = τk(θd)
+
+= 2 arctan
+
+  p
+
+cot2 θd + 1
+
+k2
+
+cot θd
+
+−
+1 + k
+
+−
+
+(7)
+
+!
+1, 1)
+
+k = d/R
+
+(
+−
+
+∈
+
+Fig. 7 Comparison between a fully sampled shadow ﬁeld
+(left column) and extrapolation by SH scaling (right column).
+
+Jiaping Wang et al.
+
+8. Zhou, K., Hu, Y., Lin, S., Guo, B., Shum, H.Y.: Pre-
+computed shadow ﬁelds for dynamic scenes. ACM Trans.
+Graph. 24(3), 1148–1155 (2005)
+
+Appendix: Structure of SH Scaling Transforma-
+tion Matrix
+
+Real-valued spherical harmonics are deﬁned as
+
+Y m
+l (θ, φ) =
+
+√2K m
+√2K m
+l P 0
+K 0
+
+l cos(mφ)P m
+l sin(
+l
+−
+l (cosθ),
+
+mφ)P −m
+
+l (cosθ), m > 0
+(cosθ), m < 0
+m = 0
+
+
+
+
+where P denotes the associated Legendre polynomials
+and K is a normalization factor:
+
+
+
+K m
+
+l =
+
+(2l + 1)
+
+s
+
+4π
+
+(l
+(l +
+
+m
+− |
+m
+|
+
+)!
+|
+)!
+|
+
+.
+
+Further, Each spherical harmonics can be decomposed
+as Y m
+
+l (θ, φ) = Sm
+
+l (θ), where
+
+l (φ)T m
+
+l′ (θ, φ) in
+
+Sm
+
+l (φ) =
+
+
+
+
+−
+
+l cos(mφ), m > 0
+mφ), m < 0
+l sin(
+m = 0
+
+√2K m
+√2K m
+K 0
+l ,
+P m
+l (cos θ), m > 0
+P −m
+(cos θ), m < 0
+l
+P 0
+l (cos θ), m = 0
+
+T m
+l (θ) =
+
+
+
+
+l (θ, φ) and Ψi(θ, φ) as Y m′
+Denote Ψj(θ, φ) as Y m
+
+Equation 6, Equation 6 can be rewritten as
+
+i,j =
+
+Y m
+l (τ (θ), φ)
+
+Y m′
+l′ (θ, φ)η(θ)dθdφ
+
+M
+
+=
+
+Z ZΩ
+2π
+
+= (
+
+0
+
+Z
+
+= δmm′
+
+·
+(Sm′
+
+·
+
+π
+
+(
+Z
+
+0
+
+Z ZΩ
+(Sm
+l (φ)T m
+
+l (τ (θ))
+
+l (φ)Sm′
+Sm
+
+l′ (φ)dφ)
+
+·
+l (τ (θ))T m′
+T m
+
+π
+
+·
+
+0
+Z
+
+l′ (θ)η(θ)dθ
+
+l′ (φ)T m′
+
+l′ (θ))η(θ)dθdφ
+
+l (τ (θ))T m′
+T m
+
+l′ (θ)η(θ)dθ)
+
+It can be easily proved that δmm′ is non-zero only when
+m = m′. This means that
+= m′,
+) is chosen. Thus the non-zero entries in the
+whatever τ (
+·
+transformation matrices
+lie at ﬁxed positions that
+are independent of the angular scaling function τ (
+), and
+·
+that they are relatively sparse.
+
+i,j is zero for all m
+
+M
+
+M
+
+6
+
+5 Conclusion
+
+We proposed a new operation on a spherical harmonics
+basis to eﬃciently scale spherical functions represented
+in SH. Spherical harmonics scaling is amenable to GPU
+implementation, and can be used to extrapolate visibility
+and radiance functions at a sample point to points closer
+to or farther from an occluder or light source.
+
+In future work, we plan to examine methods for re-
+ducing extrapolation errors in visibility and radiance func-
+tions. One source of this error occurs when a sampled
+point on the bounding sphere lies on the surface of an
+object. This results in a visibility function that is half
+occluded regardless of object shape, while direct extrap-
+olation of such a visibility function leads to circular sil-
+houettes. Although this problem is partly mitigated by
+the visibility functions of nearby sample points that do
+not lie on the object surface, we plan to examine diﬀer-
+ent sampling schemes to reduce this error. For example,
+this error may potentially be decreased by sampling at
+diﬀerent radial distances for diﬀerent (θ, φ) directions ac-
+cording to certain geometric criteria.
+
+Extrapolation error may also arise from the geomet-
+ric approximation described in Sec. 3.1. To address this
+issue, we plan to investigate the possible solution of par-
+titioning the object or light source into a small number
+of sub-volumes that are handled separately from one an-
+other.
+
+Acknowledgements We would like to thank Xu Yang for
+helpful discussion on spherical harmonics and the anonymous
+reviewers for their helpful suggestions and comments. Kun Xu
+and Shimin Hu were supported in part by Natural Science
+Foundation of China (No.60225016, No.60321002), and the
+National Basic Research Project of China (No.2002CB312101).
+
+References
+
+1. Annen, T., Kautz, J., Durand, F., Seidel, H.P.: Spherical
+harmonic gradients for mid-range illumination. In: Euro.
+Symp. on Rendering, pp. 331–336 (2004)
+
+2. Ng, R., Ramamoorthi, R., Hanrahan, P.: Triple product
+In: SIG-
+
+wavelet integrals for all-frequency relighting.
+GRAPH ’04, pp. 477–487 (2004)
+
+3. Ramamoorthi, R., Hanrahan, P.: An eﬃcient representa-
+In: SIGGRAPH
+
+tion for irradiance environment maps.
+’01, pp. 497–500 (2001)
+
+4. Ren, Z., Wang, R., Snyder, J., Zhou, K., Liu, X., Sun,
+B., Sloan, P.P., Bao, H., Peng, Q., Guo, B.: Real-time
+soft shadows in dynamic scenes using spherical harmonic
+exponentiation. In: Proc. of the ACM SIGGRAPH 2006
+(2006)
+
+5. Sloan, P., Kautz, J., Snyder, J.: Precomputed radiance
+transfer for real-time rendering in dynamic, low-frequency
+lighting environments. In: SIGGRAPH ’02, pp. 527–536
+(2002)
+
+6. Sloan, P.P., Luna, B., Snyder, J.: Local, deformable pre-
+computed radiance transfer. ACM Trans. Graph. 24(3),
+1216–1224 (2005)
+
+7. Westin, S.H., Arvo, J., Torrance, K.E.: Predicting re-
+ﬂectance functions from complex surfaces. In: SIGGRAPH
+1992, pp. 255–264 (1992)
+
+6
+Spherical Harmonics Scaling
+
+7
+
+Fig. 8 Shadow ﬁelds for deformable objects: Flying dragon.
+
+Fig. 9 Shadow ﬁelds for deformable objects: Transforming egg with deforming light source.
+
+Fig. 10 Shadow ﬁelds for deformable objects: Deforming sponge block.
+
+Fig. 11 Mid-range environment lighting: The positions of the teapot relative to the environment light are shown at the
+upper-left corners.
+
+8
+
+Jiaping Wang et al.
+
+Jiaping Wang is a second year Ph.D. student of Institute
+of Computing Technology, Chinese Academy of Sciences in
+Graduate School of the Chinese Academy of Sciences. Before
+that, he received B.S. Degree from Ningbo university in 2002.
+He has been taking internship in Microsoft Research Asia
+(MSRA) since 2003. His research interests include appearance
+modeling and hardware accelerated rendering.
+
+Kun Xu is a ﬁrst year Ph.D. student at Tsinghua University.
+Before that, he received B.S. Degree from Tsinghua Univer-
+sity in 2005. His research interests include real-time rendering
+and appearance modeling.
+
+Kun Zhou is a researcher/project lead of the graphics group
+at Microsoft Research Asia. He received his B.S. and Ph.D.
+in Computer Science from Zhejiang University in 1997 and
+2002 respectively. His current research focus is geometry pro-
+cessing, texture processing and real time rendering. He holds
+over 10 granted and pending US patents. Many of these tech-
+niques have been integrated in Windows Vista, DirectX and
+XBOX SDK.
+
+Stephen Lin joined Microsoft Research Asia in June 2000,
+and is currently a researcher of the Internet Graphics group.
+His research interests include physics-based computer vision
+and reﬂectance modelling in computer graphics. He obtained
+his B.S.E. in electrical engineering from Princeton University
+and his Ph.D. in computer science and engineering from the
+University of Michigan.
+
+Shimin Hu is currently a Professor in the Computer Science
+Department at Tsinghua University. His research interests
+include digital geometry processing, video-based rendering,
+computer animation, and computer-aided geometric design.
+He received his Ph.D. from Zhejiang University in 1996. He
+is on the editorial board of Computer Aided Design.
+
+Baining Guo is the research manager of the internet graph-
+ics group at Microsoft Research Asia. Before joining Microsoft,
+Baining was a senior staﬀ researcher in Microcomputer Re-
+search Labs at Intel Corporation in Santa Clara, California,
+where he worked on graphics architecture. Baining received
+his Ph.D. and M.S. from Cornell University and his B.S. from
+Beijing University. Baining is an associate editor of IEEE
+Transactions on Visualization and Computer Graphics. He
+holds over 30 granted and pending US patents.
+
+

@@ -1,0 +1,1182 @@
+20th International Symposium on Computer Architecture and High Performance Computing
+
+A Reconﬁgurable Run-Time System for Filter-Stream Applications ∗
+
+Daniel Fireman1 George Teodoro1 Andr´e Cardoso1
+
+Renato Ferreira1,2
+
+1Department of Computer Science, Universidade Federal de Minas Gerais, Brazil
+
+2Department of Biomedical Informatics, The Ohio State University, USA
+
+{fireman, george, hawks, renato}@dcc.ufmg.br
+
+Abstract
+
+The development of high level abstractions for
+programming distributed systems is becoming a
+crucial effort in computer science. Several frame-
+works have been proposed, which expose simpli-
+ﬁed programming abstractions that are useful for
+a broad class of applications and can be imple-
+mented efﬁciently on distributed systems. One
+such system is Anthill, based on the Filter-Stream
+programming model, in which applications are de-
+composed into sets of independent ﬁlters that com-
+municate via streams. Anthill achieves high per-
+formance by allowing ﬁlters to be transparently
+replicated across several compute nodes.
+
+In this paper we present a global state manager
+for Anthill, which exports a simple abstraction to
+manipulate state variables for application ﬁlters.
+The state is distributed transparently among the in-
+stances of that ﬁlter, and our manager is designed
+to allow data migration from one ﬁlter instance to
+another, enabling Anthill to dynamically reconﬁg-
+ure applications at execution time.
+
+To evaluate our system, we used two well known
+data mining algorithms: A Priori and K-Means.
+Our results show that the framework incurs low
+overhead, 1.8% on average, and that the resulting
+system can effectively make use of new resources
+as they are made available, with execution times
+3.57% slower, on average, than the minimum ex-
+pected time for the reconﬁguration scenario.
+
+1 Introduction
+
+The development of high level abstractions for
+programming distributed systems is becoming a
+
+∗This work was partially supported by CNPq, FINEP, and
+
+FAPEMIG.
+
+crucial effort in computer science. On one hand,
+current computer systems are often composed of
+multiple independent processing units connected
+by fast communication channels. Such architec-
+tural trend is true to all levels, from grid comput-
+ing to multi-core processors. On the other hand,
+as computers are becoming increasingly more per-
+vasive in many other areas of science and engi-
+neering, many programmers are application do-
+main experts but not necessarily expert systems
+programmers. As a result, programming efﬁcient
+parallel systems for heterogeneous environments
+remain a complex problem.
+
+To simplify the implementation while still
+achieving high performance on current architec-
+tures, many programming frameworks and mid-
+dlewares have been proposed. They introduce sim-
+ple and ﬂexible models which could be used for
+a broad class of applications, while allowing efﬁ-
+cient implementations. Anthill [6] is such a run-
+time framework which takes advantage of paral-
+lelism in loosely coupled, heterogeneous environ-
+ments. Anthill allows parallelization of applica-
+tions in several dimensions by partitioning the ap-
+plications into a set of ﬁlters that communicate
+using streams (Filter-Stream model). These ﬁl-
+ters are then instantiated on distributed platforms,
+allowing multiple replicas of each to be created
+transparently. Previous results have shown efﬁ-
+cient and scalable implementations of several ap-
+plications using Anthill, with domains ranging
+from complex parallel image processing [14, 7] to
+parallel data mining [6, 15].
+
+In this paper we present a global state manager
+for Anthill which creates a simple abstraction for
+the programmer to manipulate the ﬁlter state vari-
+ables while allowing that state to be distributed
+transparently across many nodes. One of the main
+goals of the system is to maintain a high abstrac-
+
+1550-6533/08 $25.00 © 2008 IEEE
+DOI 10.1109/SBAC-PAD.2008.28
+
+149
+
+tion level for the programmer, isolating the ﬁlter
+implementation from the transparent copy mecha-
+nism within Anthill. Once variables are allocated
+using the provided API, they can be distributed
+transparently across multiple instances of the ﬁl-
+ter. Moreover, the manager allows data migration
+from one ﬁlter instance to another, which enables
+Anthill to dynamically adjust the number of ﬁlter
+instances for each application. There are at least
+three reasons why such mechanism is useful: to
+adapt to a dynamic environment, to adapt for a dy-
+namic application and for fault tolerance.
+
+To evaluate our system, we used two well
+known data mining algorithms: A Priori and K-
+Means. The results show that our global state man-
+ager incurs low overhead for the execution time,
+averaging less than 1.8% for both applications.
+The reconﬁguration experiments show results near
+the minimum possible execution time, that is the
+theoretical case where no overhead is added due to
+reconﬁguration. Our results show that, in the best
+case, we are only 1.69% of the minimum execution
+time and 3.57% on average, for the K-Means ap-
+plication, which means that our manager allows an
+Anthill application to make effective use of extra
+resources as soon as they become available during
+execution time.
+
+The paper is organized as follows. Section 2
+brieﬂy describes the Anthill runtime framework.
+Section 3 presents our work, describing the pro-
+posed global state manager as well as the dynamic
+reconﬁguration mechanism. Section 4 presents our
+experimental evaluation. We present some related
+work in Section 5 and the conclusion and some fu-
+ture work in Section 6.
+
+2 Anthill
+
+Anthill is a runtime framework based on the
+Filter-Stream programming model implemented in
+Datacutter [4]. This model uses a data-ﬂow ap-
+proach to decompose applications into a set of pro-
+cessing units referred to as ﬁlters. It also provides
+an abstraction called streams which allows ﬁxed-
+size untyped data buffers to be transferred across
+ﬁlters.
+
+The application decomposition process leads
+to the possibility of task parallelism as applica-
+tions become sets of connected ﬁlters like directed
+graphs. The transparent copy mechanism allows
+any vertex of the graph to be replicated over many
+nodes and the data that go through each ﬁlter may
+be partitioned among the copies creating data par-
+
+allelism. Those transparent copies are referred to
+as ﬁlter instances in the remaining of this paper.
+
+For several applications, the natural decompo-
+sition is a cyclic graph, where the execution con-
+sists of multiple iterations over a ﬁlter pipeline.
+The application starts with data representing an
+initial set of possible solutions and as these are
+processed through the pipeline, new candidate so-
+lutions are created, and processed in subsequent it-
+erations. In our experience developing Anthill ap-
+plications we noticed that this behavior also leads
+to asynchronous executions, in the sense that sev-
+eral candidate solutions (possibly from different it-
+erations) are processed simultaneously at runtime.
+In essence, such application loops are parallelized:
+data independent iterations are automatically de-
+tected and executed concurrently.
+
+Anthill, therefore, tries to exploit the maximum
+parallelism in applications by using all three pos-
+sibilities discussed above:
+task parallelism, data
+parallelism and loop parallelism. By dividing the
+computation into multiple pipeline stages, each
+one replicated multiple times, we can have a very
+ﬁne-grained parallelism and, since all this is hap-
+pening asynchronously, the execution is mostly
+bottleneck free. The granularity of the paralleliza-
+tion should be selected to maintain a balance be-
+tween computation and communication in the ap-
+plication thus hiding the effects of latency.
+
+A major difﬁculty in Anthill’s parallelization
+scheme is related to the state of the ﬁlters. Ideally,
+the state of a ﬁlter should be transparently parti-
+tioned across all instances of that ﬁlter. Anthill uti-
+lizes the Labeled Stream concept to partition the
+messages ﬂowing down the input streams to the
+appropriate instance of the ﬁlter. A label is as-
+sociated with each message sent to a stream and
+Anthill applies a programmer provided hash func-
+tion to that label and based on the result, the mes-
+sage is delivered to an speciﬁc ﬁlter instance. This
+approach guarantees that messages associated with
+the same label, and consequently with the same
+state variables, are always delivered to the same
+ﬁlter instance.
+
+In this paper we further abstract the transpar-
+ent copy and state partitioning mechanisms from
+the application programmers. We describe a sys-
+tem software layer that provides the programmer
+a standard memory management interface for ma-
+nipulating state variables. The runtime frame-
+work takes care of partitioning the allocated mem-
+ory efﬁciently across all instances of the ﬁlter.
+Moreover, the system allows state variables to
+migrate from one instance to another, providing
+
+150
+
+Anthill with the capability of dynamically recon-
+ﬁguring applications to best exploit the available
+resources.
+
+3 Global State Manager
+
+In this section we are going to address the issues
+related to Anthill’s dynamic reconﬁguration as en-
+abled by our global state manager. As mentioned,
+the runtime framework may decide to reconﬁg-
+ure an application either due to the application it-
+self or the execution platform. Some applications
+may have different computing patterns in which
+the load balancing on different ﬁlters change over
+time. In those situations, it may make sense for
+Anthill to vary the number of ﬁlter instances avail-
+able for each ﬁlter throughout the execution.
+
+The environment may also change during exe-
+cution. On multi-user environments, demand may
+vary over time causing changes on resource avail-
+ability. This is also particularly true for oppor-
+tunistic grid environments, in which resources be-
+come available and go away constantly.
+
+The runtime system may also decide to recon-
+ﬁgure due to faults. If a compute node becomes
+unavailable during execution, the load on that node
+can be automatically distributed to other nodes, or
+even migrated to a new one by instantiating a new
+copy of the ﬁlter. We defer these issues to future
+work as additional functionalities are required. In
+particular, redundancy becomes necessary in stor-
+ing state variables to prevent them from becoming
+unaccessible.
+
+3.1 Memory Management
+
+One of the main goals of the global state man-
+ager is to provide the application developers with
+a higher level programming abstraction. In partic-
+ular, when implementing a ﬁlter, the programmer
+should do it as if the ﬁlter was a single sequen-
+tial program. Towards that goal, we implemented
+a standard malloc/free based API which the pro-
+grammers should use to manipulate state variables.
+These functions interface with the runtime frame-
+work to create a global address space across the
+transparent copies of the ﬁlter, each allocating its
+own local portion of the entire state.
+
+The global state manager is also designed to al-
+low state variables to migrate from one ﬁlter in-
+stance to another. One reason for such functional-
+ity is to decouple the initial partitioning of the state
+from the function that maps input data to ﬁlter in-
+
+stances. If the initial placement of a particular vari-
+able does not match the destination selected by the
+hash function, the variable migrates automatically
+to the instance which is accessing it. Also, such
+functionality adds ﬂexibility to Anthill as it allows
+the runtime framework to dynamically reconﬁgure
+applications to respond to changes in application
+demands or in the execution environment. Also,
+such feature is important for fault tolerance.
+
+Distributed shared memory (DSM) systems [3,
+13] have many of the functionalities required by
+our global state manager. These DSM systems
+provide the abstraction of a single shared memory
+with a single address space using physical memory
+of collections of interconnected computers, and
+are meant to provide shared memory parallelism
+for general applications.
+
+Despite the good results that have been shown
+in the literature [3], some of their features are not
+really necessary in Anthill’s case and may lead
+to high overheads. In particular, general purpose
+DSM systems provide access serialization prim-
+itives to enforce semantics on the applications
+and also they have integrated caching subsystems,
+which are important due to performance reasons
+but incur overheads as they demand coherence pro-
+tocols. Transparent copies of Anthill ﬁlters have,
+however, very speciﬁc access patterns with high
+locality of reference. Since the state is partitioned,
+only one ﬁlter instance is updating any state vari-
+able at a given time, eliminating the need for both
+caching and synchronization primitives.
+
+For these reasons, we decided to implemente
+our own trimmed version of DSM system to be
+used by our global state manager. The ﬁlter imple-
+mentation simply allocates the space for the entire
+state and, at runtime, it is divided among the trans-
+parent copies. The initial partitioning of the space
+is arbitrarily deﬁned by our implementation.
+
+Accesses to the state variables are done through
+the global state manager’s API, which provides
+two functions for that purpose: getData() and set-
+Data(). Whenever a ﬁlter instance accesses a state
+variable, the global manager veriﬁes if it is avail-
+able locally. If so, the operation is performed on
+the local memory. Otherwise, the manager triggers
+the variable migration mechanism, which ﬁnds the
+state variable and moves it to the local memory of
+the accessing instance. There is only one copy of
+each state variable at any given time in our dis-
+tributed memory. After the variable is available
+locally, it is accessed accordingly. This optimistic
+approach was shown to work well with Anthill par-
+allelizations by our experiments, as described in
+
+151
+
+Section 4.
+
+3.2 Reconﬁguration Model
+
+An execution conﬁguration, or simply conﬁgu-
+ration, means the number of instances of any ﬁlter
+at a time. So, dynamically reconﬁguring an Anthill
+application basically means changing the number
+of instances of any of the application’s ﬁlters, in
+other words, change its conﬁguration. For ﬁlters
+without state, such reconﬁguration is straightfor-
+ward as there are no data dependencies and the ex-
+ecution status could be easily recomputed. For ﬁl-
+ters with state, on the other hand, they need more
+than just the data migration capability provided by
+our memory management system.
+
+As Anthill’s applications could have many
+asynchronous concurrent data ﬂows running in-
+dependently, the following inconsistent situation
+could be achieved: Messages may had been
+queued within the streams, and when those mes-
+sages were sent, the application had a different
+conﬁguration. One solution for this problem is
+synchronize all instances before the reconﬁgura-
+tion can take place. This approach may incur sig-
+niﬁcant overhead, as it amounts to a global barrier
+in which the ﬁlters have to consume all old mes-
+sages without producing new ones.
+
+Our approach is based on Lamport’s ideas on
+synchronization of distributed events [9]. We in-
+troduce a global logical clock that gets updated
+every time a reconﬁguration takes place. Our sys-
+tem keeps the application conﬁguration for every
+timestamp of the global clock and each message
+that is sent to a stream is automatically times-
+tamped with the global time.
+Each ﬁlter in-
+stance has its own local time, which gets updated
+based on the timestamp of the receiving messages.
+Throughout the execution, the framework behaves
+in accordance to the conﬁguration the system has
+at the instance’s local time. Eventually all ﬁlter
+instances synchronize with the global clock.
+
+3.3 Implementation Details
+
+Our global state manager is implemented in
+three components. The ﬁrst is the directory, which
+contains indices to the state variables per applica-
+tion. The second are the clients, which are multiple
+copies of the same daemon that actually stores the
+data. And the third component is a library of func-
+tions that provides the API for accessing the data.
+Remote accesses to data are assumed as indication
+
+of bad placement decision and trigger data migra-
+tion, as mentioned before. The client daemons use
+and update information on the directory to keep
+track of the state variables. Our implementation
+also supports state allocation for multiple simulta-
+neous Anthill applications.
+
+We implemented an Anthill Monitor which is
+responsible for collecting information about re-
+sources, summarizing it and sending it to a cen-
+tral repository. The Anthill Monitor has two main
+modules:
+local and central monitor. The local
+monitor is responsible for collecting data from
+each machine, and sending it to a central moni-
+tor. For example, the local monitor collects the
+number of processes running, swap memory, and
+CPU load on the local node. Based in this data,
+the central monitor has the global view of the en-
+vironment, for example, it knows which machines
+can be used for execution or which are overloaded.
+Finally, we have to add to Anthill the capability
+of instantiating ﬁlter instances on the ﬂy, while the
+application is running. One important piece that
+is still missing is a scheduler for deciding, based
+upon information from Anthill Monitor, when is a
+good idea to reconﬁgure the application, and what
+the new conﬁguration should be. We leave this as
+future investigation direction.
+
+4 Experimental Evaluation
+
+We used two different data mining applications
+to evaluate the performance and impact of the
+ideas proposed in this paper: K-Means and A Pri-
+ori. Both applications were selected because we
+had previously built efﬁcient Anthill implemen-
+tations for them, which were adapted to use the
+global state manager proposed in this paper.
+
+4.1 Clustering
+
+K-Means [11] is a popular clustering algorithm,
+which is based on the concept of centroids to group
+objects. In each iteration, objects are assigned to
+the group of the closest centroid. The centroids
+are updated in the end of each iteration, and the
+algorithm repeats until no objects change group or
+a maximum number of iterations is reached.
+
+Figure 1 shows Anthill implementation which
+uses three ﬁlters: assigner, centroid calculator, and
+ﬁnal. The assigner ﬁlter has the set of all objects
+the application is trying to cluster and receives as
+input the set of centroids. For each object, it com-
+putes the distance to all centroids, and assigns the
+
+152
+
+Local Centroid (Labeled Stream)
+
+C e n t r o i d
+C a l c u l a t o r
+
+Global Centroid (Broadcast)
+
+A s s i g n e r
+
+Final Centroids
+
+F i n a l
+
+Figure 1. K-means Filters.
+
+object to the nearest one. The centroid calcula-
+tor computes new centroids based on the objects
+currently assigned to each of them. The assigner
+ﬁlter is then called again, with the new computed
+centroids and the objects are re-assigned until the
+termination of the algorithm. Finally, the centroids
+are sent to the ﬁnal ﬁlter, which prints a user read-
+able version of the results.
+
+In the modiﬁed algorithm, the assigner ﬁlter
+stores all objects as global state. We identiﬁed this
+ﬁlter as the major bottleneck for the application
+and consequently a good candidate for reconﬁg-
+uration. With this modiﬁcation, multiple instances
+of the assigner ﬁlter can be created and each one
+accesses its local partition of the entire data, as de-
+ﬁned by the instance’s rank, which is deﬁned by
+Anthill runtime. When reconﬁguration happens,
+the rank is used along with the total number of ﬁl-
+ters in such a way that each instance reads its local
+data. Whatever portions are not in the proper loca-
+tion are migrated transparently.
+
+4.2 Association analysis
+
+Association analysis consists of determining as-
+sociation rules, causality relations among frequent
+co-occurring items in a database [15]. The ﬁrst
+step in computing them consists of determining all
+co-occurring sets that appear in the database more
+frequently than a given threshold. A traditional al-
+gorithm for doing this is the A Priori [2].
+
+Itemsets partial occurrence
+
+C o u n t e r
+
+V e r i f i e r
+
+Candidate itemsets
+
+ Frequent itemsets
+
+C a n d i d a t e
+g e n e r a t o r
+
+Figure 2. Apriori Filters.
+
+The original Anthill implementation of em A
+Priori, Figure 2, is based on the principle that in
+order for a itemset (set of co-occurring items) of
+k items to be frequent, all of its subsets need also
+
+to be frequent. The algorithm starts with an initial
+set of frequent itemset candidates that includes all
+itemsets of size 1. For every new candidate item-
+set, the counter ﬁlter computes its actual frequency
+in the database. That value is passed to the veri-
+ﬁer ﬁlter, which checks whether that frequency is
+above the threshold and sends that information to
+the candidate generator ﬁlter, which generates new
+candidates. The algorithm ends when there is no
+more candidates.
+
+For the counter ﬁlter, the transaction database is
+maintained on the global storage. This allows mul-
+tiple instances of this ﬁlter to each count frequency
+on only a local portion of the entire database. This
+local portion can change dynamically based on the
+application’s conﬁguration. The state of the veri-
+ﬁer ﬁlter consists of a global counter for each can-
+didate itemset. These counters are allocated on the
+global state manager as well, allowing the num-
+ber of instances of this ﬁlter to change dynamically
+during execution.
+
+4.3 Experimental setup
+
+For K-Means we used a synthetic dataset, con-
+In our
+taining 1,000,000 points to be clustered.
+dataset each point have 50 dimensions. These
+dimensions could represent, for example, socio-
+demographic variables of regions that should be
+grouped. We also used a synthetic dataset for A
+Priori, consisting of 1,000,000 transactions each
+of them composed by 70 attributes, generated us-
+ing the procedure described in [15]. This dataset
+mimics the transactions in a retailing environment.
+We used both original and modiﬁed versions of
+the two algorithms. The original implementation
+was compared to the new implementation in or-
+der to evaluate the overhead incurred by the global
+state manager in cases in which no reconﬁguration
+happens.
+
+For experimenting with the reconﬁguration, we
+designed the following set of experiments: We
+consider only cases in which more nodes become
+available during the execution. We choose three
+milestones of the application completion to trig-
+ger the reconﬁguration, which are: 25%, 50% and
+75%. For each milestone, we ran experiments
+varying the initial execution conﬁguration (1,2,4
+and 8) and when the pre-deﬁned execution point is
+reached the number of resources available is dou-
+bled. There is no particular reason for such an op-
+tion. We just felt that such a scheme would give
+us enough insight into the performance of our sys-
+tem, but other different experiments could be done
+
+153
+
+Execution Time vs. Number of Machines
+
+Apriori not using the DSM
+Apriori using the DSM
+K−means not using the DSM
+K−measn using the DSM
+
+just as well.
+
+The experiments were run on a cluster of 20
+PCs connected by Fast Ethernet. Each node is
+an AMD Athlon (tm) Processor 3200+ with 2 GB
+main memory running Linux 2.6.
+
+4.4 Results
+
+Figure 3 shows that for both applications, the
+speedups of the new implementations are still very
+close to linear. This shows that the addition of
+the global state manager does not introduce bot-
+tlenecks to the parallelization.
+
+)
+s
+d
+n
+o
+c
+e
+s
+(
+ 
+e
+m
+
+i
+t
+ 
+n
+o
+i
+t
+u
+c
+e
+x
+E
+
+ 8000
+
+ 7000
+
+ 6000
+
+ 5000
+
+ 4000
+
+ 3000
+
+ 2000
+
+ 1000
+
+ 0
+
+ 1  2
+
+ 4
+
+ 8
+
+ 16
+
+Number of machines
+
+Figure 4. Execution times for the dif-
+ferent implementations.
+
+three milestones, when 25%, 50% and 75% of the
+work is done. We have gains in all scenarios, ex-
+cept for the reconﬁguration from 8 to 16 machines
+and the milestone 75% which we discuss next.
+
+4.5 Discussion
+
+In a situation when half way through a compu-
+tation, the number of available nodes go from n
+to m processors, the best possible time the appli-
+cation could run would be the average of the exe-
+cution times for n and m processors. In the gen-
+eral case the best possible execution time would
+be weighted average of the execution times of the
+several conﬁgurations, weighted on the percentage
+of the execution time on each conﬁguration. To
+show how close to this minimum execution time
+our experiments are, we present Table 1. The num-
+bers presented are a ratio of our observed execu-
+tion time and the estimated minimum execution
+times for the k-means application on the different
+reconﬁguration scenarios we experimented with.
+
+The table shows that the highest overhead was
+observed when going from 8 to 16 processors with
+25% of the work done, and it is less than 8%. The
+experiment incurred the lowest overhead when go-
+ing from 1 to 2 processors with 75% of the com-
+putation done, and it is less than 2%. These results
+show that the reconﬁguration cost drops slower
+than the execution times for the applications as we
+include more machines and reconﬁgure sooner.
+
+For the A Priori application, we observed that
+going from 8 to 16 machines at 75% of the work
+done did not yield to an increase of performance.
+Intending to study the reasons for that fact, we
+measured the throughput of the algorithm during
+
+Speedup
+
+Linear Speedup
+Apriori Speedup
+K−means Speedup
+
+ 20
+
+ 15
+
+ 10
+
+ 5
+
+s
+e
+u
+a
+V
+
+l
+
+ 1  2
+
+ 4
+
+ 8
+
+ 16
+
+Number of machines
+
+Figure 3. Speedups of the new imple-
+mentations of the applications.
+
+Figure 4 shows the difference in execution
+times for the original and new implementations
+of each application. What we can see from both
+applications is that the overheads incurred by the
+global state manager are actually negligible. For
+the K-Means algorithm, the average difference in
+the execution times for original and new imple-
+mentation was around 1.5%, while for A Priori it
+is 1.8%. Looking carefully, we can see that there is
+no signiﬁcant performance penalty due to the ad-
+ditional functionality.
+
+Figure 5(a) shows the execution times for the
+K-means implementation under different reconﬁg-
+uration scenarios (without reconﬁguration, 25%,
+50% and 75%) and different platforms (1, 2, 4 and
+8 processors). As we can see, there are gains in all
+three reconﬁguration milestones. Also, the sooner
+the reconﬁguration happens, the more beneﬁt there
+is, meaning that the system makes effective use of
+the additional resources as soon as they become
+available.
+
+Figure 5(b) presents the reconﬁguration exper-
+iments for the A Priori algorithm. As in the K-
+Means experiments, the reconﬁgurations occur in
+
+154
+
+)
+s
+d
+n
+o
+c
+e
+s
+(
+ 
+
+i
+
+e
+m
+T
+n
+o
+
+ 
+
+i
+t
+
+u
+c
+e
+x
+E
+
+)
+s
+d
+n
+o
+c
+e
+s
+(
+ 
+
+i
+
+e
+m
+T
+ 
+n
+o
+i
+t
+u
+c
+e
+x
+E
+
+ 8000
+
+ 7000
+
+ 6000
+
+ 5000
+
+ 4000
+
+ 3000
+
+ 2000
+
+ 1000
+
+ 0
+
+ 7000
+
+ 6000
+
+ 5000
+
+ 4000
+
+ 3000
+
+ 2000
+
+ 1000
+
+ 0
+
+Number of machines vs. Execution Time (Reconfiguration)
+
+Normal Execution
+Reconf. at 75% of the experiment
+Reconf. at 50% of the experiment
+Reconf. at 25% of the experiement
+
+Throughput vs. Execution Time
+
+Throughput
+
+t
+
+u
+p
+h
+g
+u
+o
+r
+h
+T
+
+ 100
+
+ 90
+
+ 80
+
+ 70
+
+ 60
+
+ 50
+
+ 40
+
+ 30
+
+ 20
+
+ 10
+
+ 1
+
+ 2
+
+ 4
+
+ 8
+
+ 16
+
+Number of machines
+
+(a) K-means
+
+Number of machines vs. Execution Time (Reconfiguration)
+
+Normal Execution
+Reconf. at 75% of the experiment
+Reconf. at 50% of the experiment
+Reconf. at 25% of the experiement
+
+ 0
+
+ 500  1000  1500  2000  2500  3000  3500
+
+Time (seconds)
+
+Figure 6. Throughput:
+reconﬁgura-
+tion experiment from 2 to 4 machines
+at 25% of the work ﬁnished.
+
+ 1  2
+
+ 4
+
+ 8
+
+ 16
+
+5 Related Work
+
+Number of machines
+
+(b) Apriori
+
+enough tasks left to execute that would take advan-
+tage of the additional resources available.
+
+Several works have developed strategies to mi-
+grate applications using checkpointing and stop
+and start model [1, 10, 5]. Although efﬁcient
+in some scenarios, it is very expensive for appli-
+cations with a large state. Due to these restric-
+tions, some tools have been adopting different ap-
+proaches like process virtualization [8] and split,
+merge and migrations of processes [12] to recon-
+ﬁgure and adapt the application to the execution
+environment.
+
+The
+
+process
+
+approach
+
+virtualization
+
+[8]
+achieves application malleability, or reconﬁgura-
+tion, by creating a number of virtual processors
+(VP) which are normally much larger than the
+number or physical processors (P). The processor
+virtualization is then used as an abstraction to
+allow ﬂexible and efﬁcient load balancing through
+process migration, and checkpoint/restart support.
+This approach is very interesting, especially due
+the fact that the programmer is not limited to the
+number of physical processors, but can express
+the program in terms of the nature of the parallel
+problem. It can, however, generate an unaccept-
+able overhead and turn into a big problem when
+resources become scarce with a large number of
+processes.
+
+In [12] Magharaoui et al. showed that an ef-
+fective resource utilization could be attained us-
+ing more ﬁne-grained adaptation strategies. They
+implemented a middleware to monitor and per-
+
+Figure 5. Evaluation of different re-
+conﬁguration scenarios.
+
+# of nodes
+
+% slowdown
+
+25% 50% 75%
+1,69
+2,07
+2,06
+2.34
+2,88
+4,20
+7,59
+5,69
+
+2,04
+2,24
+3,6
+6,51
+
+1
+2
+4
+8
+
+Table 1. Measured / Minimum Execu-
+tion Times for K-Means.
+
+the execution. The throughput is based on the rate
+that new candidates are veriﬁed to be frequent. In
+Figure 6, we show the throughput, reconﬁguring
+from 2 to 4 machines at milestone 25%. This ex-
+periment shows that throughput increases after re-
+conﬁguration and a dramatically reduction occurs
+in the last 20% of the execution. In a normal run
+of the application we have also veriﬁed that the
+throughput in the last 20% of the execution is one
+quarter of the average throughput. So, having a
+smaller number of tasks to be processed in the end
+of the execution is an intrinsic characteristic of the
+application, what can explain why we did not have
+gains when we performed reconﬁguration from 8
+to 16 machines at milestone 75%. There was not
+
+155
+
+form a ﬁne-grained reconﬁguration (split, merge
+and migration) in iterative I/O Intensive MPI ap-
+plications running in computational grids. Experi-
+mental evaluation has shown that very good results
+could be achieved using this strategy, but they are
+restricted to applications with regular communica-
+tion and processing patterns. As we are targeting
+in a runtime system to support applications that ﬁt
+in the Filter-Stream model this restrictions could
+not be assumed.
+
+6 Conclusions and Future Work
+
+In this paper, we presented a global state man-
+ager that increases the level of abstraction to the
+application developers and adds transparent recon-
+ﬁguration capability to Anthill. Our experimental
+results show that the system achieved good perfor-
+mance for two classic data mining applications, A
+Priori and K-Means. The overheads due to stor-
+ing data in the global state manager do not exceed
+1.8% on average. The reconﬁguration experiments
+have shown execution times 3.57% (on average)
+slower than the minimum possible execution time,
+that is the hypothetic case where no overhead is
+added due to reconﬁguration.
+
+For future work, we are going to incorporate
+redundancy to the current global state manager
+which would provide transparent fault tolerance to
+Anthill. Other ongoing work is the proposal and
+validation of reconﬁguration heuristics that, based
+on environment information, trigger ﬁlter instance
+additions and removals.
+
+References
+
+[1] A. Agbaria and R. Friedman. Starﬁsh: Fault-
+tolerant dynamic mpi programs on clusters of
+In HPDC ’99: Proceedings of the
+workstations.
+8th IEEE International Symposium on High Per-
+formance Distributed Computing, page 31, Wash-
+ington, DC, USA, 1999. IEEE Computer Society.
+[2] R. Agrawal and R. Srikant. Fast algorithms for
+mining association rules. In Proc. of the Int. Conf.
+on Very Large Databases, VLDB, pages 487–499,
+SanTiago, Chile, June 1994. VLDB.
+
+[3] C. Amza, A. L. Cox, S. Dwarkadas, P. Keleher,
+H. Lu, R. Rajamony, W. Yu, and W. Zwaenepoel.
+Treadmarks: Shared memory computing on net-
+works of workstations. IEEE Computer, 29(2):18–
+28, 1996.
+
+[4] M. Beynon, R. Ferreira, T. M. Kurc, A. Sussman,
+and J. H. Saltz. Datacutter: Middleware for ﬁlter-
+ing very large scientiﬁc datasets on archival stor-
+age systems. In IEEE Symposium on Mass Storage
+Systems, pages 119–134, 2000.
+
+[5] J. J. Dongarra and S. S. Vadhiyar. Srs - a frame-
+work for developing malleable andmigratable par-
+allel applications for distributed systems. Parallel
+Processing Letters, 13:291–312, June 2003.
+
+[6] R. Ferreira, W. M. Jr., D. Guedes, L. Drummond,
+B. Coutinho, G. Teodoro, T. Tavares, R. Araujo,
+Anthill:a scalable run-time
+and G. Ferreira.
+environment for data mining applications.
+In
+Symposium on Computer Architecture and High-
+Performance Computing (SBAC-PAD), 2005.
+
+[7] S. Hastings, M. Ribeiro, S. Langella, S. Oster,
+U. Catalyurek, T. Pan, K. Huang, R. Ferreira,
+J. Saltz, and T. Kurc. Xml database support for
+distributed execution of data-intensive scientiﬁc
+workﬂows. SIGMOD Rec., 34(3):50–55, 2005.
+
+[8] C. Huang, G. Zheng, L. Kal´e, and S. Kumar. Per-
+In PPoPP
+formance evaluation of adaptive mpi.
+’06: Proceedings of the eleventh ACM SIGPLAN
+symposium on Principles and practice of parallel
+programming, pages 12–21, New York, NY, USA,
+2006. ACM.
+
+[9] L. Lamport. Time, clocks and the ordering of
+events in a distributed system. Communications
+of the ACM, 21(7):558–565, 1978.
+
+[10] M. Litzkow, M. Livny, and M. Mutka. Condor - a
+hunter of idle workstations. In Proceedings of the
+8th International Conference of Distributed Com-
+puting Systems, June 1988.
+
+[11] J. B. Macqueen.
+
+Some methods of classiﬁca-
+tion and analysis of multivariate observations.
+In Proceedings of the Fifth Berkeley Symposium
+on Mathemtical Statistics and Probability, pages
+281–297, 1967.
+
+[12] K. E. Maghraoui, T. Desell, B. K. Szymanski,
+and C. Varela. Dynamic malleability in iterative
+mpi applications. In Proceedings of Seventh IEEE
+International Symposium on Cluster Computing
+and the Grid (CCGrid 2007), Rio de Janeiro,
+Brazil, pages 591–598. IEEE Computer Society,
+May 2007. Best paper award nominee.
+
+[13] A. Rowstron and A. Wood. An Efﬁcient Dis-
+tributed Tuple Space Implementation for Networks
+of Workstations.
+In L. Bouge, P. Fraigniaud,
+A. Mignotte, and Y. Robert, editors, EuroPar 96,
+volume 1123, pages 511–513. Springer-Verlag,
+Berlin, 1996.
+
+[14] G. Teodoro, T. Tavares, R. Ferreira, T. Kurc,
+W. Meira, D. Guedes, T. Pan, and J. Saltz. Run-
+time support for efﬁcient execution of scientiﬁc
+In In-
+workﬂows on distributed environmments.
+ternational Symposium on Computer Architecture
+and High Performance Computing, Ouro Preto,
+Brazil, October 2006.
+
+[15] A. Veloso, J. Wagner Meira, R. Ferreira, D. G.
+Neto, and S. Parthasarathy. Asynchronous and
+anticipatory ﬁlter-stream based parallel algorithm
+for frequent itemset mining. In PKDD ’04: Pro-
+ceedings of the 8th European Conference on Prin-
+ciples and Practice of Knowledge Discovery in
+Databases, pages 422–433, New York, NY, USA,
+2004. Springer-Verlag New York, Inc.
+
+156
+
+

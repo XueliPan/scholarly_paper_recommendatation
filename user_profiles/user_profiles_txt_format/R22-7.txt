@@ -1,0 +1,3074 @@
+Towards a Holistic Approach to Auto-Parallelization
+
+Integrating Proﬁle-Driven Parallelism Detection and Machine-Learning Based
+
+Mapping
+
+Georgios Tournavitis
+
+Zheng Wang
+
+Bj¨orn Franke Michael F.P. O’Boyle
+
+Institute for Computing Systems Architecture (ICSA)
+
+School of Informatics
+University of Edinburgh
+
+Scotland, United Kingdom
+
+gtournav@inf.ed.ac.uk,jason.wangz@ed.ac.uk,{bfranke,mob}@inf.ed.ac.uk
+
+Abstract
+Compiler-based auto-parallelization is a much studied area, yet has
+still not found wide-spread application. This is largely due to the
+poor exploitation of application parallelism, subsequently result-
+ing in performance levels far below those which a skilled expert
+programmer could achieve. We have identiﬁed two weaknesses in
+traditional parallelizing compilers and propose a novel, integrated
+approach, resulting in signiﬁcant performance improvements of the
+generated parallel code. Using proﬁle-driven parallelism detection
+we overcome the limitations of static analysis, enabling us to iden-
+tify more application parallelism and only rely on the user for ﬁ-
+nal approval. In addition, we replace the traditional target-speciﬁc
+and inﬂexible mapping heuristics with a machine-learning based
+prediction mechanism, resulting in better mapping decisions while
+providing more scope for adaptation to different target architec-
+tures. We have evaluated our parallelization strategy against the
+NAS and SPEC OMP benchmarks and two different multi-core
+platforms (dual quad-core Intel Xeon SMP and dual-socket QS20
+Cell blade). We demonstrate that our approach not only yields sig-
+niﬁcant improvements when compared with state-of-the-art par-
+allelizing compilers, but comes close to and sometimes exceeds
+the performance of manually parallelized codes. On average, our
+methodology achieves 96% of the performance of the hand-tuned
+OpenMP NAS and SPEC parallel benchmarks on the Intel Xeon
+platform and gains a signiﬁcant speedup for the IBM Cell platform,
+demonstrating the potential of proﬁle-guided and machine-learning
+based parallelization for complex multi-core platforms.
+
+Categories and Subject Descriptors D.3.4 [Programming Lan-
+guages]: Processors—Compilers; D.1.3 [Programming Techniques]:
+Concurrent Programming—Parallel Programming
+
+General Terms Experimentation, Languages, Measurement, Per-
+formance
+
+Keywords Auto-Parallelization, Proﬁle-Driven Parallelism De-
+tection, Machine-Learning Based Parallelism Mapping, OpenMP
+
+Permission to make digital or hard copies of all or part of this work for personal or
+classroom use is granted without fee provided that copies are not made or distributed
+for proﬁt or commercial advantage and that copies bear this notice and the full citation
+on the ﬁrst page. To copy otherwise, to republish, to post on servers or to redistribute
+to lists, requires prior speciﬁc permission and/or a fee.
+PLDI’09,
+Copyright c(cid:2) 2009 ACM 978-1-60558-392-1/09/06. . . $5.00
+
+June 15–20, 2009, Dublin, Ireland.
+
+Introduction
+
+1.
+Multi-core computing systems are widely seen as the most viable
+means of delivering performance with increasing transistor densi-
+ties (1). However, this potential cannot be realized unless the ap-
+plication has been well parallelized. Unfortunately, efﬁcient par-
+allelization of a sequential program is a challenging and error-
+prone task. It is generally agreed that manual code paralleliza-
+tion by expert programmers results in the most streamlined parallel
+implementation, but at the same time this is the most costly and
+time-consuming approach. Parallelizing compiler technology, on
+the other hand, has the potential to greatly reduce cost and time-to-
+market while ensuring formal correctness of the resulting parallel
+code.
+
+Automatic parallelism extraction is certainly not a new research
+area (2). Progress was achieved in 1980s to 1990s on restricted
+DOALL and DOACROSS loops (3; 4; 5). In fact, this research
+has resulted in a whole range of parallelizing research compil-
+ers, e.g. Polaris (6), SUIF-1 (7) and, more recently, Open64 (8).
+Complementary to the on-going work in auto-parallelization many
+high-level parallel programming languages – such as Cilk-5 (9),
+OpenMP, StreamIt (10), UPC (11) and X10 (12) – and program-
+ming models – such as Galois (14), STAPL (15) and HTA (16) –
+have been proposed. Interactive parallelization tools (17; 18; 19;
+20) provide a way to actively involve the programmer in the detec-
+tion and mapping of application parallelism, but still demand great
+effort from the user. While these approaches make parallelism ex-
+pression easier than in the past, the effort involved in discovering
+and mapping parallelism is still far greater than that of writing an
+equivalent sequential program.
+
+This paper argues that the lack of success in auto-parallelization
+has occurred for two reasons. First, traditional static parallelism de-
+tection techniques are not effective in ﬁnding parallelism due to
+lack of information in the static source code. Second, no existing
+integrated approach has successfully brought together automatic
+parallelism discovery and portable mapping. Given that the num-
+ber and type of processors of a parallel system is likely to change
+from one generation to the next, ﬁnding the right mapping for an
+application may have to be repeated many times throughout an ap-
+plication’s lifetime, hence, making automatic approaches attractive.
+
+Approach. Our approach integrates proﬁle-driven parallelism de-
+tection and machine-learning based mapping in a single frame-
+work. We use proﬁling data to extract actual control and data de-
+pendences and enhance the corresponding static analyses with dy-
+namic information. Subsequently, we apply a previously trained
+
+177f o r ( i = 0 ;
+
+i < n o d e s ;
+
+i ++) {
+
+Anext = Aindex [ i ] ;
+A l a s t = Aindex [ i + 1 ] ;
+
+sum0 = A[ Anext ] [ 0 ] [ 0 ] ∗ v [ i ] [ 0 ] +
+A[ Anext ] [ 0 ] [ 1 ] ∗ v [ i ] [ 1 ] +
+A[ Anext ] [ 0 ] [ 2 ] ∗ v [ i ] [ 2 ] ;
+
+sum1 = . . .
+
+Anext ++;
+w h i l e ( Anext < A l a s t ) {
+
+c o l = Acol [ Anext ] ;
+
+sum0 += A[ Anext ] [ 0 ] [ 0 ] ∗ v [ c o l ] [ 0 ] +
+A[ Anext ] [ 0 ] [ 1 ] ∗ v [ c o l ] [ 1 ] +
+A[ Anext ] [ 0 ] [ 2 ] ∗ v [ c o l ] [ 2 ] ;
+
+sum1 += . . .
+
+w[ c o l ] [ 0 ] += A[ Anext ] [ 0 ] [ 0 ] ∗ v [ i ] [ 0 ] +
+A[ Anext ] [ 1 ] [ 0 ] ∗ v [ i ] [ 1 ] +
+A[ Anext ] [ 2 ] [ 0 ] ∗ v [ i ] [ 2 ] ;
+
+w[ c o l ] [ 1 ] += . . .
+Anext ++;
+
+}
+w[ i ] [ 0 ] += sum0 ;
+w[ i ] [ 1 ] += . . .
+
+}
+
+Figure 1. Static analysis is challenged by sparse array reduction
+operations and the inner while loop in the SPEC equake benchmark.
+
+machine-learning based prediction mechanism to each parallel loop
+candidate and decide if and how the parallel mapping should be per-
+formed. Finally, we generate parallel code using standard OpenMP
+annotations. Our approach is semi-automated, i.e. we only expect
+the user to ﬁnally approve those loops where parallelization is
+likely to be beneﬁcial, but correctness cannot be proven conclu-
+sively.
+
+Results. We have evaluated our parallelization strategy against
+the NAS and SPEC OMP benchmarks and two different multi-
+core platforms (dual quad-core Intel Xeon SMP and dual-socket
+QS20 Cell blade). We demonstrate that our approach not only
+yields signiﬁcant improvements when compared with state-of-the-
+art parallelizing compilers, but comes close to and sometimes ex-
+ceeds the performance of manually parallelized codes. We show
+that proﬁling-driven analyses can detect more parallel loops than
+static techniques. A surprising result is that all loops classiﬁed as
+parallel by our technique are correctly identiﬁed as such, despite
+the fact that only a single, small data input is considered for par-
+allelism detection. Furthermore, we show that parallelism detec-
+tion in isolation is not sufﬁcient to achieve high performance, and
+neither are conventional mapping heuristics. Our machine-learning
+based mapping approach provides the adaptivity across platforms
+that is required for a genuinely portable parallelization strategy.
+On average, our methodology achieves 96% of the performance
+of the hand-tuned OpenMP NAS and SPEC parallel benchmarks
+on the Intel Xeon platform, and a signiﬁcant speedup for the Cell
+platform, demonstrating the potential of proﬁle-guided machine-
+learning based auto-parallelization for complex multi-core plat-
+forms.
+
+Overview. The remainder of this paper is structured as follows.
+We motivate our work based on simple examples in section 2. This
+is followed by a presentation of our parallelization framework in
+section 3. Our experimental methodology and results are discussed
+in sections 4 and 5, respectively. We establish a wider context of
+
+#pragma omp f o r r e d u c t i o n ( + : sum ) p r i v a t e ( d )
+f o r ( j = 1 ;
+
+j <= l a s t c o l −f i r s t c o l −1;
+
+j ++) {
+
+d = x [ j ] − r [ j ] ;
+sum = sum + d ∗ d ;
+
+}
+
+Figure 2. Despite its simplicity mapping of this parallel loop taken
+from the NAS cg benchmark is non-trivial and the best-performing
+scheme varies across platforms.
+
+related work in section 6 before we summarize and conclude in
+section 7.
+
+2. Motivation
+Parallelism Detection. Figure 1 shows a short excerpt of the smvp
+function from the SPEC equake seismic wave propagation bench-
+mark. This function implements a general-purpose sparse matrix-
+vector product and takes up more than 60% of the total execution
+time of the equake application. While conservative, static analysis
+fails to parallelize both loops due to sparse matrix operations with
+indirect array indices and the inner while loop, proﬁling-based de-
+pendence analysis provides us with the additional information that
+no actual data dependence inhibits parallelization for a given sam-
+ple input. While we still cannot prove absence of data dependences
+for every possible input we can classify both loops as candidates for
+parallelization (reduction) and, if proﬁtably parallelizable, present
+it to the user for approval. In this example, the user would provide
+the additional knowledge (and guarantee) that every col index in
+the inner loop is unique and, hence, accesses to w[col][0] and
+w[col][1], respectively, do not result in cross-iteration dependen-
+cies.
+
+This example demonstrates that static analysis is overly con-
+servative. Proﬁling based analysis, on the other hand, can provide
+accurate dependence information for a speciﬁc input. When com-
+bined we can select candidates for parallelization based on empir-
+ical evidence and, hence, can eventually extract more application
+parallelism than purely static approaches.
+
+Mapping.
+In ﬁgure 2 a parallel reduction loop originating from
+the parallel NAS conjugate-gradient cg benchmark is shown. De-
+spite the simplicity of the code, mapping decisions are non-trivial.
+For example, parallel execution of this loop is not proﬁtable for the
+Cell BE platform due to high communication costs between pro-
+cessing elements. In fact, parallel execution results in a massive
+slowdown over the sequential version for the Cell for any number
+of threads. On the Intel Xeon platform, however, parallelization can
+be proﬁtable, but this depends strongly on the speciﬁc OpenMP
+scheduling policy. The best scheme (STATIC) results in a speedup
+of 2.3 over the sequential code and performs 115 times better than
+the worst scheme (DYNAMIC) that slows the program down to 2%
+of its original, sequential performance.
+
+This example illustrates that selecting the correct mapping
+scheme has a signiﬁcant impact on performance. However, the
+mapping scheme varies not only from program to program, but
+also from architecture to architecture. Therefore, we need an auto-
+matic and portable solution for parallelism mapping.
+
+3. Parallelization Framework
+In this section we provide an overview and technical details of our
+parallelization framework.
+
+As shown in ﬁgure 3, a sequential C program is initially ex-
+tended with plain OpenMP annotations for parallel loops and re-
+ductions as a result of our proﬁling-based dependence analysis. In
+
+178Sequential
+
+Proﬁling Based
+
+Code
+
+Analysis
+
+Code with
+Parallel 
+
+Annotations
+
+Machine-Learning
+
+Based Mapping
+
+Code with
+Extended 
+Annotations
+
+Figure 3. A two-staged parallelization approach combining
+proﬁling-driven parallelism detection and machine-learning based
+mapping to generate OpenMP annotated parallel programs.
+
+addition, data scoping for shared and private data also takes place
+at this stage.
+
+In a second step we add further OpenMP work allocation
+clauses to the code if the loop is predicted to beneﬁt from par-
+allelization, or otherwise remove the parallel annotations. This also
+happens for loop candidates where correctness cannot be proven
+conclusively (based on static analysis) and the user disapproves of
+the suggested parallelization decision.
+
+Finally, the parallel code is compiled with a native OpenMP
+compiler for the target platform. A complete overview of our tool-
+chain is shown in ﬁgure 4.
+
+3.1 Proﬁle-Driven Parallelism Detection
+
+We propose a proﬁle-driven approach to parallelism detection
+where the traditional static compiler analyses are not replaced,
+but enhanced with dynamic information. To achieve this we have
+devised a novel instrumentation scheme operating at the interme-
+diate representation (IR) level of the compiler. Unlike e.g. (21) we
+do not need to deal with low-level artifacts of any particular in-
+struction set, but obtain dynamic control and data ﬂow information
+relating to IR nodes immediately. This allows us to back-annotate
+the original IR with the proﬁling information and resume com-
+pilation/parallelization. The three stages involved in parallelism
+detection are:
+
+1. IR instrumentation, C code generation and proﬁling
+
+2. CDFG construction and dependence analysis
+
+3. Parallel code generation
+
+3.1.1 Instrumentation and Proﬁle Generation
+
+Our primary objective is to enhance the static analysis of a tradi-
+tional parallelizing compiler using precise, dynamic information.
+The main obstacle here is correlating the low-level information
+gathered during program execution – such as speciﬁc memory ac-
+cesses and branch operations – to the high-level data and control
+ﬂow information. Debug information embedded in the executable
+is usually not detailed enough to enable this reconstruction.
+
+To bridge this information gap we perform instrumentation at
+the IR level of the compiler (CoSy). For each variable access, ad-
+ditional code is inserted that emits the associated symbol table ref-
+erence as well as the actual memory address of the data item. All
+data items including arrays, structures, unions and pointers are cov-
+ered in the instrumentation. This information is later used to disam-
+biguate memory accesses that static analysis fails to analyze. Simi-
+larly, we instrument every control ﬂow instruction with the IR node
+identiﬁer and code to record the actual, dynamic control ﬂow. Even-
+tually, a plain C representation close to the original program, but
+with additional instrumentation code inserted, is recovered using
+an IR-to-C translation pass and compiled with a native x86 com-
+piler.
+
+The program resulting from this process is still sequential and
+functionally equivalent to the original code, but emits an additional
+trace of data access and control ﬂow items.
+
+3.1.2 CDFG Construction and Dependence Analysis
+
+The subsequent analysis stage consumes one trace item at a time
+and incrementally constructs a global control and data ﬂow graph
+(CDFG) on which the parallelism detection is performed. Hence, it
+is not necessary to store the entire trace if the tools are chained up
+appropriately.
+
+Each trace item is processed by algorithm 1. It distinguishes
+between control and data ﬂow items and maintains various data
+structures supporting dependence analysis. The control ﬂow sec-
+tion constructs a global control ﬂow graph of the application in-
+cluding call stacks, loop nest trees, and normalized loop iteration
+vectors. The data-ﬂow section is responsible for mapping memory
+addresses to speciﬁc high-level data ﬂow information. For this we
+keep a hash table where data items are traced at byte-level granu-
+larity. Data dependences are recorded as data edges in the CDFG.
+These edges are further annotated with the speciﬁc data sections
+(e.g. array indices) that cause the dependence. For loop-carried data
+dependences an additional bit vector relating the dependence to the
+surrounding loop nest is maintained.
+
+Data Items
+· CDF G(V, EC, ED): graph with control (EC) and data-ﬂow
+(ED) edges
+· bite[]: bitﬁeld in each e ∈ ED
+· sete: address set in each e ∈ ED
+· ita[]: iteration vector of address a
+· M [A, {V, it}]: hash table: mem. addr. → {V, ita}
+· it0[]: current normalized iteration vector
+· u ∈ V : current node
+
+Procedure instruction handler
+I ← next instruction
+if I is a memory instruction then
+
+a ← address accessed by instruction
+if I is a DEF then
+
+update last writer in M
+
+endif
+else if USE then
+
+ﬁnd matching DEF from M
+if DEF→USE edge e /∈ CDFG then
+
+add e in ED
+
+endif
+sete ← sete ∪ {a}
+foreach i : ita[i] (cid:6)= it0[i] do bite[i] ← true
+ita ← it0
+
+endif
+
+endif
+else if I is a control instruction then
+
+v ← node referenced by instruction
+if edge (u, v) /∈ EC then
+add (u, v) in CDF G
+
+endif
+u ← v
+
+endif
+
+Algorithm 1: Algorithm for CDFG construction.
+
+As soon as the complete trace has been processed the con-
+structed CDFG with all its associated annotations is imported back
+into the CoSy compiler and added to the internal, statically derived
+data and control ﬂow structures. This is only possible because the
+dynamic proﬁle contains references to IR symbols and nodes in ad-
+dition to actual memory addresses.
+
+The proﬁling-based CDFG is the basis for the further detection
+of parallelism. However, there is the possibility of conﬂicting de-
+pendence information, for example, if a “may” data dependence
+
+179Sequential
+C Code
+
+Small Sample
+
+Data Set
+
+User
+
+Approval
+
+Instrumentation
+
+Proﬁling
+
+Parallelization
+
+Mapping
+
+Static & Dynamic
+
+Dependence
+
+Analysis
+
+Code
+
+Generation
+
+Parallel
+
+C Code with
+
+OpenMP
+
+Annotations
+
+“Real”, Full-Sized
+
+Data Set
+
+Results
+
+Native
+
+Execution
+
+Native
+
+Compilation
+
+Figure 4. Our parallelization framework comprises IR-level instrumentation and proﬁling stages, followed by static and dynamic dependence
+analyses driving loop-level parallelization and a machine-learning based mapping stage where the user may be asked for ﬁnal approval before
+parallel OpenMP code is generated. Platform-speciﬁc code generation is performed by the native OpenMP enabled C compiler.
+
+has not “materialized” in the proﬁling run. In this case, we treat
+such a loop as potentially parallelizable, but present it to the user
+for ﬁnal approval if parallelization is predicted to be proﬁtable.
+
+3.1.3 Parallel Code Generation
+
+We use OpenMP for parallel code generation due to the low
+complexity of generating the required code annotations and the
+widespread availability of native OpenMP compilers. Currently,
+we only target parallel FOR loops and translate these into corre-
+sponding OpenMP annotations.
+
+Privatization. We maintain a complete list of true-, anti- and
+output-dependencies as these are required for parallelization.
+Rather than recording all the readers of each memory location we
+keep a map of the normalized iteration index of each memory loca-
+tion that is read/written at each level of a loop-nest. This allows us
+to efﬁciently track all memory locations that cause a loop-carried
+anti- or output-dependence. A scalar x is privatizable within a loop
+if and only if every path from the beginning of the loop body to a
+use of x passes from a deﬁnition of x before the use. Hence, we
+can determine the privatizable variables by inspecting the incom-
+ing and outgoing data-dependence edges of the loop. An analogous
+approach applies to privatizable arrays.
+
+Reduction Operations. Reduction recognition for scalar vari-
+ables is based on the algorithm presented in (22), but unlike the
+original publication we use a simpliﬁed code generation stage
+where it is sufﬁcient to emit an OpenMP reduction annotation for
+each recognized reduction loop. We validate statically detected
+reduction candidates using proﬁling information and use an ad-
+ditional reduction template library to enable reductions on array
+locations such as that shown in ﬁgure 1.
+
+Synchronization. The default behavior of parallel OpenMP loops
+is to synchronize threads at the end of the work sharing construct
+by means of a barrier. Due to the high cost of this form of synchro-
+nization it is important for good performance that redundant syn-
+chronization is avoided. Synchronization also increases idle time,
+due to load imbalance, and can sequentialize sections of a pro-
+gram. Based on the CDFG we compute inter-loop dependencies
+
+and apply a compile time barrier synchronization minimization al-
+gorithm (23), resulting in a minimal number of barriers. For those
+loops where the default synchronization can be eliminated we ex-
+tend the annotations with the OpenMP nowait clause.
+
+Limitations. At present, our approach to code generation is rela-
+tively simple and, essentially, relies on OpenMP code annotations
+alongside minor code transformations. We do not yet perform high-
+level code restructuring which might help expose or exploit more
+parallelism or improve data locality. While OpenMP is a compiler-
+friendly target for code generation it imposes a number of limita-
+tions. For example, we do not yet exploit coarse-grain parallelism,
+e.g. pipelines, and wavefront parallelism even though we can also
+extract this form of parallelism.
+
+3.2 Machine Learning Based Parallelism Mapping
+
+The responsibilities of the parallelism mapping stage are to de-
+cide if a parallel loop candidate is proﬁtable to parallelize and, if
+so, to select a scheduling policy from the four options offered by
+OpenMP: CYCLIC, DYNAMIC, GUIDED, and STATIC. As the ex-
+ample in ﬁgure 2 demonstrates, this is a non-trivial task and the op-
+timal solution depends on both the particular properties of the loop
+under consideration and the target platform. To provide a portable,
+but automated mapping approach we use a machine learning tech-
+nique to construct a predictor that, after some initial training, will
+replace the highly platform-speciﬁc and often inﬂexible mapping
+heuristics of traditional parallelization frameworks.
+
+3.2.1 Predictive Modeling
+
+Separating proﬁtably parallelizable loops from those that are not
+is a challenging task. Incorrect classiﬁcation will result in missed
+opportunities for proﬁtable parallel execution or even in a slow-
+down due to an excessive synchronization overhead. Traditional
+parallelizing compilers such as SUIF-1 employ simple heuristics
+based on the iteration count and the number of operations in the
+loop body to decide on whether or not a particular parallel loop
+candidate should be executed in parallel.
+
+Our data – as shown in ﬁgure 5 – suggests that such a na¨ıve
+scheme is likely to fail and that misclassiﬁcation occurs frequently.
+
+180 Should be parallelized 
+
+ Should NOT be parallelized
+
+ 
+
+1000
+
+s
+n
+o
+
+i
+t
+c
+u
+r
+t
+s
+n
+
+I
+ 
+f
+
+o
+
+ 
+r
+e
+b
+m
+u
+N
+
+100
+
+10
+
+1
+
+10
+
+100
+
+1000
+
+10000
+
+100000
+
+1000000
+
+1E7
+
+1E8
+
+Number of Iterations
+
+Figure 5. This diagrams shows the optimal classiﬁcation (sequen-
+tial/parallel execution) of all parallel loop candidates considered in
+our experiments for the Intel Xeon machine. Linear models and
+static features such as the iteration count and size of the loop body
+in terms of IR statements are not suitable for separating proﬁtably
+parallelizable loops from those that are not.
+
+A simple work based scheme would attempt to separate the prof-
+itably parallelizable loops by a diagonal line as indicated in the
+diagram in ﬁgure 5. Independent of where exactly the line is drawn
+there will always be loops misclassiﬁed and, hence, potential per-
+formance beneﬁts wasted. What is needed is a scheme that (a) takes
+into account a richer set of – possibly dynamic – loop features, (b)
+is capable of non-linear classiﬁcation, and (c) can be easily adapted
+to a new platform.
+
+In this paper we propose a predictive modeling approach based
+on machine-learning classiﬁcation. In particular, we use Support
+Vector Machines (SVM) (24) to decide (a) whether or not to paral-
+lelize a loop candidate and (b) how it should be scheduled. The
+SVM classiﬁer is used to construct hyper-planes in the multi-
+dimensional space of program features – as discussed in the fol-
+lowing paragraph – to identify proﬁtably parallelizable loops. The
+classiﬁer implements a multi-class SVM model with a radial basis
+function (RBF) kernel capable of handling both linear and non-
+linear classiﬁcation problems (24). The details of our SVM classi-
+ﬁer are provided in ﬁgure 6.
+
+3.2.2 Program Features
+
+We extract characteristic program features that sufﬁciently describe
+the relevant aspects of a program and present it to the SVM clas-
+siﬁer. An overview of these features is given in table 1. The static
+features are derived from CoSy’s internal code representation. Es-
+sentially, these features characterize the amount of work carried
+out in the parallel loop similar to e.g. (25). The dynamic features
+capture the dynamic data access and control ﬂow patterns of the
+
+Static features
+
+Dynamic features
+
+IR Instruction Count
+IR Load/Store Count
+IR Branch Count
+Loop Iteration Count
+Data Access Count
+Instruction Count
+Branch Count
+
+Table 1. Features characterizing each parallelizable loop.
+
+1. Baseline SVM for classiﬁcation
+
+(a) Training data:
+
+D = {(xi, ci)|xi ∈ Rp, ci ∈ {−1, 1}}n
+
+i=1
+
+(b) Maximum-margin hyperplane formulation:
+
+ci(w · xi − b) ≥ 1, for all 1 ≤ i ≤ n.
+
+(c) Determine parameters by minimization of ||w|| (in w, b)
+
+subject to 1.(b).
+
+ 
+
+2. Extensions for non-linear multiclass classiﬁcation
+
+(a) Non-linear classiﬁcation:
+
+Replace dot product in 1.(b) by a kernel function, e.g. the
+following radial basis function:
+k(x, x(cid:2)) = exp(−γ||x − x(cid:2)||2), for γ > 0.
+
+(b) Multiclass SVM:
+
+Reduce single multiclass problem into multiple binary prob-
+lems. Each classiﬁer distinguishes between one of the labels
+and the rest.
+
+Figure 6. Support vector machines for non-linear classiﬁcation.
+
+sequential program and are obtained from the same proﬁling exe-
+cution that has been used for parallelism detection.
+
+3.2.3 Training Summary
+
+We use an off-line supervised learning scheme whereby we present
+the machine learning component with pairs of program features
+and desired mapping decisions. These are generated from a library
+of known parallelizable loops through repeated, timed execution
+of the sequential and parallel code with the different available
+scheduling options and recording the actual performance on the
+target platform. Once the prediction model has been built using all
+the available training data, no further learning takes place.
+
+3.2.4 Deployment
+
+For a new, previously unseen application with parallel annotations
+the following steps need to be carried out:
+
+1. Feature extraction. This involves collecting the features shown
+in table 1 from the sequential version of the program and is
+accomplished in the proﬁling stage already used for parallelism
+detection.
+
+2. Prediction. For each parallel loop candidate the corresponding
+feature set is presented to the SVM predictor and it returns a
+classiﬁcation indicating if parallel execution is proﬁtable and
+which scheduling policy to choose. For a loop nest we start with
+the outermost loop ensuring that we settle for the most coarse-
+grained piece of work.
+
+3. User Interaction. If parallelization appears to possible (accord-
+ing to the initial proﬁling) and proﬁtable (according to the previ-
+ous prediction step), but correctness cannot be proven by static
+analysis, we ask the user for his/her ﬁnal approval.
+
+4. Code Generation. In this step, we extend the existing OpenMP
+annotation with the appropriate scheduling clause, or delete the
+annotation if parallelization does not promise any performance
+improvement or has been rejected by the user.
+
+3.3 Safety and Scalability Issues
+
+Safety. Unlike static analysis, proﬁle-guided parallelization can-
+not conclusively guarantee the absence of control and data depen-
+dences for every possible input. One simple approach regarding
+the selection of the “representative” inputs is based on control-ﬂow
+
+181coverage analysis. This is driven by the empirical observation that
+for the vast majority of the cases the proﬁle-driven approach might
+have a false positive (“there is a ﬂow-dependence but the tool sug-
+gests the contrary”) is due to a control-ﬂow path that the data input
+set did not cover. This also gives a fast way to select representa-
+tive workloads (in terms of data-dependencies) just by executing
+the applications natively and recording the resulting code coverage.
+Of course, there are many counter-examples where an input depen-
+dent data-dependence appears with no difference in the control-
+ﬂow. The latter can be veriﬁed by the user.
+
+For this current work, we have chosen a “worst-case scenario”
+and used the smallest data set associated with each benchmark
+for proﬁling, but evaluated against the largest of the available
+data sets. Surprisingly, we have found that this naive scheme has
+detected almost all parallelizable loops in the NAS and SPEC OMP
+benchmarks while not misclassifying any loop as parallelizable
+when it is not.
+
+Furthermore, with the help of our tools we have been able
+to identify three incorrectly shared variables in the original NAS
+benchmarks that should in fact be privatized. This illustrates that
+manual parallelization is prone to errors and that automating this
+process contributes to program correctness.
+
+Scalability. As we process data dependence information at byte-
+level granularity and effectively build a whole program CDFG we
+may need to maintain data structures growing potentially as large
+as the entire address space of the target platform. In practice, how-
+ever, we have not observed any cases where more than 1GB of
+heap memory was needed to maintain the dynamic data dependence
+structures, even for the largest applications encountered in our ex-
+perimental evaluation. In comparison, static compilers that perform
+whole program analyses need to maintain similar data structures of
+about the same size. While the dynamic traces can potentially be-
+come very large as every single data access and control ﬂow path is
+recorded, they can be processed online, thus eliminating the need
+for large traces to be stored.
+
+As our approach operates at the IR level of the compiler we do
+not need to consider detailed architecture state, hence proﬁling can
+be accomplished at speeds close to native, sequential speed. For de-
+pendence analysis we only need to keep track of memory and con-
+trol ﬂow operations and make incremental updates to hash tables
+and graph structures. In fact, dependence analysis on dynamically
+constructed CDFGs has the same complexity as static analysis be-
+cause we use the same representations and algorithms as the static
+counterparts.
+
+4. Experimental Methodology
+In this section we summarize our experimental methodology and
+provide details of the multi-core platforms and benchmarks used
+throughout the evaluation.
+
+4.1 Platforms
+
+We target both a shared memory (dual quad-core Intel Xeon) and
+distributed memory multi-core system (dual-socket QS20 Cell
+blade). A brief overview of both platforms is given in table 3.
+
+4.2 Benchmarks
+
+For our evaluation we have selected benchmarks (NAS and SPEC
+OMP) where both sequential and manually parallelized OpenMP
+versions are available. This has enabled us to directly compare
+our parallelization strategy against parallel implementations from
+independent expert programmers.
+
+More speciﬁcally, we have used the NAS NPB (sequential
+v.2.3) and NPB (OpenMP v.2.3) codes (26) alongside the SPEC
+CPU2000 benchmarks and their corresponding SPEC OMP2001
+
+Program
+
+Suite
+
+Data Sets/Xeon
+
+Data Sets/Cell
+
+BT
+CG
+EP
+FT
+IS
+MG
+SP
+LU
+art
+ammp
+equake
+
+NPB2.3-OMP-C
+NPB2.3-OMP-C
+NPB2.3-OMP-C
+NPB2.3-OMP-C
+NPB2.3-OMP-C
+NPB2.3-OMP-C
+NPB2.3-OMP-C
+NPB2.3-OMP-C
+SPEC CFP2000
+SPEC CFP2000
+SPEC CFP2000
+
+S, W, A, B
+S, W, A, B
+S, W, A, B
+S, W, A, B
+S, W, A, B
+S, W, A, B
+S, W, A, B
+S, W, A, B
+
+NA
+
+S, W, A
+S, W, A
+S, W, A
+S, W, A
+S, W, A
+S, W, A
+S, W, A
+
+test, train, ref
+test, train, ref
+test, train, ref
+
+test,train, ref
+test,train, ref
+test,train, ref
+
+Table 2. Benchmark applications and data sets.
+
+Hardware
+
+Cell Blade Server
+
+Dual Socket, QS20 Cell Blade
+
+2 × 3.2 GHz IBM Cell processors
+
+512KB L2 cache per chip
+
+1GB XDRAM
+
+O.S
+Compiler
+
+Fedora Core 7 with Linux kernel 2.6.22 SMP
+IBM XLC single source compiler for Cell v0.9
+
+-O5 -qstrict -qarch=cell -qipa=partition=minute (-qipa=overlay)
+
+Cell SDK 3.0
+
+Intel Xeon Server
+
+Hardware
+
+Dual Socket, Intel Xeon X5450 @ 3.00GHz
+
+O.S
+Compiler
+
+2 Quad-cores, 8 cores in total
+
+6MB L2-cache shared/2 cores (12MB/chip)
+
+16GB DDR2 SDRAM
+
+64-bit Scientiﬁc Linux with kernel 2.6.9-55 x86 64
+
+Intel ICC 10.1 (Build 20070913)
+
+-O2 -xT -axT -ipo
+
+Table 3. Hardware and software conﬁguration details of the two
+evaluation platforms.
+
+counterparts. However, it should be noted that the sequential and
+parallel SPEC codes are not immediately comparable due to some
+amount of restructuring of the “ofﬁcial” parallel codes, resulting in
+a performance advantage of the SPEC OMP codes over the sequen-
+tial ones, even on a single processor system.
+
+Each program has been executed using multiple different input
+data sets (shown in table 2), however, for parallelism detection and
+mapping we have only used the smallest of the available data sets1.
+The resulting parallel programs have then been evaluated against
+the larger inputs to investigate the impact of worst-case input on
+the safety of our parallelization scheme.
+
+4.3 Methodology
+
+We have evaluated three different parallelization approaches: man-
+ual, auto-parallelization using the Intel ICC compiler (just for the
+Intel platform), and our proﬁle-driven approach.
+
+For native code generation all programs (both sequential and
+parallel OpenMP) have been compiled using the Intel ICC and
+IBM XLC compilers for the Intel Xeon and IBM Cell platforms,
+respectively.
+
+Furthermore, we use “leave-one-out cross-validation” to eval-
+uate our machine-learning based mapping technique. This means
+that for K programs, we remove one, train a model on the remain-
+ing K − 1 programs and predict the K th program with the previ-
+ously trained model. We repeat this procedure for each program in
+turn.
+
+For the Cell platform we report parallel speedup over sequential
+code running on the general-purpose PPE rather than a single SPE.
+In all cases the sequential performance of the PPE exceeds that of
+
+1 Some of the larger data sets could not be evaluated on the Cell due to
+memory constraints.
+
+182a single SPE, ensuring we report improvements over the strongest
+baseline available.
+
+of hand-tuned parallel OpenMP codes, resulting in an average
+speedup of 3.34 across all benchmarks.
+
+5. Experimental Evaluation
+In this section we present and discuss our results.
+
+5.1 Overall Results
+
+Figures 7(a) and 7(b) summarize our performance results for both
+the Intel Xeon and IBM Cell platforms.
+
+is that
+
+Intel Xeon. The most striking result
+the Intel auto-
+parallelizing compiler fails to exploit any usable levels of paral-
+lelism across the whole range of benchmarks and data set sizes.
+In fact, auto-parallelization results in a slow-down of the BT and
+LU benchmarks for the smallest and for most data set sizes, re-
+spectively. ICC gains a modest speedup only for the larger data
+sets of the IS and SP benchmarks. The reason for this disappoint-
+ing performance of the Intel ICC compiler is that it is typically
+parallelizing at inner-most loop level where signiﬁcant fork/join
+overhead negates the potential beneﬁt from parallelization.
+
+The manually parallelized OpenMP programs achieve an aver-
+age speedup of 3.5 across the benchmarks and data sizes. In the case
+of EP, a speedup of 8 was achieved for large data sizes. This is not
+surprising since this is an embarrassingly parallel program. More
+surprisingly, LU was able to achieve super-linear speedup (9×) due
+to improved caching (27). Some programs (BT, MG and CG) ex-
+hibit lower speedups with larger data sets (A and B in comparison
+to W) on the Intel machine. This is a well-known and documented
+scalability issue of these speciﬁc benchmarks (28; 27).
+
+For most NAS benchmarks our proﬁle-driven parallelization
+achieves performance levels close to those of the manually par-
+allelized versions, and sometimes outperforms them (EP, IS and
+MG). This surprising performance gain can be attributed to three
+important factors. Firstly, our approach parallelizes outer loops
+whereas the manually parallelized codes have parallel inner loops.
+Secondly, our approach exploits reduction operations on array loca-
+tions and, ﬁnally, the machine learning based mapping is more ac-
+curate in eliminating non-proﬁtable loops from parallelization and
+selecting the best scheduling policy.
+
+The situation is slightly different for the SPEC benchmarks.
+While proﬁle-driven parallelization still outperforms the static
+auto-parallelizer we do not reach the performance level of the
+manually parallelized codes. Investigations into the causes of this
+behavior have revealed that the SPEC OMP codes are not equiv-
+alent to the sequential SPEC programs, but have been manually
+restructured (29). For example, data structures have been altered
+(e.g. from list to vector) and standard memory allocation (exces-
+sive use of malloc) has been replaced with a more efﬁcient scheme.
+Obviously, these changes are beyond what an auto-parallelizer is
+capable of performing. In fact, we were able to conﬁrm that the
+sequential performance of the SPEC OpenMP codes is on average
+about 2 times (and up to 3.34 for art) above that of their original
+SPEC counterparts. We have veriﬁed that our approach parallelizes
+the same critical loops for both equake and art as SPEC OMP. For
+art we achieve a speedup of 4, whereas the SPEC OMP version
+is 6 times faster than the sequential SPEC FP version, of which
+more than 50% is due to sequential code optimizations. We also
+measured the performance of the proﬁle-driven parallelized equake
+version using the same code modiﬁcations and achieved a compa-
+rable speedup of 5.95.
+
+Overall, the results demonstrate that our proﬁle-driven paral-
+lelization scheme signiﬁcantly improves on the state-of-the-art In-
+tel auto-parallelizing compiler. In fact, our approach delivers per-
+formance levels close to or exceeding those of manually paral-
+lelized codes and, on average, we achieve 96% of the performance
+
+IBM Cell. Figure 7(b) shows the performance resulting from
+manual and proﬁle-driven parallelization for the dual-Cell plat-
+form.
+
+Unlike the Intel platform, the Cell platform does not deliver a
+high performance on the manually parallelized OpenMP programs.
+On average, these codes result in an overall slowdown. For some
+programs such as CG and EP small performance gains could be ob-
+served, however, for most other programs the performance degra-
+dation is disappointing. Given that these are hand-parallelized pro-
+grams this is perhaps surprising and there are essentially two rea-
+sons why the Cell’s performance potential could not be exploited.
+Firstly, it is clear that the OpenMP codes have not been developed
+speciﬁcally for the Cell. The programmer have not considered the
+communication costs for a distributed memory machine. Secondly,
+in absence of speciﬁc scheduling directives the OpenMP runtime
+library resorts to its default behavior, which leads to poor overall
+performance. Given that the manually parallelized programs de-
+liver high performance levels on the Xeon platform, the results for
+the Cell demonstrate that parallelism detection in isolation is not
+sufﬁcient, but mapping must be regarded as equally important.
+
+In contrast to the “default” manual parallelization scheme, our
+integrated parallelization strategy is able to successfully exploit
+signiﬁcant levels of parallelism, resulting in average speedup of 2.0
+over the sequential code and up to 6.2 for individual programs (EP).
+This success can largely be attributed to the improved mapping of
+parallelism resulting from our machine-learning based approach.
+
+5.2 Parallelism Detection and Safety
+
+Our approach relies on dynamic proﬁling information to discover
+parallelism. This has the obvious drawback that it may classify a
+loop as potentially parallel when there exists another data set which
+would highlight a dependence preventing correct parallelization.
+This is a fundamental limit of dynamic analysis and the reason for
+requesting the user to conﬁrm uncertain parallelization decisions.
+It is worthwhile, therefore, to examine to what extent our approach
+suffers from false positives (“loop is incorrectly classiﬁed as paral-
+lelizable”). Clearly, an approach that suffers from high numbers of
+such false positives will be of limited use to programmers.
+
+Column 2 in table 5.2 shows the number of loops our approach
+detects as potentially parallel. The column labeled FP (“false pos-
+itive”) shows how many of these were in fact sequential. The sur-
+prising result is that none of the loops we considered potentially
+parallel turned out to be genuinely sequential. Certainly, this re-
+sults does not prove that dynamic analysis is always correct. Still,
+it indicates that proﬁle-based dependence analysis may be more ac-
+curate than generally considered, even for proﬁles generated from
+small data sets. Clearly, this encouraging result will need further
+validation on more complex programs before we can draw any ﬁ-
+nal conclusions.
+
+Column 3 in table 5.2 lists the number of loops parallelizable
+by ICC. In some applications, the ICC compiler is able to detect a
+considerable number of parallel loops. In addition, if we examine
+the coverage (shown in parentheses) we see that in many cases this
+covers a considerable part of the program. Therefore we conclude
+that it is less a matter of the parallelism detection that causes ICC to
+perform so poorly, but rather how it exploits and maps the detected
+parallelism (see section 5.3).
+
+The ﬁnal column in table 5.2 eventually shows the number of
+loops parallelized in the hand-coded applications. As before, the
+percentage of sequential coverage is shown in parentheses. Far
+fewer loops than theoretically possible are actually parallelized be-
+cause the programmer have obviously decided only to parallelize
+those loops they considered “hot” and “proﬁtable”. These loops
+
+183 ICC 
+
+ Manual Parallelization 
+
+ Prof-driven Parallelization
+
+.
+
+S
+T
+B
+
+.
+
+W
+T
+B
+
+.
+
+A
+T
+B
+
+.
+
+B
+T
+B
+
+.
+
+S
+G
+C
+
+.
+
+W
+G
+C
+
+.
+
+A
+G
+C
+
+.
+
+B
+G
+C
+
+.
+
+S
+P
+E
+
+.
+
+W
+P
+E
+
+.
+
+A
+P
+E
+
+.
+
+B
+P
+E
+
+.
+
+S
+T
+F
+
+.
+
+W
+T
+F
+
+.
+
+A
+T
+F
+
+.
+
+B
+T
+F
+
+S
+S
+
+.
+
+I
+
+W
+S
+
+.
+
+I
+
+A
+S
+
+.
+
+I
+
+B
+S
+
+.
+
+I
+
+.
+
+S
+U
+L
+
+.
+
+W
+U
+L
+
+.
+
+A
+U
+L
+
+.
+
+B
+U
+L
+
+.
+
+S
+G
+M
+
+.
+
+W
+G
+M
+
+.
+
+A
+G
+M
+
+.
+
+B
+G
+M
+
+.
+
+S
+P
+S
+
+.
+
+W
+P
+S
+
+.
+
+A
+P
+S
+
+.
+
+B
+P
+S
+
+t
+s
+e
+t
+.
+p
+m
+m
+a
+
+i
+
+n
+a
+r
+t
+.
+p
+m
+m
+a
+
+f
+e
+r
+.
+p
+m
+m
+a
+
+t
+s
+e
+t
+.
+t
+r
+a
+
+i
+
+n
+a
+r
+t
+.
+t
+r
+a
+
+f
+e
+r
+.
+t
+r
+a
+
+t
+s
+e
+t
+.
+e
+k
+a
+u
+q
+e
+
+i
+
+n
+a
+r
+t
+.
+e
+k
+a
+u
+q
+e
+
+f
+e
+r
+.
+e
+k
+a
+u
+q
+e
+
+E
+G
+A
+R
+E
+V
+A
+
+(a) Speedup over sequential codes achieved by ICC auto-parallelization, manual parallelization and proﬁle-driven parallelization for the Xeon platform.
+
+ Manual Parallelization 
+
+ Prof-driven Parallelization
+
+p
+u
+d
+e
+e
+p
+S
+
+9
+8
+7
+6
+5
+4
+3
+2
+1
+0
+
+p
+u
+d
+e
+e
+p
+S
+
+6
+
+5
+
+4
+
+3
+
+2
+
+1
+
+0
+
+.
+
+S
+G
+C
+
+.
+
+W
+G
+C
+
+.
+
+A
+G
+C
+
+.
+
+S
+P
+E
+
+.
+
+W
+P
+E
+
+.
+
+A
+P
+E
+
+.
+
+S
+T
+F
+
+.
+
+W
+T
+F
+
+.
+
+A
+T
+F
+
+S
+S
+
+.
+
+I
+
+W
+S
+
+.
+
+I
+
+A
+S
+
+.
+
+I
+
+.
+
+S
+U
+L
+
+.
+
+W
+U
+L
+
+.
+
+A
+U
+L
+
+.
+
+S
+G
+M
+
+.
+
+W
+G
+M
+
+.
+
+A
+G
+M
+
+.
+
+S
+P
+S
+
+.
+
+W
+P
+S
+
+.
+
+A
+P
+S
+
+t
+s
+e
+
+t
+.
+t
+r
+a
+
+i
+
+n
+a
+r
+t
+.
+t
+r
+a
+
+f
+
+e
+r
+.
+t
+r
+a
+
+t
+s
+e
+
+t
+.
+
+p
+m
+m
+a
+
+i
+
+n
+a
+r
+t
+.
+
+p
+m
+m
+a
+
+f
+
+e
+r
+.
+
+p
+m
+m
+a
+
+t
+s
+e
+
+t
+.
+
+e
+k
+a
+u
+q
+e
+
+i
+
+n
+a
+r
+t
+.
+
+e
+k
+a
+u
+q
+e
+
+f
+
+e
+r
+.
+e
+k
+a
+u
+q
+e
+
+E
+G
+A
+R
+E
+V
+A
+
+(b) Speedup over sequential code achieved by manual parallelization and proﬁle-driven parallelization for the dual Cell platform.
+
+Figure 7. Speedups due to different parallelization schemes.
+
+Application
+
+bt
+cg
+ep
+ft
+is
+lu
+mg
+sp
+equake SEQ
+art SEQ
+ammp SEQ
+
+Proﬁle driven
+FP
+
+#loops(%cov)
+
+ICC no threshold
+
+Manual
+
+FN #loops(%cov)
+
+#loops(%cov)
+
+205 (99.9%)
+28 (93.1%)
+8 (99.9%)
+37 (88.2%)
+9 (28.5%)
+154 (99.7%)
+48 (77.7%)
+287 (99.6%)
+69 (98.1%)
+31 (85.6%)
+21 (1.4%)
+
+0
+0
+0
+0
+0
+0
+0
+0
+0
+0
+0
+
+0
+0
+0
+0
+0
+0
+3
+0
+0
+0
+1
+
+72 (18.6%)
+16 (1.1%)
+6 (<1%)
+3 (<1%)
+8 (29.4%)
+88 (65.9%)
+9 (4.7%)
+178 (88.0%)
+29 (23.8%)
+16 (30.0%)
+43 (<1%)
+
+54 (99.9%)
+22 (93.1%)
+1 (99.9%)
+6 (88.2%)
+1 (27.3%)
+29 (81.5%)
+12 (77.7%)
+70 (61.8%)
+11 (98.0%)
+5 (65.0%)
+7 (84.4%)
+
+Table 4. Number of parallelized loops and their respective cover-
+age of the sequential execution time.
+
+cover a signiﬁcant part of the sequential time and effective par-
+allelization leads to good performance as can be seen for the Xeon
+platform.
+
+In total there are four false negatives (column FN in table 5.2) ,
+i.e. loops not identiﬁed as parallel although safely parallelizable.
+Three false negatives are contained in the MG benchmark, and
+two of these are due to loops which have zero iteration counts for
+all data sets and, therefore, are never proﬁled. The third one is a
+MAX reduction, which is contained inside a loop that our machine-
+learning classiﬁer has decided not to parallelize.
+
+5.3 Parallelism Mapping
+
+In this section we examine the effectiveness of three mapping
+schemes (manual, heuristic with static features, and machine-
+learning using proﬁling information) across the two platforms.
+
+Intel Xeon. Figure 8(a) compares the performance of ICC and
+our approach to that of the hand-parallelized OpenMP programs. In
+the case of ICC we show the performance of two different mapping
+approaches. By default, ICC employs a compile-time proﬁtability
+check while the second approach performs a runtime check using a
+dynamic proﬁtability threshold.
+
+For some cases (BT.B and SP.B) the runtime checks provide
+a marginal improvement over the static mapping scheme while
+the static scheme is better for IS.B. Overall, both schemes are
+equally poor and deliver less than half of the speedup levels of
+the hand-parallelized benchmarks. The disappointing performance
+appears to be largely due to non-optimal mapping decisions, i.e. to
+parallelize inner loops rather than outer ones.
+
+In the same ﬁgure we compare our machine-learning based
+mapping approach against a scheme which uses the same proﬁling
+information, but employs a ﬁxed, work-based heuristic similar to
+the one implemented in the SUIF-1 parallelizing compiler (see
+also ﬁgure 5). This heuristic considers the product of the iteration
+count and the number of instructions contained in the loop body
+and decides against a static threshold. While our machine-learning
+approach delivers nearly the performance of the hand-parallelized
+codes and, in some cases, is able to outperform them, the static
+heuristic performs poorly and is unable to obtain more than 85% of
+the performance of the hand-parallelized code. This translates into
+an average speedup of 2.5 rather than 3.7 for the NAS benchmarks.
+The main reason for this performance loss is that the default scheme
+using only static code features and a linear work model is unable to
+accurately determine whether a loop should be parallelized or not.
+In ﬁgure 9 we compare the performance resulting from the
+different automated mapping approaches to that of the hand-
+parallelized SPEC OMP codes. Again, our machine-learning based
+approach outperforms ICC and the ﬁxed heuristic. On average, our
+
+184160
+140
+120
+100
+80
+60
+40
+20
+0
+
+)
+
+%
+
+(
+ 
+
+B
+P
+N
+o
+
+ 
+
+t
+ 
+
+e
+v
+i
+t
+
+l
+
+a
+e
+r
+ 
+
+e
+c
+n
+a
+m
+r
+o
+
+f
+r
+e
+P
+
+1200
+
+1000
+
+800
+
+600
+
+400
+
+200
+
+0
+
+ 
+o
+t
+ 
+e
+v
+
+l
+
+i
+t
+a
+e
+r
+ 
+e
+c
+n
+a
+m
+r
+o
+f
+r
+e
+P
+
+)
+
+%
+
+(
+ 
+
+P
+M
+O
+C
+E
+P
+S
+ 
+d
+n
+a
+ 
+B
+P
+N
+
+)
+
+%
+
+(
+ 
+
+P
+M
+O
+C
+E
+P
+S
+o
+
+ 
+
+t
+ 
+
+e
+v
+i
+t
+
+l
+
+a
+e
+r
+ 
+
+e
+c
+n
+a
+m
+r
+o
+
+f
+r
+e
+P
+
+160
+
+140
+
+120
+
+100
+
+80
+
+60
+
+40
+
+20
+
+0
+
+a m
+
+ ICC (default) 
+
+ ICC (runtime) 
+
+ Profiling + Heuristic 
+
+ Profiling + Machine Learning
+
+.
+
+S
+T
+B
+
+.
+
+W
+T
+B
+
+.
+
+A
+T
+B
+
+.
+
+B
+T
+B
+
+.
+
+S
+G
+C
+
+.
+
+W
+G
+C
+
+.
+
+A
+G
+C
+
+.
+
+B
+G
+C
+
+.
+
+S
+P
+E
+
+.
+
+W
+P
+E
+
+.
+
+A
+P
+E
+
+.
+
+B
+P
+E
+
+.
+
+S
+T
+F
+
+.
+
+W
+T
+F
+
+.
+
+A
+T
+F
+
+.
+
+B
+T
+F
+
+S
+S
+
+.
+
+I
+
+W
+S
+
+.
+
+I
+
+A
+S
+
+.
+
+I
+
+B
+S
+
+.
+
+I
+
+.
+
+S
+U
+L
+
+.
+
+W
+U
+L
+
+.
+
+A
+U
+L
+
+.
+
+B
+U
+L
+
+.
+
+S
+G
+M
+
+.
+
+W
+G
+M
+
+.
+
+A
+G
+M
+
+.
+
+B
+G
+M
+
+.
+
+S
+P
+S
+
+.
+
+W
+P
+S
+
+.
+
+A
+P
+S
+
+.
+
+B
+P
+S
+
+E
+G
+A
+R
+E
+V
+A
+
+Profiling + Heuristic 
+
+ Profiling + Machine Learning
+
+(a) NAS benchmarks on the Intel Xeon platform.
+
+.
+
+S
+G
+C
+
+.
+
+W
+G
+C
+
+.
+
+A
+G
+C
+
+.
+
+S
+P
+E
+
+.
+
+W
+P
+E
+
+.
+
+A
+P
+E
+
+.
+
+S
+T
+F
+
+.
+
+W
+T
+F
+
+.
+
+A
+T
+F
+
+S
+S
+
+.
+
+I
+
+W
+S
+
+.
+
+I
+
+A
+S
+
+.
+
+I
+
+.
+
+S
+U
+L
+
+.
+
+W
+U
+L
+
+.
+
+A
+U
+L
+
+.
+
+S
+G
+M
+
+.
+
+W
+G
+M
+
+.
+
+A
+G
+M
+
+.
+
+S
+P
+S
+
+.
+
+W
+P
+S
+
+.
+
+A
+P
+S
+
+t
+s
+e
+t
+.
+t
+r
+a
+
+i
+
+n
+a
+r
+t
+.
+t
+r
+a
+
+f
+e
+r
+.
+t
+r
+a
+
+t
+s
+e
+t
+.
+p
+m
+m
+a
+
+i
+
+n
+a
+r
+t
+.
+p
+m
+m
+a
+
+f
+e
+r
+.
+p
+m
+m
+a
+
+t
+s
+e
+t
+.
+e
+k
+a
+u
+q
+e
+
+i
+
+n
+a
+r
+t
+.
+e
+k
+a
+u
+q
+e
+
+f
+e
+r
+.
+e
+k
+a
+u
+q
+e
+
+E
+G
+A
+R
+E
+V
+A
+
+(b) NAS and SPEC FP benchmarks on the IBM Cell platform.
+
+Figure 8. Impact of different mapping approaches (100% = manually parallelized OpenMP code).
+
+ ICC (default) 
+
+ ICC (runtime) 
+
+ Profiling + Heuristic 
+
+ Profiling + Machine Learning
+
+m p.test
+
+m p.train
+
+a m
+
+m p.ref
+
+a m
+
+art.test
+
+art.train
+
+art.ref
+
+equake.test
+
+equake.train
+
+equake.ref
+
+A V E R A G E
+
+ 
+
+Figure 9. Impact of different mapping approaches for the SPEC
+benchmarks (100% = manually parallelized OpenMP code).
+
+approach delivers 88% of the performance of the hand-parallelized
+code, while ICC and the ﬁxed heuristic approach achieve perfor-
+mance levels of 45% and 65%, respectively. The lower performance
+gains for the SPEC benchmarks are mainly due to a better starting
+point of the hand-parallelized SPEC OMP benchmarks (see section
+5.1).
+
+IBM Cell. The diagram in ﬁgure 8(b) shows the speedup of
+our machine-learning based mapping approach over the hand-
+parallelized code on the Cell platform. As before, we compare our
+approach against a scheme which uses the proﬁling information,
+but employs a ﬁxed mapping heuristic.
+
+The manually parallelized OpenMP programs are not speciﬁ-
+cally “tuned” for the Cell platform and perform poorly. As a con-
+sequence, the proﬁle-based mapping approaches show high perfor-
+mance gains over this baseline, in particular, for the small input
+data sets. Still, the combination of proﬁling and machine-learning
+outperforms the ﬁxed heuristic counterpart by far and, on average,
+
+results in a speedup of 9.7 over the hand-parallelized OpenMP pro-
+grams across all data sets.
+
+Summary The combined proﬁling and machine-learning ap-
+proach to mapping comes within reach of the performance of hand-
+parallelized code on the Intel Xeon platform and in some cases
+outperforms it. Fixed heuristics are not strong enough to separate
+proﬁtably parallelizable loops from those that are no and perform
+poorly. Typically, static mapping heuristics result in performance
+levels of less than 60% of the machine learning approach. This
+is because the default scheme is unable to accurately determine
+whether a loop should be parallelized or not. The situation is ex-
+acerbated on the Intel Cell platform where accurate mapping de-
+cisions are key enablers to high performance. Existing (“generic”)
+manually parallelized OpenMP codes fail to deliver any reasonable
+performance and heuristics, even if based on proﬁling data, are
+unable to match the performance of our machine-learning based
+scheme.
+
+5.4 Scalability
+
+For the Xeon platform the LU and EP benchmarks scale well with
+the number of processors (see ﬁgure 10). In fact, a super-linear
+speedup due to more cache memory in total can be observed for the
+LU application. For other benchmarks scalability is more limited
+and often saturation effects occur for four or more processors.
+This scalability issue of the NAS benchmarks is well-known and
+in line with other research publications (27). Figure 11 shows a
+performance drop for the step from one to two processors on the
+Cell platform. This is due to the fact that we use the generally more
+powerful PPE to measure single processor performance, but then
+use the multiple SPEs for parallel performance measurements. The
+diagram reveals that in the best case it takes about three SPEs to
+achieve the original performance of the PPE. Some of the more
+scalable benchmarks such as EP and MG follow a linear trend as
+
+185 
+
+ 
+
+2
+
+3
+
+4
+
+5
+
+6
+
+7
+
+8
+
+Number of Processors
+
+Figure 10. Scalability on the Intel platform (largest data set).
+
+ LU
+ EP
+ art
+ FT
+ CG
+ BT
+ MG
+ equake
+ SP
+ IS
+
+ EP
+ MG
+ equake
+ CG  
+ SP
+ FT
+ IS
+ LU 
+
+p
+u
+d
+e
+e
+p
+S
+
+p
+u
+d
+e
+e
+p
+S
+
+10
+
+9
+
+8
+
+7
+
+6
+
+5
+
+4
+
+3
+
+2
+
+1
+
+0
+1
+
+6.5
+
+6.0
+
+5.5
+
+5.0
+
+4.5
+
+4.0
+
+3.5
+
+3.0
+
+2.5
+
+2.0
+
+1.5
+
+1.0
+
+0.5
+
+0.0
+
+1
+
+2
+
+3
+
+4
+
+5
+
+6
+
+7
+
+8
+
+10
+
+11
+
+12
+
+13
+
+14
+
+15
+
+16
+
+17
+
+Number of Processors
+
+9
+ 
+
+Figure 11. Scalability on the Cell platform (largest data set).
+
+the number of processors increases, however, most of the remaining
+benchmarks saturate at a low level.
+
+6. Related Work
+Parallel Programming Languages. Many approaches have been
+proposed for changing or extending to existing programming lan-
+guages to enable easier exploiting of parallelism (9; 10; 12). Unfor-
+tunately, these approaches do not alleviate all problems of porting
+legacy sequential programs.
+
+Automatic Parallelization. Static automatic parallelism extrac-
+tion has been achieved on restricted DOALL and DOACROSS
+loops (3; 4; 5). Unfortunately, many parallelization opportunities
+could still not be discovered by a static analysis approach due to
+lack of information at the source code level.
+
+Speculative Parallelization. There are existing automatic paral-
+lelization techniques that exploit parallelism in a speculatively ex-
+ecution manner (30; 31; 32), but these approaches typically re-
+quire hardware support. Matthew et al. (33) have manually par-
+allelized the SPECINT-2000 benchmarks with thread level specu-
+lation. Their approach relies upon the programmer to discover par-
+allelism as well as runtime support for parallel execution.
+
+Dynamic Parallelization Rus et al. (34) applied sensitivity analy-
+sis to automatic parallelize programs whose behaviors may be sen-
+sitive to input data sets. In contrast to their static analysis and run-
+time checking approach, our proﬁling-driven approach discovers
+more parallel opportunities as well as selecting parallel candidates
+and scheduling policies. Dynamic dependence analysis (35; 36) and
+hybrid data dependence analysis (37) make use of dynamic depen-
+dence information, but delay much of the parallelization work to
+the runtime of the program. In contrast, we employ a separate pro-
+ﬁling stage and incorporate the dynamic information in the usual
+compiler based parallelization without causing any runtime over-
+head.
+
+Interactive Parallelization.
+Interactive parallelization tools (13;
+17; 18; 19; 20) provide a way to actively involve the programmer in
+the detection and mapping of application parallelism. For example,
+SUIF Explorer (13) helps the programmer to identify those loops
+that are likely to be parallelizable and assists the user in checking
+for correctness. Similarly, the Software Behavior-Oriented Paral-
+lelization (38) system allows the programmer to specify intended
+parallelism. In (39), programmers mark potential parallel regions of
+the program, and the tool uses dynamic proﬁling information to ﬁnd
+a good mapping of parallel candidates. Unlike our approach, these
+frameworks require the programmer to mark parallel regions, in-
+stead of discovering parallelism automatically. Moreover, the prob-
+lem of mapping parallelism across architectures is not well ad-
+dressed in these approaches.
+
+Parallelism Mapping. Prior research in parallelism mapping has
+mainly focused on building heuristics and analytical models (40;
+41), runtime adaptation (42; 43) approaches, and on mapping or
+migrating tasks on a speciﬁc platform. Instead of proposing a new
+scheduling or mapping technique for a particular platform, we aim
+to develop a compiler-based, automatic, and portable approach that
+learns how to take advantage of existing compilers and runtime sys-
+tem for efﬁciently mapping parallelism. Ramanujam and Sadayap-
+pan (40) used heuristics to solve the task mapping problems in dis-
+tributed memory machines. Their model requires low-level detail
+of the hardware platform, such as the communication cost, which
+have to be re-tuned once the underlying architecture changes. Static
+analytical models have been proposed for predicting the program’s
+behaviors. For example, the OpenUH compiler uses a cost model
+for evaluating the cost for parallelizing OpenMP programs (41).
+There are also some models that predict the parallel performance
+such as LogP (44). However, these models require help from their
+users and are not portable. Corbalan et al. (42) measure perfor-
+mance and allocate processors during runtime. The adaptive loop
+scheduler (43) selects both the number of threads and the schedul-
+ing policy for a parallel region in SMPs through runtime decisions.
+In contrast to this runtime approach, this paper presents a static pro-
+cessor allocation scheme which is performed at compilation time.
+
+Adaptive Compilation. Machine learning and statistical methods
+have already been used in single core program transformation. For
+example, Cooper et al. (45) develop a technique to ﬁnd “good”
+compiler optimization sequences for code size reduction.
+
+In contrast to prior research, we built a model that learns how
+to effectively map parallelism to multi-core platforms with existing
+compilers and runtime systems. The model is automatically con-
+structed and trained off-line, and the parallelism decisions are made
+at the compilation time.
+
+7. Conclusion and Future Work
+In this paper we have developed a platform-agnostic, proﬁling-
+based parallelism detection method that enhances static data de-
+pendence analyses with dynamic information, resulting in larger
+
+186amounts of parallelism uncovered from sequential applications. We
+have also shown that parallelism detection in isolation is not sufﬁ-
+cient to achieve high performance, but requires close interaction
+with an adaptive mapping scheme to unfold the full potential of
+parallel execution across programs and architectures.
+
+Results obtained on two complex multi-core platforms (Intel
+Xeon and IBM Cell) and two sets of benchmarks (NAS and SPEC)
+conﬁrm that our method is more aggressive in parallelization and
+more portable than existing static auto-parallelization and achieves
+performance levels close to manually parallelized codes.
+
+Future work will focus on further improvements of the proﬁling-
+based data dependence analysis with the ultimate goal of eliminat-
+ing the need for the user’s approval for parallelization decisions
+that cannot be proven conclusively. Furthermore, we will integrate
+support for restructuring transformations into our framework and
+target parallelism beyond the loop level.
+
+References
+[1] H. P. Hofstee. Future microprocessors and off-chip SOP interconnect.
+
+IEEE Trans. on Advanced Packaging, 27(2), May 2004.
+
+[2] L. Lamport. The parallel execution of DO loops. Communications of
+
+ACM, 17(2), 1974.
+
+[3] M. Burke and R. Cytron.
+
+Interprocedural dependence analysis and
+
+parallelization. PLDI , 1986.
+
+[4] R. Allen and K. Kennedy. Optimizing Compilers for Modern Archi-
+tectures: A Dependence-Based Approach. Morgan Kaufmann, 2002.
+
+[5] A. W. Lim and M. S. Lam. Maximizing parallelism and minimizing
+synchronization with afﬁne transforms. Parallel Computing, ACM,
+1997.
+
+[6] D. A. Padua, R. Eigenmann, et al. Polaris: A new-generation paral-
+lelizing compiler for MPPs. Technical report, In CSRD No. 1306.
+UIUC, 1993.
+
+[7] M. W. Hall, J. M. Anderson, et al. Maximizing multiprocessor perfor-
+
+mance with the SUIF compiler. Computer, 29(12), 1996.
+
+[8] Open64. http://www.open64.net.
+[9] F. Matteo, C. Leiserson, and K. Randall. The implementation of the
+
+Cilk-5 multithreaded language. PLDI, 1998.
+
+[11] P. Husbands Parry, C. Iancu, and K. Yelick. A performance analysis
+
+of the Berkeley UPC compiler. SC, 2003.
+
+[12] V. A. Saraswat, V. Sarkar, and C von. Praun. X10: Concurrent pro-
+
+gramming for modern architectures. PPoPP, 2007.
+
+[13] L. Shih-Wei, D. Amer, et al. SUIF Explorer: An interactive and
+
+interprocedural parallelizer. SIGPLAN Not., 34(8), 1999.
+
+[14] M. Kulkarni, K. Pingali, B. Walter, et al. Optimistic parallelism
+
+requires abstractions. PLDI’07, 2007.
+
+[15] L. Rauchwerger, F. Arzu, and K. Ouchi. Standard Templates Adaptive
+
+Parallel Library. Inter. Workshop LCR, 1998.
+
+[17] F. Irigoin, P. Jouvelot, and R. Triolet. Semantical interprocedural
+
+parallelization: an overview of the PIPS project. ICS 1991
+
+[18] K. Kennedy, K. S. McKinley, and C. W. Tseng.
+
+Interactive parallel
+
+programming using the Parascope editor. IEEE TPDS, 2(3), 1991.
+
+[19] T. Brandes, S. Chaumette, M. C. Counilh et al. HPFIT: a set of inte-
+grated tools for the parallelization of applications using high perfor-
+mance Fortran. part I: HPFIT and the Transtool environment. Parallel
+Comput., 23(1-2), 1997.
+
+[20] M. Ishihara, H. Honda, and M. Sato. Development and implemen-
+tation of an interactive parallelization assistance tool for OpenMP:
+iPat/OMP. IEICE Trans. Inf. Syst., E89-D(2), 2006.
+
+[21] S. Rul, H. Vandierendonck, and K. De Bosschere. A dynamic anal-
+ysis tool for ﬁnding coarse-grain parallelism. In HiPEAC Industrial
+Workshop, 2008.
+
+[22] W. M. Pottenger. Induction variable substitution and reduction recog-
+nition in the Polaris parallelizing compiler. Technical Report, UIUC,
+1994.
+
+[23] M. O’Boyle and E. St¨ohr. Compile time barrier synchronization
+
+minimization. IEEE TPDS, 13(6), 2002.
+
+[24] E. B. Bernhard, M. G. Isabelle, and N. V. Vladimir. A training
+algorithm for optimal margin classiﬁers. Workshop on Computational
+Learning Theory, 1992.
+
+[25] H. Ziegler and M. Hall. Evaluating heuristics in automatically map-
+
+ping multi-loop applications to FPGAs. FPGA, 2005.
+
+[26] D. H. Bailey, E. Barszcz, et al. The NAS parallel benchmarks. The
+
+International Journal of Supercomputer Applications, 5(3), 1991.
+
+[27] R. E. Grant and A. Afsahi. A Comprehensive Analysis of OpenMP
+
+Applications on Dual-Core Intel Xeon SMPs. IPDPS, 2007.
+
+[28] NAS
+
+Parallel
+
+Benchmarks
+
+2.3,
+
+OpenMP
+
+C
+
+version.
+
+http://phase.hpcc.jp/Omni/benchmarks/NPB/index.html.
+
+[29] V. Aslot, M. Domeika, et al. SPEComp: A New Benchmark Suite for
+
+Measuring Parallel Computer Performance. LNCS, 2001.
+
+[30] S. Wallace, B. Calder, and D. M. Tullsen. Threaded multiple path
+
+execution. ISCA, 1998.
+
+[31] J. Dou and M. Cintra. Compiler estimation of load imbalance overhead
+
+in speculative parallelization. PACT, 2004.
+
+[32] R. Ramaseshan and F. Mueller. Toward thread-level speculation for
+coarse-grained parallelism of regular access patterns. MULTIPROG,
+2008.
+
+[33] M. Bridges, N. Vachharajani, et al. Revisiting the sequential program-
+
+ming model for multi-core. MICRO, 2007.
+
+[34] S. Rus, M. Pennings, and L. Rauchwerger. Sensitivity analysis for
+
+automatic parallelization on multi-cores, 2007. ICS, 2007
+
+[35] P. Peterson and D. Padua. Dynamic dependence analysis: A novel
+
+method for data dependence evaluation. LCPC, 1992.
+
+[36] M. Chen and K. Olukotun. The JRPM system for dynamically paral-
+
+lelizing Java programs. ISCA, 2003.
+
+[37] S. Rus and L. Rauchwerger. Hybrid dependence analysis for automatic
+parallelization. Technical Report, Dept. of CS, Texas A&M U., 2005.
+[38] C. Ding, X. Shen, et al. Software behavior oriented parallelization.
+
+[39] W. Thies, V. Chandrasekhar, and S. Amarasinghe. A practical ap-
+proach to exploiting coarse-grained pipeline parallelism in C pro-
+grams. MICRO, 2007.
+
+[40] J. Ramanujam and P. Sadayappan. A methodology for parallelizing
+programs for multicomputers and complex memory multiprocessors.
+SC, 1989.
+
+[41] C. Liao and B. Chapman. A compile-time cost model for OpenMP.
+
+IPDPS, 2007.
+
+[42] J. Corbalan, X. Martorell, and J. Labarta. Performance-driven proces-
+
+sor allocation. IEEE TPDS, 16(7), 2005.
+
+[43] Y. Zhang and M. Voss. Runtime empirical selection of loop schedulers
+
+[44] L. G. Valiant. A bridging model for parallel computation. Communi-
+
+cations of the ACM, 33(8), 1990.
+
+[45] K. Cooper, P. Schielke, and D. Subramanian. Optimizing for reduced
+
+code space using genetic algorithms. LCTES, 1999.
+
+[46] A. Monsifrot, F. Bodin, and R. Quiniou. A machine learning approach
+to automatic production of compiler heuristics. Artiﬁcial Intelligence:
+Methodology, Systems, Applications, 2002.
+
+[47] L.N. Pouchet, C. Bastoul, A. Cohen, and J. Cavazos.
+
+Iterative op-
+timization in the polyhedral model: part II, multidimensional time.
+PLDI, 2008.
+
+[16] Jia Guo, Ganesh Bikshandi, et al. Hierarchically tiled arrays for
+
+on Hyperthreaded SMPs. IPDPS, 2005.
+
+parallelism and locality. IPDPS, 2006.
+
+[10] M. Gordon, W. Thies, M. Karczmarek, et al. A stream compiler for
+
+communication-exposed architectures. ASPLOS, 2002.
+
+PLDI, 2007.
+
+187

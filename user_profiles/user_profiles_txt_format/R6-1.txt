@@ -1,0 +1,2430 @@
+Conﬂict Exceptions: Simplifying Concurrent Language
+
+Semantics with Precise Hardware Exceptions for Data-Races
+
+Brandon Lucia†
+
+Luis Ceze†
+
+Karin Strauss‡†
+
+Shaz Qadeer‡†
+
+Hans-J. Boehm§
+
+†University of Washington
+
+http://sampa.cs.washington.edu
+
+‡Microsoft Research
+
+http://research.microsoft.com
+
+§HP Labs
+
+http://hpl.hp.com
+
+{blucia0a,luisceze}@cs.washington.edu
+
+{kstrauss,qadeer}@microsoft.com
+
+hans.boehm@hp.com
+
+ABSTRACT
+We argue in this paper that concurrency errors should be treated as
+exceptions, i.e., have fail-stop behavior and precise semantics. We
+propose an exception model based on conﬂict of synchronization-
+free regions, which precisely detects a broad class of data-races.
+We show that our exceptions provide enough guarantees to sim-
+plify high-level programming language semantics and debugging,
+but are signiﬁcantly cheaper to enforce than traditional data-race
+detection. To make the performance cost of enforcement negli-
+gible, we propose architecture support for accurately detecting and
+precisely delivering these exceptions. We evaluate the suitability of
+our model as well as the behavior of our architectural mechanisms
+using the PARSEC benchmark suite and commercial applications.
+Our results show that the exception model largely reﬂects how pro-
+grammers are already writing code and that the main memory, traf-
+ﬁc and performance overheads of the enforcement mechanisms we
+propose are very low.
+
+Categories and Subject Descriptors
+C.1.2 [Processor Architectures]: Multiple Data Stream Architec-
+tures (Multiprocessors); D.1.3 [Programming Techniques]: Con-
+current Programming; D.3.3 [Programming Languages]: Lan-
+guage Constructs and Features
+
+General Terms
+Design, Languages, Reliability
+
+Keywords
+multicores, memory consistency models, threads, data-races, bug
+detection
+
+Permission to make digital or hard copies of all or part of this work for
+personal or classroom use is granted without fee provided that copies are
+not made or distributed for proﬁt or commercial advantage and that copies
+bear this notice and the full citation on the ﬁrst page. To copy otherwise, to
+republish, to post on servers or to redistribute to lists, requires prior speciﬁc
+permission and/or a fee.
+ISCA’10, June 19–23, 2010, Saint-Malo, France.
+Copyright 2010 ACM 978-1-4503-0053-7/10/06 ...$10.00.
+
+1.
+
+INTRODUCTION
+
+As multicores become pervasive, there is a growing need to sim-
+plify the process of developing shared memory parallel programs.
+The nondeterministic nature of shared memory multiprocessing,
+and data-races in particular, make it very hard to debug and test
+parallel programs. Moreover, when data-races or similar concur-
+rency bugs manifest themselves, they normally lead to either data
+corruption or crashes well past the point were the buggy code is
+actually executed. Finally, data-races have major implications in
+programming language speciﬁcations [2, 12, 27, 37]. Collectively,
+these issues lead to severe software reliability issues.
+
+We address all these problems with the following approach to
+data-races: make them fail-stop and deliver an exception before the
+race manifests itself — i.e., before the code with a race is allowed
+to execute. Treating data-races as exceptions has major implica-
+tions in debuggability because execution can stop exactly at the
+point where the race happened. It also improves safety, because the
+exception will either exit the program and avoid delayed ill-effects
+or could trigger a recovery action that prevents misbehavior. Most
+importantly, supporting fail-stop behavior for data-races has major
+implications in the speciﬁcation of programming languages [2, 12],
+as it avoids having to deﬁne semantics of data-races and thus elimi-
+nates the need for the most complex and least satisfactory piece of,
+for example, the Java memory model speciﬁcation [8, 27, 37].
+
+The requirements for supporting data-races as exceptions are: (1)
+the detection mechanism cannot have false positives; (2) exception-
+free executions must have strong and precisely deﬁned properties;
+(3) performance degradation needs to be negligible for “always-
+on” use; and (4) exception delivery needs to be precise, i.e., the
+instruction that triggered the exception cannot execute and all prior
+instructions must have completed. We believe hardware support is
+instrumental in achieving negligible performance cost.
+
+Several past proposals on hardware support for concurrency bug
+detection have taken a best-effort approach, enabling cheaper im-
+plementations at the cost of inaccuracies [25, 33, 42], or more accu-
+rate detection with higher state overhead and performance cost [31].
+Unfortunately, these approaches are unsuitable for us because we
+require precise semantics and very low performance cost. On the
+other hand, implementing precise happens-before race detection [16,
+17] (vector clocks) is expensive. We address this issue by propos-
+ing an exception model that, while still being fully precise, does
+not incur the high cost of happens-before race detection. The fun-
+damental observation is that some races are sufﬁciently distant in
+the execution and therefore can not directly affect it. We leverage
+that observation by proposing a new property, conﬂict-freedom of
+synchronization-free regions: if all regions separated by synchro-
+
+210nization operations of an execution do not interact with other con-
+currently executing regions, then the execution either did not have
+any races or the racy accesses were sufﬁciently distant from one an-
+other. Detecting this property is much cheaper than full happens-
+before data-race detection because it associates additional access
+information primarily with cached data, adding reasonable over-
+head to cache area, and with negligible main memory overhead.
+
+We make the following contributions: (1) we present the case for
+fail-stop behavior for data-races and argue that hardware support is
+an enabler; (2) we propose an exception model that provides most
+of the beneﬁts of full happens-before race detection but without
+its prohibitive cost; (3) we propose a reference architecture imple-
+mentation based on extensions to a standard coherence protocol and
+caches; and (4) we evaluate the proposed architecture support, as
+well as the suitability of our exception model.
+
+In the remainder of the paper, we further explain the problem and
+provide more background (Section 2). We describe our exception
+model, discuss its properties, and then formally specify its guaran-
+tees (Section 3 and Appendix A). We then describe our architecture
+support (Section 4) and provide a detailed evaluation of our model
+and hardware mechanisms (Section 5). Finally, we discuss related
+work (Section 6), and then conclude (Section 7).
+
+2. BACKGROUND AND MOTIVATION
+
+Memory models from the language down to the architecture.
+The memory consistency model of a programming language de-
+ﬁnes the values retrieved by shared memory accesses. It must be
+obeyed across the entire system stack, including the compiler, run-
+time system, and hardware.
+
+The simplest memory model is sequential consistency [23], in
+which execution behaves as if there were some global interleaving
+of the per-thread memory instructions. Although sequential consis-
+tency is simple to deﬁne, it leaves little room for the compiler and
+hardware to perform optimizations. For example, reordering-based
+compiler transformations designed for single-threaded applications
+are allowable only under very special conditions.
+
+The restrictions sequential consistency imposes have given rise
+to a variety of work on “relaxed memory models”. Until relatively
+recently, this was concentrated primarily in the hardware commu-
+nity (e.g., [3]) with an occasional, and largely disconnected, effort
+on the programming languages side (e.g., in Ada 83 [39]). In the
+last decade, as multiprocessing became more pervasive, relaxed
+memory models started to receive more attention from the pro-
+gramming languages community, and brought to light a number of
+problems with prior approaches [13, 27, 34]. In many cases these
+reﬂected the historical disconnect between hardware and program-
+ming language efforts.
+
+Sequential consistency for data-race-free programs. The treat-
+ment of shared memory in most programming languages is con-
+verging on what is normally termed “sequential consistency for
+data-race-free programs” [4, 13, 21, 27]. This approach divides
+memory operations into two categories: synchronization operations
+(e.g., locks, Java volatile or C++0x atomic variables), and
+data operations. As usual, we deﬁne two operations to conﬂict if
+they access the same memory location and at least one of them is a
+write. A data-race is deﬁned as two conﬂicting concurrent accesses,
+where at least one is a data access.1 So long as the programmer pre-
+vents data-races, the language implementation guarantees sequen-
+
+1At the programming language level, each variable or scalar object ﬁeld
+is usually viewed as its own memory location. Simultaneous accesses to
+adjacent byte ﬁelds do not constitute a data-race [32].
+
+tial consistency. This applies, for example, to the often used core
+speciﬁcation of Java and C++0x [13, 22], the next C++ standard.
+
+Unlike full sequential consistency, this approach allows both hard-
+ware and compiler to reorder memory accesses in code sections
+with no synchronization operations. This is possible only because
+data-race freedom guarantees that the execution of synchronization-
+free code sections appears indivisible. An obvious beneﬁt of this
+model is to re-enable single-threaded compiler optimizations.
+
+For example, a loop nest with no cross-thread synchronization
+can be optimized largely as in the single-threaded case. A less obvi-
+ous beneﬁt of indivisibility is that the execution of a program is not
+affected by the granularity of data memory accesses (e.g., byte vs.
+double word), or by intermediate values produced when executing
+a purely sequential library call. For example, if a synchronization-
+free library routine stores a password in a global variable and then
+overwrites it, no other thread in a data-race-free program can ob-
+serve the password.
+
+Dealing with data-races. While data-race freedom as a contract
+between the programmer and the system is easy to understand, it
+is very difﬁcult to enforce statically. Even in spite of the explicit
+prohibition of data-races2, programming errors resulting in races
+are common. If a programming language leaves the semantics of
+data-races completely undeﬁned, as in C++0x, we have no way to
+bound the damage caused by untrusted code containing data-races,
+and this makes it difﬁcult to debug the race. While this is some-
+what acceptable for C++, languages like Java must guarantee secu-
+rity properties, which would be violated if untrusted, sand-boxed
+code could somehow conjure up a reference to an object, e.g., rep-
+resenting a password, “out-of-thin-air”. Undeﬁned behavior, as in
+C++0x, does not prevent “out-of-thin-air” values. On the other
+hand, successful attempts to preclude them have been elusive, since
+many seemingly unimportant cases are surprisingly difﬁcult to dis-
+tinguish from real, and important, compiler transformations [8, 37].
+There are three ways to deal with these implications of data-
+races: (1) Attempt to deﬁne semantics for programs that actually
+execute data-races — Java takes this route, but the result is not en-
+tirely satisfactory, in that it is overly complicated, and has surpris-
+ing, ill-understood, and unfortunate implications on compiler opti-
+mization [8, 37]; (2) Design the programming language to statically
+preclude races — over the past 35 years, a variety of static type
+and effect systems [1, 11, 19] have been proposed to ensure data-
+race freedom, but these systems have not yet been widely adopted
+for mainstream applications; and (3) Continuously monitor and dy-
+namically detect that a “problematic” data-race is about to execute
+and raise an exception, instead of executing the data-race. Since
+programs are designed to be data-race-free, it is safe to treat any of
+these as an error that should be reported to the programmer. This
+greatly simpliﬁes the programmer’s job, as subtle failures from ac-
+cidental data-races are reported directly at the point of occurrence
+and produce easily describable outcomes. This last alternative (3)
+is what we explore in this paper.
+
+The problem with happens-before race detection. The major
+obstacle to treating data-races as exceptions is implementation dif-
+ﬁculty. We know how to report data-races precisely, even without
+hardware support [16, 17], but unfortunately at a time and space
+cost prohibitive for always-on use. Race checks are frequent (po-
+tentially on every memory access) and a large amount of state is
+
+2[21] POSIX standard, Base deﬁnitions, 4.10: “Applications shall ensure
+that access to any memory location by more than one thread of control
+(threads or processes) is restricted such that no thread of control can read or
+modify a memory location while another thread of control may be modify-
+ing it.”
+
+211synchronization-free
+
+regions
+
+Thread T0
+acq(K)
+rd Y
+...
+wr X
+rel(K)
+...
+rd T
+wr T
+acq(L)
+rd Y
+...
+wr Y
+rel(L)
+
+a0
+
+b0
+
+c0
+
+Thread T1
+
+Regions separated by dashed lines represent synchronization-
+free regions (a0...c0 and a1). Note regions are also formed from 
+code outside critical sections, e.g., b0. 
+
+Regions c0 and a1 have a conﬂict and the exception is delivered 
+precisely at wr Y in region a1. 
+
+Note that even though there is a data-race between regions a0 
+and a1, there is no conﬂict exception. This is the essence of the 
+difference between full happens-before and conﬂict exceptions.
+
+access
+
+conﬂict at the 
+
+byte level
+
+acq(M)
+rd X
+...
+wr Y
+...
+rel(M)
+
+a1
+
+exception 
+
+delivered here
+
+Figure 1: Example of conﬂict exception.
+
+associated with each object. With vector clock algorithms, we po-
+tentially need to remember the time each object was last read by
+each thread, so that we can determine whether a write was properly
+ordered with respect to each of those reads. Since objects can be as
+small as a byte, each byte may require as many time stamps as there
+are threads in the process, possibly hundreds or thousands. And in a
+system in which not every pair of threads interacts regularly (think
+of a background thread that fails to synchronize with other threads
+for a long time, a case often found in real large systems), this infor-
+mation may need to be maintained essentially indeﬁnitely. While
+optimizations have been proposed [17], they still do not result in a
+system that can be mandated by a language speciﬁcation and used
+for always-on data-race detection.
+
+To enforce data-race freedom with runtime exceptions we need a
+precise detection mechanism that has near-zero time cost and low
+space overhead. This is the gap we ﬁll. We propose an exception
+model and implementation that preserves the utility of precise race
+detection at a fraction of the cost of prior approaches.
+
+3. CONFLICT EXCEPTIONS
+
+We propose a new property to enforce data-race freedom with
+runtime exceptions: conﬂict-freedom for synchronization-free re-
+gions. Synchronization-free regions of a thread are sections of an
+execution demarcated by synchronization operations. If a synchroni-
+zation-free region has a conﬂict, it means that the region interacted
+with some other code that was executing concurrently, which must
+have been the result of a data-race. If all synchronization-free re-
+gions are free of conﬂicts, the execution may still have data-races,
+but the conﬂicting operations must have been separated by some
+potentially unrelated synchronization operation in that particular
+execution of the program. A conﬂict exception is delivered right
+at the point in the execution where the conﬂict happened (more
+precisely, right before the instruction that caused the conﬂict is
+committed). Figure 1 shows an example. Thread T0 has three
+synchronization-free regions, a0, b0 and c0, and Thread T1 has one,
+a1. Note that b0 is formed of code outside a critical section and that
+synchronization-free regions by construction never nest. c0 and a1
+have a conﬂict in memory location Y, and the exception is delivered
+right before wr Y in T1. Also note that wr X in T0 races with rd
+X in T1 but that does not generate an exception because the regions
+do not execute concurrently. That illustrates the key difference be-
+tween conﬂict exceptions and happens-before data-race detection.
+Conﬂict exceptions provide most of the beneﬁts of data-race de-
+
+tection. We articulate these beneﬁts below.
+
+Simpler programming language semantics. Conﬂict exceptions
+provide the following nice properties: (1) The compiler or hard-
+ware can reorder memory accesses and eliminate redundant loads
+or stores within a synchronization-free region, without affecting
+the semantics of the program; (2) Synchronization-free regions al-
+ways appear atomic, and thus the semantics of the program are in-
+dependent of the granularity of memory accesses. Moreover, the
+semantics of synchronization-free library routines do not depend
+on the ordering of memory accesses inside those routines; (3) An
+exception-free execution is guaranteed to be sequentially consis-
+tent3 even in the presence of compiler and hardware optimizations;
+(4) The fundamental programming rules are unchanged: The pro-
+grammer needs to avoid data-races, but does not need to understand
+memory ordering issues. Data-race-free programs exhibit sequen-
+tial consistency as before. This largely abstracts the complexity
+of relaxed memory models; (5) Programs with data-races exhibit
+much more well deﬁned behavior than with the current Java or
+C++0x deﬁnitions. Even malicious sandboxed code that is trying to
+exploit data-races to introduce a security hole cannot violate atom-
+icity of synchronization-free regions. We expect this will facili-
+tate reasoning about security properties. Similarly, code with ac-
+cidental data-races cannot violate this property, and cannot expose
+compiler transformations that might otherwise produce very unex-
+pected results under the manifestation of the race. As a result, it
+enables more natural reasoning about buggy programs and makes
+them easier to debug; (6) The need for Java’s complex and prob-
+lematic “causality” rules [2, 27, 37] is eliminated, since only se-
+quentially consistent executions are ever produced — we no longer
+need to choose between comprehensible speciﬁcations and security
+properties.
+
+Note that having the hardware enforce sequential consistency [15,
+18, 41] is not sufﬁcient to offer many of the nice properties of con-
+ﬂict exceptions, such as (1), (2) and (5). Compiler transformations
+(1) are often critical for performance, and granularity independence
+(2) is very important for programmability.
+
+Appendix A formally articulates the guarantees that conﬂict ex-
+
+ceptions provide from a programming language perspective.
+
+Most debugging beneﬁts of full data-race detection. Execu-
+tions free of conﬂict exceptions ensure that no synchronization-free
+code segment interacts in any way with concurrently executed code.
+Equivalently, every synchronization-free code section behaves as
+though it were executed indivisibly, i.e., it is isolated. This main-
+
+3We prove this statement in Appendix A.
+
+212tains a signiﬁcant fraction of the debugging utility of full race de-
+tection. Any data access that observes or interferes with the effect
+of a concurrently executing synchronization-free region will lead
+to a conﬂict exception, which is likely to cover a large fraction of
+the observable manifestation of data-races.
+
+Although a data-race can no longer directly interfere with a syn-
+chronization-free region, it is possible that conﬂict exceptions will
+miss races, as discussed earlier. However, for every data-race we
+miss, there exists a schedule that would lead to a conﬂict exception.
+Note that full dynamic data-race detection can also miss races
+from the programmer’s perspective due to coincidental intervening
+synchronization of other kinds (e.g., malloc() calls in both threads4).
+The key difference between full data-race detection and conﬂict ex-
+ceptions is that full data-race detection can be fooled in this manner
+only if both threads perform matching coincidental synchroniza-
+tion, e.g.,, by acquiring or releasing the same lock. Conﬂict ex-
+ceptions can fail to detect a conﬂict even as a result of unmatched
+coincidental synchronization, e.g., as a result of acquiring or re-
+leasing different locks. In all cases, though, the same race would
+be detected in some different schedule of execution.
+Recovery action support. Although exceptions indicate a data-
+race, and thus a violation of the programming rules, it might be
+reasonable to continue execution. It may be possible to shut down
+only the offending sub-system. Since exceptions are raised only for
+visible data-races, it may even be feasible to simply retry the access
+and continue after logging the error.
+
+4. ARCHITECTURAL SUPPORT FOR
+
+CONFLICT EXCEPTIONS
+
+Our support for conﬂict exceptions has three components: (1)
+hardware/software interface; (2) recording memory accesses inside
+a region at the granularity of individual bytes; and (3) monitor-
+ing for byte-level conﬂicts (write-after-write, read-after-write, and
+write-after-read) in concurrent regions, and delivering a precise ex-
+ception when one occurs.
+
+A natural implementation of (2) and (3) above is to extend cache
+lines with meta-data that keeps access information, and to leverage
+existing cache coherence protocols to perform the monitoring. This
+resembles conﬂict detection mechanisms in hardware transactional
+memory systems [6, 30, 35]. However, we cannot afford to monitor
+and record access at the granularity of lines — this would lead to
+false, spurious exceptions, which is unacceptable. This is one of
+the major challenges we face in our design.
+
+4.1 Hardware/Software Interface
+
+Our system divides the execution of threads into regions demar-
+cated by special instructions, beginR and endR, which, in the in-
+tended usage scenario, exactly encapsulate a synchronization-free
+region (i.e., the code executed between any two synchronization
+operations in a thread). For code outside regions, each instruc-
+tion is a singleton region (e.g., the code between a0 and b0 in Fig-
+ure 1). Synchronization operations are implemented with singleton
+regions.5 The execution of regions and singleton regions within a
+
+4For example: T1 reads x and later writes to x (which should have been
+atomic); and T2 updates x between the T1’s operations. Also, both threads
+repeatedly call malloc(), which acquires and releases a lock. The syn-
+chronization operations inside malloc() may impose happens-before
+orderings between T1 and T2 and consequently prevent the race in a partic-
+ular thread schedule, but without hiding the resulting atomicity violation.
+5This includes lock-free data-structures routines. Note this represents the
+desired behavior: singleton regions have sequentially consistent behavior
+and do not lead to exceptions if facing conﬂicting accesses from other sin-
+gleton regions.
+
+given thread preserves program order, i.e., they are never reordered
+with respect to each other. We say a region is active if it has begun
+but not ended yet. An access a raises a conﬂict exception if and
+only if: (1) a is a write and some other active region has performed
+a read or write operation in the same byte address; or (2) a is a read
+and some other active region has performed a write operation in the
+same byte address. The exception is delivered precisely before a is
+actually committed, and after all previous instructions in the same
+thread have committed. Instructions inside singleton regions do not
+raise exceptions unless they conﬂict with explicit regions.
+
+4.2 Protocol State and Invariants
+
+Without loss of generality, we describe our protocol as an exten-
+sion to a baseline directory-based MOESI protocol that maintains
+cache coherence within private L1 caches.
+
+State. Each cache line is associated with four bit vectors, access
+bits, each containing as many bits as bytes in the cache line. Ac-
+cess bits keep track of bytes read/written within the active region
+of the local thread, as well as active regions of remote threads. As
+Table 1 describes, local bits are set as the local processor accesses
+data. Remote bits are set by piggy-backing on coherence messages:
+responses to coherence requests carry the local bits of suppliers and
+other caches that have access bits set for the line.
+
+Name
+Local
+read bits
+Local
+write bits
+Remote
+read bits
+Remote
+write bits
+
+Cleared on
+
+What it records
+Bytes read by the local
+thread during active region
+Bytes written by the local
+thread during active region
+Bytes read by other threads
+in their active regions
+Bytes written by other threads Local read or
+in their active regions
+
+Set on
+Local read
+access (hit/miss) End of region
+Local write
+in local thread
+access (hit/miss)
+Local read or
+write miss
+
+End of region
+in remote thread
+that originally
+set the bit
+
+write miss
+
+Table 1: Access bit vectors associated to a cache line and their
+purposes.
+
+High-level description of protocol operation. The protocol will
+be explained in more detail in Sections 4.3.1 and 4.3.2, but a basic
+description follows. When a region starts, all local bits are clear.
+On any access performed within a region, a local bit is set accord-
+ingly. A cache that suffers a miss receives the local bits of other
+threads and accumulates them into the corresponding remote bits
+with a logical OR operation. When a region ends, the local cache
+sends a message to other caches that might have access information
+in their remote bits, so that they can be cleared accordingly. The lo-
+cal cache then clears its local access bits. Regions do not nest, so
+there can only be one active region per thread. Before performing
+any access, the cache checks for exception conditions. An excep-
+tion is thrown when a cache detects a byte-level conﬂict between a
+local access and a remote active region, e.g., a local read accesses
+a byte with the remote write bit set. The exception is thrown pre-
+cisely before the operation is performed. Table 2 enumerates all
+possible conﬂicts and how they are detected using access bits.
+
+Conﬂict Local
+type
+access
+
+Remote
+access
+
+RAW
+
+Read Write
+
+WAW
+
+Write Write
+
+WAR
+
+Write
+
+Read
+
+Condition 1
+
+Condition 2
+
+local write bit clear
+
+Thread is about Remote write bit set and
+to read byte
+Thread is about Remote write bit set and
+to write byte
+Thread is about
+to write byte
+
+Remote read bit set
+
+local write bit clear
+
+Table 2: Conﬂict conditions and how to detect them (both
+conditions must be true for an exception to be thrown).
+
+213State
+
+Type of bit set
+
+Any
+
+Any
+
+Local read bits
+
+Local write bits
+
+3 M or E
+
+Remote read bits
+
+O or S
+
+Remote read bits
+
+Any
+
+Remote write bits
+
+#
+
+1
+
+2
+
+4
+
+5
+
+Invariant
+A local read bit is set if and only if the local thread has read the corresponding
+byte within its active region.
+A local write bit is set if and only if the local thread has written the corresponding
+byte within its active region.
+A remote read bit is set in a cache if and only if at least one thread other than
+the local one has read the corresponding byte within its active region.
+A remote read bit is set in a cache only if at least one thread other than
+the local one has read the corresponding byte within its active region.
+A remote write bit is set in a cache if and only if at least one thread other than
+the local one has written the corresponding byte within its active region.
+
+Table 3: Invariants guaranteed by our extended protocol.
+
+Invariants. Table 3 shows the invariants guaranteed by our proto-
+col. Each invariant concerns a particular combination of coherence
+state and access bits. The second column shows the local state of
+the cache line, the third column indicates to which type of access
+bit set the invariant applies, and the last column states the invari-
+ant. For example, consider invariant 3: when a cache line is in
+state Modiﬁed or Exclusive, a remote read bit is set if and only if at
+least one thread other than the local one has read the corresponding
+byte within its active region. Invariant 3 says that, when a write
+access is about to complete (requires Modiﬁed or Exclusive state),
+the cache’s remote read bits reﬂect exactly which bytes were read
+by other threads within their active regions. This guarantees that
+these remote read bits are up-to-date at the time an exception check
+is performed for this write access.
+In Section 4.4 we explain in
+detail why these invariants hold.
+
+4.3 Adding Support to the Coherence
+
+Protocol
+
+In addition to access bits, we add a supplied bit to each cache
+line, which indicates whether the line was supplied to any other
+cache during the active region. We also add three other bits to each
+cache: (1) an in-region bit to indicate whether the local thread is
+currently in an active region; (2) a cache-level supplied bit, used
+to summarize whether any cache line accessed within the active re-
+gion was supplied to another cache; and (3) an out-of-cache bit,
+used to indicate whether any line with non-null access bits was
+evicted.
+
+All the state used to record information about cache lines is
+stored into a separate state table that has the same basic geome-
+try (same number of sets and ways) as the cache itself, as shown
+in Figure 2. This table is backed by main memory, as will be ex-
+plained in Section 4.3.2.
+
+4.3.1 Basic In-Cache Operation
+
+We now explain the protocol assuming in-cache operation, i.e.,
+there is no eviction of line with access bits set and misses are al-
+ways serviced by a peer cache. We cover out-of-cache operation in
+Section 4.3.2. We have written a model of the in-cache operation
+of our protocol and checked that the invariants introduced in Sec-
+tion 4.2 indeed hold. We provide more detail on how we checked it
+in Section 5.1.
+
+Starting a region. When a processor executes a beginR instruc-
+tion, it sets the in-region bit. The beginR instruction has the effect
+of a full fence instruction.
+
+Exception check. Before any memory access within an active re-
+gion is allowed to proceed, the cache performs an exception check.
+The exception conditions are described in Table 2.
+
+Cache hits. After the exception check, the cache sets the corre-
+sponding local (read or write) bit.
+
+Cache misses. When a miss is serviced and the line arrives in the
+local cache, the access bits of the incoming line are accumulated
+into the remote access bits with a bitwise OR. The only exception is
+when an incoming write bit is set and the corresponding local write
+bit is also set, in which case the remote access bit is not set6. This is
+necessary to keep invariant 5 in Table 3. On global read misses, if
+any other cache indicates it has local read bits set for the requested
+line, the line is brought from memory in shared state, instead of
+exclusive. This is necessary to keep invariant 3 in Table 3.
+
+Servicing a remote read miss request. When a cache supplies
+data for a read miss, it appends to the reply message: one bit indi-
+cating whether the line has any local read bit set and the local write
+bits OR-combined with the remote write bits. The line-level and
+cache-level supplied bits are then set.
+
+Servicing a remote write or invalidate miss request. When a
+cache receives a write or invalidate request, it sends both its local
+read and write bits to the requester (if they are set), even if the line
+is in invalid state, and independent of being able to supply the data.
+Then, the cache sets its line-level and cache-level supplied bits and
+invalidates its cache line, but preserves the supplied and access bits
+associated with the cache line.
+
+Ending a region. When the endR instruction is executed and the
+cache-level supplied bit is clear, the in-region bit is cleared together
+with each of the line-level supplied bits and local access bits7. If the
+cache-level supplied bit is set, the cache iterates over the line-level
+supplied bits, appending the following to an end-of-region message:
+the line address; and the corresponding local read and write bits of
+cache lines for which the supplied bit is set. The message is then
+sent to other caches that may have received access bits from the
+ending region.8 When all acknowledgments are received, the bits
+are cleared as above. The endR instruction acts as a full fence.
+
+Processing an incoming end-of-region message. When a cache
+receives an end-of-region message, it checks for the presence of ac-
+cess bits for each address in the message. If a remote bit is present
+and set, the cache checks if the corresponding bit in the message
+is also set. If so, the cache clears its remote bit. In addition, if the
+cleared bit is a remote read bit, and the cache line is in a state that
+allows a write hit (M or E), this line is downgraded to a state that
+disallows it (O or S). This is necessary to guarantee remote read
+
+6If both incoming write bit and the corresponding local write bit are set,
+this indicates that the cache suffering the miss was the original writer of
+that byte. If this were not the case, a conﬂict exception would have been
+thrown earlier by the supplier cache.
+7This can be done efﬁciently with gang-clearing [29].
+8One way of doing this distribution is to leverage the directory. Instead
+of indicating sharers of the data, the directory could indicate which caches
+share the data or have been supplied with any access bits that have not
+been cleared yet. Clearing directory bits can be done lazily at invalidates in
+which no caches respond with access bits to avoid extra complexity.
+
+214meta-data table
+
+line offset
+
+cache
+
+tag
+
+tag
+
+tag
+
+tag
+
+tag
+
+      ...
+
+...
+
+                                        
+                                        
+                                        
+                                        
+                                        
+
+global and local table pointers
+
+              ...
+
+in-region bit
+
+out-of-cache bit
+
+cache-level supplied bit
+
+cache line
+
+          ...
+
+          ...
+
+          ...
+
+          ...
+
+local read bits
+
+local write bits
+
+remote read bits
+
+remote write bits
+
+supplied bit
+
+Figure 2: Cache modiﬁcations for conﬂict exception detection. New structures are shown in grey.
+
+bits are refetched when the processor is about to write the cache
+line and avoid problems when multiple processors read the same
+byte within active regions (invariant 3 in Table 3).
+
+Singleton regions. Memory accesses in singleton regions do not
+set access bits. Therefore, conﬂicts between accesses of two sin-
+gleton regions do not lead to exceptions. However, if a singleton
+region conﬂicts with an explicit region, an exception is delivered to
+the instruction in the singleton region.
+
+4.3.2 Out-of-Cache Operation
+
+In-cache operation is the common case, but caches may have to
+occasionally evict cache lines with access bits set. When a line is
+evicted, if any supplied or local access bits are set, they need to be
+saved. They will be used in three situations: (1) when the cache
+that evicted the line suffers another miss on the line; (2) when the
+cache that evicted the line ends its region, and (3) when another
+cache suffers a cache miss on the line.
+
+We chose to save evicted state in two distinct structures in mem-
+ory. The local table is a per-thread table that stores a list of ad-
+dresses accessed and evicted within the active region, used in cases
+(1) and (2). The global table is a per-process table that individually
+saves supplied and local bits for all threads that had to evict them,
+used in all three cases above. The global table is organized hierar-
+chically (like page tables) and is indexed using the physical address
+of a line. We augment each cache with two memory pointers, one
+for each table (see Figure 2). We also augment the directory state
+for each cache line with an in-memory bit that indicates whether
+any thread has saved access bits for that line in memory. We extend
+the in-cache operation described earlier to save, search and restore
+access and supplied bits, as explained below.
+
+Cache evictions. If a cache line being evicted has a supplied or
+local bit set, the line address is saved in the local table and local
+access/supplied bits are saved in the global table. The out-of-cache
+bit is then set and the directory is notiﬁed to set the in-memory bit
+for the corresponding line.
+
+Cache misses. During a miss, if the in-memory bit in the direc-
+tory is set, other threads’ local bits are retrieved from memory by
+accessing the global table and the corresponding supplied bit is set.
+The bits retrieved from memory are OR-combined into the remote
+bits, together with local bits received from other caches (if any). If
+the out-of-cache bit is set, the cache also searches the global table
+for its supplied, local read and local write bits in case they have
+been previously evicted, and restores them.
+
+Ending a region. If the out-of-cache bit is set, even if the cache-
+level supplied bit is not set, the cache retrieves evicted line ad-
+dresses from its local table and supplied and local bits from the
+global table, and appends to the end-of-region message those that
+have their supplied bit set. The cache clears its in-memory local ta-
+
+ble in the process, as well as the corresponding entries in the global
+table.
+
+4.3.3 Examples
+
+Figure 3(a) shows an example of in-cache operation. For sim-
+plicity, all operations involve the same cache line x (2 bytes long)
+and all caches are in an active region. Initially, cache A writes byte
+0 and sets local write bit 0 (1). Then, cache B suffers a miss when
+attempting to write byte 1 and sends an invalidation to cache A (2),
+which invalidates its line and sends data, its local read bits and OR-
+combined local and remote write bits to cache B (3). Cache B then
+OR-combines the received bits into its remote read and write bits,
+performs an exception check (no exception is thrown because it is
+attempting to write byte 1), and completes the write operation by
+setting local write bit 1. Later, cache C attempts to read byte 0,
+suffers a miss and sends a read request to cache B (4). B responds
+with the data, a single bit indicating that all its read bits are clear
+and its OR-combined local and remote write bits (5). Finally, cache
+C receives the response from B. It ignores the read bit because it is
+transitioning to a shared state, OR-combines the received write bits
+into its remote write bits and is ready to perform an exception check
+(6). An exception is thrown because cache C is attempting to read
+byte 0, but it ﬁnds its remote write bit 0 set, indicating that another
+cache has written this byte in an active region.
+
+Figure 3(b) shows another example. A reads byte 0 and sets its
+local read bit 0 (1). C then reads byte 0 and sets its local read bit 0
+(2). Next, B writes byte 1 (3), collects local read bits from A and C,
+and sets its remote read bit 0 (4). C then ends its region and sends
+an end-of-region message (5). When the message arrives at cache
+B (6), B clears its remote read bit 0 and downgrades the line. When
+B suffers a write miss for byte 0 (7), it sends invalidates, collects
+A’s local read bit, sets its remote read bit 0, and ﬁnally throws an
+exception (8). Note that if the line had not been downgraded, B
+would not have detected the conﬂict.
+
+Figure 3(c) shows an out-of-cache operation example. Again, for
+simplicity, assume a single cache line x and all caches are in active
+regions. First, cache A writes byte 0 and sets its local write bit 0
+(1). Then, cache A evicts line x by sending its supplied, local read
+and local write bits to memory (2). At this point, the directory sets
+the in-memory bit for the corresponding line. Later, cache B suffers
+a write miss when attempting to write byte 1 and sends a write re-
+quest to the directory (3), which responds notifying B that another
+cache has local bits in memory (4). B then performs a global table
+walk to retrieve those local bits and set the corresponding supplied
+bit in memory (5). B then OR-combines the local bits it retrieved
+into its remote bits, checks for exceptions and continues (6). No-
+tice that, had B attempted to write byte 0, it would have correctly
+thrown an exception because it would have its remote write bit 0
+set, even though it did not retrieve this information directly from
+cache A, but from the in-memory global table.
+
+215A
+
+B
+
+C
+
+0 1
+
+0 1
+
+1
+W x.0
+(M)
+
+0 1
+
+1
+
+LR
+
+LW
+
+RR
+
+RW
+
+LR
+
+LW
+
+RR
+
+RW
+
+LR
+
+LW
+
+RR
+
+RW
+
+LR
+
+LW
+
+RR
+
+RW
+
+(I)
+
+2
+
+W x.1
+(M)
+
+inv
+ack
+
+3
+
+0 1
+
+1
+
+(LR=00,LW=10)
+0 1
+
+1
+
+1
+
+LR
+
+LW
+
+RR
+
+RW
+
+4
+R x.0
+
+req
+
+(O)
+
+5
+
+resp
+
+(R=0,LW=11)
+
+6
+
+(S)
+
+exception!
+
+0 1
+
+LR
+
+LW
+
+RR
+
+11
+
+RW
+
+A
+
+B
+
+C
+
+A
+
+B
+
+Dir/Mem
+
+1
+R x.0
+
+(S)
+
+0 1
+1
+
+0 1
+
+LR
+
+LW
+
+RR
+
+RW
+
+3
+
+W x.1
+
+LR
+
+LW
+
+RR
+
+RW
+
+2
+R x.0
+
+(S)
+
+0 1
+1
+
+LR
+
+LW
+
+RR
+
+RW
+
+inv
+ack
+
+(I)
+
+(LR=10,LW=00)
+
+(LR=10,LW=00)
+
+1
+W x.0
+(M)
+
+0 1
+
+1
+
+LR
+
+LW
+
+RR
+
+RW
+
+evict
+
+2
+
+(LR=00,LW=10)
+
+in-memory = 1 
+
+inv
+
+4
+
+in-memory
+
+ global 
+table walk
+
+A: LR=00, 
+
+LW=10
+
+3
+W x.1
+(M)
+
+5
+
+0 1
+
+1
+
+1
+
+6
+
+LR
+
+LW
+
+RR
+
+RW
+
+(I)
+
+5
+
+4
+
+(M)
+
+0 1
+
+1
+
+down
+grade
+
+1
+
+0 1
+
+1
+
+6
+(O)
+
+LR
+
+LW
+
+RR
+
+RW
+
+inv
+
+ack
+
+8
+
+(LR=10,LW=00)
+
+7
+W x.0
+
+inv
+
+ack
+
+LR
+
+LW
+
+RR
+
+RW
+
+end of 
+region
+
+ack
+
+inv
+
+ack
+
+LR
+
+LW
+
+RR
+
+RW
+
+(M)
+
+exception!
+
+0 1
+
+1
+
+(b)
+
+(a)
+
+(c)
+
+Figure 3: Examples: (a) In-cache operation; (b) In-cache operation with downgrade; and (c) Out-of-cache operation. Caches A, B
+and C access the same cache line x, which consists of two bytes. Letters in parenthesis show the MOESI coherence state.
+
+4.4 Why Invariants Hold
+
+We now justify why the proposed invariants hold and why they
+are sufﬁcient to guarantee our exception speciﬁcation. Exception
+checks are done when a memory operation is about to complete.
+For a memory operation to reach this point, the cache controller
+must have already performed all related coherence actions, so the
+line must be in a stable state (any valid state for a read, M or E states
+for a write). The invariants guarantee that the remote bits needed
+at exception check time accurately reﬂect whether any other thread
+has touched that line within their currently active region.
+
+Table 4 shows the invariants and the protocol mechanisms that
+guarantee them. First, consider invariants 1-2: both local read
+bits and local write bits are set and cleared only based on local
+events, so those invariants follow directly from the local cache op-
+eration. Next, consider invariants 3-5 (Column 4): they say that
+a remote read bit set for a thread implies that some other thread
+has accessed the corresponding byte within its (still active) region.
+This is guaranteed by our protocol because remote bits are always
+OR-combinations of local bits of other threads, and the protocol
+guarantees they are cleared when the region in which they were set
+ends. Now, consider invariant 3 (Column 5). It says that, if the
+state of a line is Modiﬁed or Exclusive, remote read bits accurately
+represent read accesses of other threads within active regions. The
+protocol guarantees this invariant by collecting all local read bits
+from other threads on write misses and by only transitioning to Ex-
+clusive state if no other thread has any local read bit set. Notice that
+invariant 4 does not guarantee an access within an active region in
+one thread implies a set remote read bit for another thread when
+the cache line state is owned or shared. This is not an issue because
+these states do not allow write hits, and read-read conﬂicts do not
+throw exceptions.
+
+Finally, consider the last column of invariant 5. This invariant
+
+concerns remote write bits and says that they accurately represent
+in-region write accesses of other threads. The protocol guarantees
+this invariant because it enforces exclusiveness and serialization of
+write operations to the same cache line (coherence) and ensures that
+all write bits set within active regions are communicated to caches
+being supplied with the cache line by OR-combining its local write
+bits and its remote write bits. This guarantees that any writer has
+the most up-to-date set of remote write bits for the line and propa-
+gates those to any subsequent readers.
+
+4.5 System Issues
+
+Exception cleanup. When an exception is raised, the system still
+leaves the current region active. To support this, the access bits
+need to be kept throughout the execution of the handler, however
+support must be provided to prevent the handler code from affecting
+the access bits.
+
+Virtualization. Access bits are associated with a speciﬁc thread
+and not with a physical cache, therefore, architecture resources
+need to be virtualized. Context switches are done by extending
+the thread context to contain the local and global table pointers, the
+cache-level supplied bit, the in-region bit, and the out-of-cache bit,
+which are all saved when a thread is switched out. Moreover, all
+cached lines that have non-null access bits need to be sent to the
+in-memory log and the access bits are reset — note that this po-
+tential cost can be mitigated if context switches tend to happen at
+synchronization points, which is often the case.
+
+When memory is paged out to disk, the OS needs to associate
+the corresponding access bits in the local and global tables (if any)
+with the virtual address of the page being sent to disk. When the
+page is brought back, the OS need to remap the old entries to the
+new physical address.
+
+216State
+
+Any
+
+Type of bit set
+Local read bits
+Local write bits
+
+3 M or E
+
+O or S
+
+Remote read bits
+
+Any
+
+Remote write bits
+
+#
+1
+2
+
+4
+
+5
+
+Reason why a set bit implies an
+access within an active region
+
+Reason why an access within an active region implies a bit is set
+
+Follows directly from local access actions. Bits are set on access and cleared when a region ends.
+
+Read misses can only result in exclusive state if no local read bits
+for the line are set for other threads. Transitions to M state require
+acknowledgments with local read and write bits from other threads.
+
+Remote bits are a combination
+of local bits from other threads.
+end-of-region message clears
+all remote bits previously set by
+data supplied to other caches,
+including the local cache.
+
+Not enforced.
+
+If an access happens after an in-region remote write, it will be
+satisﬁed with data supplied by the cache that wrote that byte or by
+a cache that wrote it later. The combination of local and remote
+write bits guarantees they are properly propagated.
+
+Table 4: Reasons why invariants hold on exception checks.
+
+Speculative Loads. Compilers will have to avoid “control spec-
+ulative” loads, i.e., performing loads that might not be requested
+by the programmer on that control path. These can introduce data-
+races. These issues did not appear in our experiments. Moreover,
+they can typically be replaced by prefetch instructions.
+
+5. EVALUATION
+
+The goals of this evaluation are to: (1) understand the costly
+events in the protocol; (2) assess space and trafﬁc overhead of ac-
+cess bits storage and transfers; (3) assess the suitability of our ex-
+ception model.
+
+5.1 Experimental Setup
+
+Model checking. We ensured the correctness of the protocol with
+model-checking of its in-cache operation using Zing [7]. We used
+conﬁgurations with at most three caches and two bytes per cache
+line, and executions of at most four requests. We could not check
+larger conﬁgurations due to the space explosion problem inherent
+to model checking, but we believe the largest conﬁguration we suc-
+cessfully checked is sufﬁcient to show the invariants indeed hold.
+
+Simulation. We evaluate performance using a simulator based on
+Pin [26] and SESC [36]. The simulator faithfully models the excep-
+tion detection and the cache coherence protocol, including cache-
+to-cache and off-cache operation. Given that our goal is to under-
+stand the protocol itself, the simulator does not include a timing
+model. We model a multiprocessor with 8 cores, with 8-way 32KB
+L1 caches and 32-byte lines.
+
+Benchmarks. There are no programs written from scratch as-
+suming our exception model yet. Nevertheless, the model is in-
+tuitive enough that legacy programs tend to conform to the model.
+We leverage this fact and use existing parallel C/C++ programs to
+evaluate our architecture support. Sections of execution between
+calls to pthreads are considered synchronization-free regions —
+i.e., between the return from any pthread function call and the
+next call to a pthread function. This includes code outside crit-
+ical sections. Instructions inside the pthreads library are consid-
+ered singleton regions. We used the PARSEC benchmark suite [9]
+(simsmall input set), MySQL (sysbench OLTP benchmark), and
+Apache (apache-bench utility).
+
+5.2 Performance
+
+Table 5 characterizes dynamic region count and size (Columns
+2 and 3) and false sharing between active regions (Columns 4-6).
+There is a large variance of region size among applications. For
+example, fluidanimate has many (3M) small regions (< 1K
+
+memory operations), whereas freqmine has very few (96) large
+regions (>50M memory operations). False sharing also varies sig-
+niﬁcantly among applications.
+
+The most signiﬁcant events for performance evaluation purposes
+are end-of-region messages and access bit lookups in memory that
+occur on cache misses. We characterize end-of-region messages in
+Columns 7-9 of Table 5. First, note that less than 2% of regions
+send end-of-region messages for most benchmarks, many times
+close to zero (Column 7). Moreover, end-of-region messages typ-
+ically contain access bits for just a handful of lines (Column 8),
+many times a single line (e.g.,vips). However, they often must
+get this information from memory (Column 9). We ﬁnd a cou-
+ple of outliers, both in terms of percentage of regions with end-of-
+region messages (freqmine and swaptions) and in terms of
+average number of lines per end-of-region message (freqmine
+and facesim). Even then, the fraction of regions with messages
+is no higher than 9% and at worst, messages contain fewer than
+300 lines. Note that the size of regions for these benchmarks is
+large enough to amortize the cost of end-of-region messages. As
+expected, benchmarks with more false sharing also have more end-
+of-region messages, and they tend to be larger. This shows an op-
+portunity to reorganize the code and reduce false sharing, poten-
+tially eliminating end-of-region messages and reducing the number
+of lines in an end-of-region message, among other desirable perfor-
+mance beneﬁts. Overall, end-of-region messages are unlikely to be
+a performance issue.
+
+We now analyze the other main source of overheads, the lookup
+of access bits in memory. Columns 10 and 11 in Table 5 show
+the frequency of lookups. Remote access bit lookups (Column
+10) happen when a thread needs to fetch access bits from remote
+threads. Generally, costly remote bit lookups are infrequent (never
+more than 7 per million memory operations, which is very low).
+In swaptions, the benchmark with highest cost, frequent false
+sharing and evictions lead to an increase in remote bit lookups. Lo-
+cal bit lookups (Column 11) occur whenever a line with access bits
+is evicted and accessed again in the same region. We observe they
+are correlated with cache miss rates. The rate of local bit lookups
+is modest — from less than 10 every 100K memory operations
+(fluidanimate) to around 1 every 100 (streamcluster,
+which has high cache miss rates). Note that both remote and lo-
+cal access bit lookups only happen on cache misses, and only on a
+fraction of them, so they are also unlikely to lead to signiﬁcant per-
+formance degradation. They can also be reduced with an “access
+bit victim buffer”, which we do not explore in this work.
+
+217Regions
+
+Mem. Ops /
+
+False Sharing /
+1B Mem. Ops
+
+EOR Messages
+
+% Reg. Avg. # % to
+
+Mem. M-D Lkup /
+100K Mem. Ops
+
+Mem.
+Ovhd
+
+App.
+
+Total #
+
+blackscholes
+
+bodytrack
+facesim
+ferret
+
+ﬂuidanimate
+
+freqmine
+swaptions
+
+vips
+x264
+
+canneal
+dedup
+
+MySQL
+Apache
+Mean
+
+streamcluster
+
+50
+37K
+35K
+87K
+3M
+96
+96
+17K
+1K
+118
+18K
+1K
+1M
+62K
+304K
+
+Region
+12M
+70K
+2M
+30K
+996
+54M
+20M
+252K
+1M
+39M
+204K
+1M
+7K
+27K
+9M
+
+WaW WaR RaW w/ Msg. Lines Mem. Rem. Bits Loc. Bits
+0.0
+8.0
+487.0
+0.0
+0.0
+9.7
+
+11.5
+15.6
+2251.5
+
+0.0
+1.4
+
+0.0
+3.4
+0.1
+0.0
+0.0
+0.8
+112.2 31.1
+0.7
+0.0
+0.0
+28.7
+0.0
+0.0
+0.6
+4.7
+
+2.1
+0.0
+1.5
+68.8
+0.0
+0.0
+5.9
+49.7
+
+1048.0
+460.4
+2.3
+0.0
+2.8
+96.5
+2.8
+0.1
+2.3
+278.2
+
+2.00
+0.02
+0.05
+0.00
+0.00
+5.21
+8.33
+0.09
+0.00
+1.69
+1.92
+0.08
+0.00
+0.01
+1.39
+
+1
+3
+297
+0
+1
+112
+21
+1
+0
+7
+1
+2
+1
+1
+32
+
+100
+100
+100
+0
+100
+100
+100
+100
+0
+100
+100
+100
+100
+100
+86
+
+Trafﬁc Ovhd (B/MB)
+
+(% Ftpt) Rd Reply Inv Ack EOR Msgs Evic.
+60K
+31K
+58K
+66K
+30K
+64K
+69K
+59K
+69K
+60K
+49K
+53K
+50K
+17K
+52K
+
+0.00
+0.46
+13.52
+0.00
+0.00
+0.64
+8.64
+0.07
+0.00
+0.03
+3.67
+0.00
+0.00
+0.20
+1.95
+
+0.42
+2.29
+8.58
+27.36
+1.58
+17.09
+0.46
+1.32
+6.89
+5.09
+1.01
+7.10
+0.24
+6.13
+6.11
+
+1.00
+0.87
+3.60
+0.00
+0.13
+11.47
+9.29
+0.28
+0.00
+0.11
+11.85
+0.02
+0.02
+0.45
+2.79
+
+2.55
+0.63
+62.49
+0.00
+0.23
+63.89
+27.76
+0.06
+0.00
+0.06
+3.63
+0.03
+0.01
+0.07
+11.53
+
+70.81
+58.41
+285.09
+769.20
+9.60
+213.29
+492.53
+163.78
+474.93
+683.44
+104.96
+1465.45
+24.15
+153.86
+354.96
+
+0.01
+0.01
+0.14
+0.00
+0.01
+0.05
+0.67
+0.00
+0.00
+0.00
+0.07
+0.01
+0.00
+0.01
+0.07
+
+Table 5: Protocol events in detecting conﬂict exceptions. “Mem. Ops” refer to issued load and store instructions.
+
+5.3 Overheads: Space, Trafﬁc
+
+Columns 12-16 in Table 5 characterize storage and trafﬁc over-
+heads. We report the maximum memory overhead to keep the
+local and global tables of access bits as a fraction of the maxi-
+mum application footprint (Column 12). The memory overhead
+is less than 2.5% for most benchmarks and often less than 1%
+(blackscholes, MySQL). freqmine and ferret have the
+highest overhead, due to frequent eviction of lines with access bits,
+and in the case of freqmine, extremely long regions.
+
+There are three sources of trafﬁc overhead: the addition of access
+bits to coherence messages (Columns 13 and 14), sending end-of-
+region messages (Column 15), and the cost of preserving access
+bits in memory on evictions (Column 16). The dominant source
+of trafﬁc overhead is sending access bits to memory when a line
+is evicted. Across benchmarks, this overhead is between 1.7% and
+6.9%. This number tends to be high in two cases: when bad lo-
+cality leads to frequent evictions (e.g.,ferret); and when regions
+are long, because longer regions likely leads to more evictions (e.g.,
+blackscholes). The working sets of our benchmarks are much
+larger than the capacity of our L1 caches [9], resulting in relatively
+frequent evictions, moreover, regions are relatively long on aver-
+age (9M Mem. Ops). The other sources of trafﬁc overhead are
+much less signiﬁcant, and are a function of false sharing. Applica-
+tions with higher false sharing have higher overheads. This is most
+apparent in freqmine and facesim, with higher overheads de-
+riving from these causes, but still low overall (<< 1%).
+
+5.4 Suitability Analysis
+
+It is important that programmers using a system with support for
+conﬂict exceptions can write programs in a familiar way. We show
+that with few or no changes, our benchmarks can be run with no
+exceptions. In Table 6, we show the code size for each benchmark
+(Column 2) and the fraction of regions experiencing exceptions
+(Column 3), as well as the number of unique instructions (Column
+4), lines of code (Column 5), and functions (Column 6) involved
+in exceptions. Several benchmarks (e.g., blackscholes) run
+unchanged with no exceptions at all. For most applications expe-
+riencing exceptions, the exceptions involve under 50 lines of code.
+Typically, these lines are co-located in just a few functions (13.4,
+on average). The grouping of code with exceptions suggests that
+making changes to eliminate these data-races would not be hard.
+
+Examining code that led to exceptions, we found that handcrafted
+synchronization was a common culprit. streamcluster, for
+instance, uses a ﬂag variable in the master thread to coordinate
+
+App.
+
+KLOC % Vio. Regions # Vio PCs # Vio Lines # Vio Fns
+
+blackscholes
+
+bodytrack
+facesim
+ferret
+†
+ferret
+
+ﬂuidanimate
+
+freqmine
+swaptions
+
+vips
+x264
+
+canneal
+dedup
+
+MySQL
+Apache
+Mean
+
+streamcluster
+
+0.5
+5.9
+22.6
+9.2
+9.2
+0.9
+2.7
+1.3
+109.3
+40.4
+3.4
+3.7
+1.3
+
+1600.0
+602.0
+160.8
+
+0
+5.6
+6.8
+1.4
+0
+0
+0
+0
+2.6
+7.3
+4.5
+35.6
+44.4
+0.05
+30.1
+9.2
+
+0
+161
+101
+1080
+
+0
+0
+0
+0
+234
+6
+1
+104
+147
+92
+68
+
+132.9
+
+0
+22
+21
+248
+0
+0
+0
+0
+133
+6
+1
+58
+52
+76
+54
+44.7
+
+0
+16
+13
+50
+0
+0
+0
+0
+41
+4
+1
+12
+6
+41
+17
+13.4
+
+Table 6: Number of exceptions in our benchmarks and their
+distribution throughout the code.
+
+workers. In canneal, a similar mechanism is used to commu-
+nicate a loop termination condition between threads. Both cases
+implemented synchronization incorrectly, using a non-atomic data
+variable. We eliminated the exceptions thrown in canneal by
+synchronizing around accesses to the ﬂag. Changes affected only 3
+lines, and were straightforward.
+
+In ferret, there were many exceptions. These were thrown be-
+cause ferret employs pipeline parallelism, and pipeline stages’
+task queue operations were not properly synchronized. Doing so
+eliminated all exceptions thrown (see ferret† in Table 6).
+In
+MySQL, exceptions were caused by true data-race errors. These
+races had no ill effect on our experimental executions, but could
+result in unexpected behavior. In this case, exceptions aid in de-
+bugging by guiding developers to racy code. Note that although
+POSIX is not completely clear on certain aspects of data-races, the
+races we found are clearly disallowed. C++0x and Java provide al-
+ternative facilities to correctly write such code enabling automatic
+insertion of beginR and endR, eliminating the exceptions.
+
+6. RELATED WORK
+
+We discussed accurate software race detection in Section 2. In
+addition, the desire for fail-stop behavior of data-races has been
+discussed recently in informal forums [12, 14], but this is the ﬁrst
+concrete proposal.
+
+Adve et al. [5] addressed the problem of whether a race detected
+during a weakly-consistent execution necessarily reﬂects a possible
+
+218race in a sequentially-consistent execution, and hence represents a
+programmer-meaningful race.
+
+High-performance enforcement of sequential consistency (SC)
+has been actively investigated [15, 18, 40, 41]. SC at the hard-
+ware level is deﬁnitely valuable but does not provide many crucial
+guarantees for debugging and simple language semantics, e.g., pre-
+cise race detection, atomicity for synchronization-free regions and
+memory access granularity independence. Compiler-based tech-
+niques for enforcing sequential consistency [24, 38] share similar
+properties with the hardware approaches.
+
+Conﬂict exceptions fundamentally solve a different problem than
+Transactional Memory (TM), namely providing fail-stop behavior
+for concurrency errors that result from missing or incorrect syn-
+chronization, as opposed to providing a better synchronization prim-
+itive, but they are related in several ways. The two features may
+prove to be synergistic. Our precise byte-level conﬂict detection
+mechanism could be used in TM systems, as several current pro-
+posals [10, 35] provide only block-level conﬂict detection, which
+can result in spurious transaction aborts. Also, data-races are as
+much a problem in emerging transactional memory speciﬁcations
+[20] as they are in lock-based systems. The detailed implementa-
+tion considerations and language semantics for such a combined
+system are beyond the scope of this paper.
+
+One could argue that synchronization-free regions could be con-
+verted into transactions and the guarantees would be similar to con-
+ﬂict exceptions. Although conceptually correct, this provides infe-
+rior functionality at substantially increased cost. Using transactions
+in this way could mask some errors, but not all. For example, con-
+sider an identity function id that happens to acquire and release a
+lock unrelated to x; if we forget a lock around x=id(x+1), we
+do not atomically increment x in either approach. Putting trans-
+actions around synchronization-free regions would eliminate any
+hope of detection while still producing incorrect output. Conﬂict
+exceptions would correctly identify the problem of missing syn-
+chronization. Also, the cost of the TM approach is higher because
+transactions formed out of regions can be expected to be quite long
+and would have to buffer a signiﬁcant amount of data. Moreover,
+conﬂict require neither checkpointing nor memory versioning sup-
+port.
+
+Concurrently with our work, Marino et al. [28] have proposed
+memory model exceptions to address the same programming lan-
+guage semantics issues that we address here. As in our approach,
+all programs either contain a data-race and raise an exception, or
+guarantee a sequentially consistent execution. Unlike our work,
+they guarantee atomicity for bounded, short compiler-selected re-
+gions, not full synchronization-free regions. Thus they provide
+weaker guarantees to the programmer, and disallow some common
+compiler optimizations, especially for unbounded loops. In return,
+they can bound the additional state that needs to be maintained to
+detect conﬂicts. They further detect conﬂicts lazily rather than at
+the point of conﬂicting access, and therefore do not provide precise
+exception delivery.
+
+7. CONCLUSIONS
+
+In this paper we argued that data-races should have fail-stop be-
+havior. However, providing precise race detection at a low enough
+cost to be always-on is challenging. We address this challenge with
+conﬂict exceptions, which provide enough guarantees to signiﬁ-
+cantly improve debugging and enable the design of simple parallel
+language semantics. Our evaluation showed that conﬂict excep-
+tions can be enforced at a low cost. Our suitability study showed
+that the exception model in fact largely reﬂects how programmers
+
+have already been writing multithreaded programs, which supports
+the intuitiveness of our model.
+
+Going forward, we advocate that hardware resources should be
+spent to improve the programmability of multiprocessor systems.
+We believe that not only hardware should help with debugging, but
+should also provide enough guarantees such that even program-
+ming languages can rely on it.
+
+Acknowledgements
+We thank the anonymous reviewers for their helpful feedback. We
+thank the SAMPA group at the University of Washington for their
+invaluable feedback on the manuscript and insightful discussions.
+Special thanks go to Dan Grossman, Tom Bergan and Joe Devietti.
+This work was supported in part by NSF CAREER grant CCF-
+0846004 and a Microsoft Research Faculty Fellowship.
+
+8. REFERENCES
+
+[1] M. Abadi, C. Flanagan, and S. Freund. Types for Safe
+
+Locking: Static Race Detection for Java. ACM Transactions
+on Programming Languages and Systems (TOPLAS), 2006.
+[2] S. V. Adve and H.-J. Boehm. Memory Models: A Case for
+
+Rethinking Parallel Languages and Hardware. to appear,
+CACM; authors’ preliminary version at
+http://rsim.cs.uiuc.edu/Pubs/
+10-cacm-memory-models.pdf.
+
+[3] S. V. Adve and K. Gharachorloo. Shared Memory
+
+Consistency Models: A Tutorial. IEEE Computer, 29(12),
+1996.
+
+[4] S. V. Adve and M. D. Hill. Weak Ordering—A New
+Deﬁnition. In International Symposium on Computer
+Architecture (ISCA), 1990.
+
+[5] S. V. Adve, M. D. Hill, B. P. Miller, and R. H. B. Netzer.
+
+Detecting Data Races on Weak Memory Systems. In
+International Symposium on Computer Architecture (ISCA),
+1991.
+
+[6] C. S. Ananian, Krste Asanovic, B. C. Kuszmaul, C. E.
+
+Leiserson, and S. Lie. Unbounded Transactional Memory. In
+International Symposium on High-Performance Computer
+Architecture (HPCA), February 2005.
+
+[7] T. Andrews, S. Qadeer, S. K. Rajamani, J. Rehof, and Y. Xie.
+
+Zing: Exploiting Program Structure for Model Checking
+Concurrent Software. In CONCUR, 2003.
+
+[8] D. Aspinall and J. Sevcik. Java Memory Model Examples:
+
+Good, Bad, and Ugly. In VAMP, 2007.
+
+[9] C. Bienia, S. Kumar, J. P. Singh, and K. Li. The PARSEC
+
+Benchmark Suite: Characterization and Architectural
+Implications. In International Conference on Parallel
+Architectures and Compilation Techniques (PACT), 2008.
+
+[10] J. Bobba, N. Goyal M. D. Hill, M. M. Swift, and D. A.
+
+Wood. TokenTM: Efﬁcient Execution of Large Transactions
+with Hardware Transactional Memory. In International
+Symposium on Computer Architecture (ISCA), 2008.
+[11] R. Bocchino, V. Adve, D. Dig, S. Adve, S. Heumann,
+R. Komuravelli, J. Overbey, P. Simmons, H. Sung, and
+M. Vakilian. A type and effect system for deterministic
+parallel Java. In Conference on Object-Oriented
+Programming Systems, Languages and Applications
+(OOPSLA), October 2009.
+
+[12] H. Boehm. Simple Thread Semantics Require Race
+
+Detection. PLDI FIT, 2009.
+
+219[21] IEEE and The Open Group. IEEE Standard 1003.1-2001,
+
+[38] D. Shasha and M. Snir. Efﬁcient and correct execution of
+
+[13] H.-J. Boehm and S. V. Adve. Foundations of the C++
+
+Concurrency Memory Model. In Conference on
+Programming Language Design and Implementation (PLDI),
+2008.
+
+[14] L. Ceze, J. Devietti, B. Lucia, and S. Qadeer. A Case for
+System Support for Concurrency Exceptions. In USENIX
+HotPar, 2009.
+
+[15] L. Ceze, J. Tuck, P. Montesinos, and J. Torrellas. BulkSC:
+
+Bulk Enforcement of Sequential Consistency. In
+International Symposium on Computer Architecture (ISCA),
+2007.
+
+[16] T. Elmas, S. Qadeer, and S. Tasiran. Goldilocks: a Race and
+
+Transaction-aware Java Runtime. In Conference on
+Programming Language Design and Implementation (PLDI),
+2007.
+
+[17] C. Flanagan and S. Freund. FastTrack: Efﬁcient and Precise
+
+Dynamic Race Detection. In Conference on Programming
+Language Design and Implementation (PLDI), 2009.
+
+[18] C. Gniady, B. Falsaﬁ, and T. N. Vijaykumar. Is SC + ILP =
+RC? In International Symposium on Computer Architecture
+(ISCA), May 1999.
+
+[19] P. B. Hansen. The programming language Concurrent Pascal.
+
+IEEE Transactions on Software Engineering, June 1975.
+[20] IBM, Intel, and Sun. Draft speciﬁcation of transactional
+
+language constructs for C++, version 1.0.
+http://software.intel.com/ﬁle/21569, August 2009.
+
+2001.
+
+[22] ISO/IEC JTC1/SC22/WG21. ISO/IEC 14882, Programming
+
+Language - C++ (Final Committee Draft).
+http://www.open-std.org/jtc1/sc22/wg21/
+docs/papers/2010/n3092.pdf, March 2010.
+
+[23] L. Lamport. How to Make a Multiprocessor Computer That
+
+Correctly Executes Multiprocess Programs. IEEE
+Transactions on Computers, 1979.
+
+[24] J. Lee and D. Padua. Hiding Relaxed Memory Consistency
+
+with Compilers. In International Conference on Parallel
+Architectures and Compilation Techniques (PACT), 2000.
+
+Atomicity Violations via Access Interleaving Invariants. In
+International Conference on Architectural Support for
+Programming Languages and Operating Systems (ASPLOS),
+2006.
+
+[26] C. K. Luk, R. S. Cohn, R. Muth, H. Patil, A. Klauser, P. G.
+
+Lowney, S. Wallace, V. J. Reddi, and K. M. Hazelwood. PIN:
+Building Customized Program Analysis Tools with Dynamic
+Instrumentation. In Conference on Programming Language
+Design and Implementation (PLDI), 2005.
+
+[27] J. Manson, W. Pugh, and S. Adve. The Java Memory Model.
+
+In Symposium on Principles of Programming Languages
+(POPL), 2005.
+
+[28] D. Marino, A. Singh, T. Millstein, M. Musuvathi, and
+
+S. Narayanasamy. DRFx: A Simple and Efﬁcient Memory
+Model for Concurrent Programming Languages. In
+Conference on Programming Language Design and
+Implementation (PLDI), 2010.
+
+[29] J. F. Martínez, J. Renau, M.C. Huang, M. Prvulovic, and
+
+J. Torrellas. Cherry: Checkpointed Early Resource Recycling
+in Out-of-order Microprocessors. In International
+Symposium on Microarchitecture (MICRO), November 2002.
+
+[30] K. Moore, K. E. Moore, J. Bobba, M. J. Moravan, M. D.
+Hill, and D. A. Wood. LogTM: Log-based Transactional
+
+Memory. In International Symposium on High-Performance
+Computer Architecture (HPCA), 2006.
+
+[31] A. Muzahid, D. Suarez, S. Qi, and J. Torrellas. SigRace:
+
+Signature-Based Data Race Detection. In International
+Symposium on Computer Architecture (ISCA), 2009.
+
+[32] C. Nelson and H.-J. Boehm. Concurrency Memory Model
+
+(ﬁnal revision). C++ standards committee paper
+WG21/N2429=J16/07-0299,
+http://www.open-std.org/JTC1/SC22/WG21/
+docs/papers/2007/n2429.htm, October 2007.
+
+[33] M. Prvulovic and J. Torrellas. ReEnact: Using Thread-Level
+
+Speculation Mechanisms to Debug Data Races in
+Multithreaded Codes. In International Symposium on
+Computer Architecture (ISCA), 2003.
+
+[34] W. Pugh. The Java Memory Model is Fatally Flawed.
+Concurrency - Practice and Experience, 12(6), 2000.
+
+[35] R. Rajwar, M. Herlihy, and K. Lai. Virtualizing Transactional
+
+Memory. In International Symposium on Computer
+Architecture (ISCA), 2005.
+
+[36] J. Renau, B. Fraguela, J. Tuck, W. Liu, M. Prvulovic,
+
+L. Ceze, S. Sarangi, P. Sack, K. Strauss, and P. Montesinos.
+SESC Simulator, January 2005. http://sesc.sourceforge.net.
+
+[37] J. Sevcik and D. Aspinall. On Validity of Program
+
+Transformations in the Java Memory Model. In European
+Conference on Object-Oriented Programming (ECOOP),
+2008.
+
+parallel programs that share memory. ACM Transactions on
+Programming Languages and Systems (TOPLAS), April
+1988.
+
+[39] United States Department of Defense. Reference Manual for
+
+the Ada Programming Language:
+ANSI/MIL-STD-1815A-1983 Standard 1003.1-2001, 1983.
+Springer.
+
+[40] E. Vallejo, M. Galluzzi, A. Cristal, F. Vallejo, R. Beivide,
+
+P. Stenstrom, J. E. Smith, and M. Valero. Implementing
+Kilo-Instruction Multiprocessors. In International
+Conference on Pervasive Services (ICPS), 2005.
+
+Mechanisms for Store-wait-free Multiprocessors. In
+International Symposium on Computer Architecture (ISCA),
+2007.
+
+[42] P. Zhou, R. Teodorescu, and Y. Zhou. HARD:
+
+Hardware-Assisted Lockset-based Race Detection. In
+International Symposium on High-Performance Computer
+Architecture (HPCA), 2007.
+
+APPENDIX
+
+A. FORMAL SPECIFICATION OF CONFLICT
+
+EXCEPTIONS
+
+Each thread execution consists of a sequence of Events. The
+function Op categorizes these events into different kinds of opera-
+tions:
+
+SyncOps
+LoadOps = {Load} × ByteAddrs
+StoreOps = {Store} × ByteAddrs
+DataOps = LoadOps ∪ StoreOps
+Ops = SyncOps ∪ DataOps
+Tid ∈ Events → ThreadIds
+Op ∈ Events → Ops
+
+We assume that SyncOps and DataOps are disjoint sets.
+
+[25] S. Lu, J. Tucek, F. Qin, and Y. Zhou. AVIO: Detecting
+
+[41] T. F. Wenisch, A. Ailamaki, B. Falsaﬁ, and A. Moshovos.
+
+220The following identiﬁers range over the corresponding sets:
+
+e, f, r, w ∈ Events
+E ∈ 2Events
+t ∈ ThreadIds
+a ∈ ByteAddrs
+
+We deﬁne the following subsets of a set of events E:
+
+SyncEvents(E) is the subset of synchronization events in E;
+ThreadEvents(E, t) is the subset of events by thread t;
+LoadEvents(E, a) is the subset of load events to address a;
+AllLoadEvents(E) is the subset of all load events;
+StoreEvents(E, a) is the subset of store events to address a; and
+AllStoreEvents(E) is the subset of all store events.
+
+An execution (E, SyncOrder , ThreadOrder , StoreOrder , Source)
+is a tuple satisfying the following conditions: (1) E is a set of
+events. (2) SyncOrder is a partial order on SyncEvents(E). Hence,
+synchronization events are independent of all other events.
+(3)
+ThreadOrder maps each t ∈ ThreadIds to a total order
+ThreadOrder (t) on ThreadEvents(E, t). We overload ThreadOrder
+to refer to the partial order
+(4)
+StoreOrder maps each a ∈ ByteAddrs to a total order StoreOrder (t)
+on StoreEvents(E, a). We overload StoreOrder to refer to the par-
+a∈ByteAddrs StoreOrder (a). (5) Source is a map from
+tial order
+AllLoadEvents(E) to AllStoreEvents(E). For all a ∈ ByteAddrs,
+if e ∈ LoadEvents(E, a) then Source(e) ∈ StoreEvents(E, a). Thus,
+Source provides for each load event the corresponding store event
+that supplied the data for it.
+
+t∈ThreadIds ThreadOrder (t).
+
+S
+
+S
+
+Given an execution, we deﬁne two relations on the set of events
+E. The causal relation Causal orders a store event w before every
+load event r that sees the value written by w. The anti-causal re-
+lation AntiCausal orders a load event r before every store event w
+that comes later than the source of r according to StoreOrder.
+
+(w, r) ∈ Causal
+
+def
+= w = Source(r)
+
+(r, w) ∈ AntiCausal
+
+def
+= r ∈ AllLoadEvents(E)∧
+w ∈ AllStoreEvents(E)∧
+(Source(r), w) ∈ StoreOrder
+
+An execution has a data-race on address a if and only if there
+are two events e, f ∈ E such that: (1) e and f are unordered by
+
+the transitive closure of ThreadOrder ∪ SyncOrder; (2) Op(e) =
+(Store, a); and (3) Op(f ) = (Store, a) or Op(f ) = (Load, a).
+
+The set of events in an execution can be partitioned into a collec-
+tion of regions, each being one of three kinds: (1) the set of all data
+events in a thread before its ﬁrst synchronization event; (2) the set
+of all data events in a thread between two synchronization events;
+(3) the set of all data events in a thread after its last synchronization
+event.
+
+Let ThreadOrder (cid:3) be the projection of ThreadOrder onto the
+set E \ SyncEvents(E). The constraint graph of an execution is a
+graph (R, N ), where R is the set of regions in the execution and N
+is the set of edges deﬁned as follows: (p, q) ∈ N iff p is different
+from q and there exists e ∈ p and f ∈ q such that e is ordered
+before f by the transitive closure of ThreadOrder (cid:3) ∪ StoreOrder ∪
+Causal ∪ AntiCausal. An execution is isolated iff its constraint
+graph is acyclic.
+
+Our exception mechanism provides the following two guaran-
+tees: (1) If an execution is exception-free, then it is isolated. (2) If
+an execution throws an exception, then it has a data-race. Further,
+the deﬁnition of isolation also guarantees that in the absence of an
+exception the execution (projected onto the data events) is sequen-
+tially consistent. We present a proof of this guarantee below.
+
+These guarantees translate directly to programming language spec-
+
+iﬁcations: We can deﬁne data-races as we do now and specify that
+the program is always executed as an interleaving of regions, with
+the one simple adjustment that the second of two accesses that race
+in the execution may raise an exception.
+
+LEMMA 1. An isolated execution projected on to data events is
+
+sequentially consistent.
+
+PROOF. The constraint graph of an isolated execution is acyclic.
+
+Therefore, it must be the case that the transitive closure of
+ThreadOrder (cid:3) ∪ StoreOrder ∪ Causal ∪ AntiCausal is also acyclic
+and hence a partial order. Let l be a linearization of this partial
+order. Since ThreadOrder (cid:3) ⊆ l, the total order l clearly respects the
+order of instructions performed in each thread. Since StoreOrder ∪
+Causal ∪AntiCausal ⊆ l, the total order l respects all dependencies
+between stores and loads — every load event e to an address a
+returns the value written by the last (according to l) store event f to
+a prior to e. Therefore, the total order l is a witness to the sequential
+consistency of the isolated execution.
+
+221

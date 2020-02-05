@@ -1,0 +1,1229 @@
+Stateful Hardware Decompression in Networking
+
+Environment
+
+Hao Yu1, Hubertus Franke1, Giora Biran2, Amit Golander2, Terry Nelms1, and Brian M. Bass1
+
+1{yuh,frankeh,tnelms,bass}@us.ibm.com, 2{gbiran,amitg}@il.ibm.com
+
+IBM Corporation
+
+ABSTRACT
+Compression and Decompression can signiﬁcantly lower the
+network bandwidth requirements for common internet traf-
+ﬁc. Driven by the demands of an enterprise network in-
+trusion system, this paper deﬁnes and examines the require-
+ments of popular dictionary-based decompression in the real-
+time network processing scenario. In particular, a “stateful”
+decompression is required that arises out of the packet ori-
+ented nature of current networks, where the decompression
+of the data of a packet depends on the decompressed contents
+of its preceeding packets composing the same data stream.
+We propose an eﬀective hardware decompression accelera-
+tion engine, which fetches the history data into the accel-
+erator’s fast memory on-demand and hides the associated
+latency by exploring the parallelism of the dictionary-based
+decompression process. We specify and evaluate various
+design and implementation options of the fetch-on-demand
+mechanism, i.e. prefetch most frequently used history, on-
+accelerator history buﬀer management, and reuse of fetched
+history data. Through simulation-based performance study,
+we show the eﬀectiveness of the proposed mechanism on hid-
+ing the overhead of stateful decompression. We further show
+the eﬀects of the design options and the impact on the over-
+all performance of the network service stack of an intrusion
+prevension system.
+
+1.
+
+INTRODUCTION
+
+Websites are increasingly more complex and rely on dy-
+namic content and dynamic scripting languages to increase
+the user experience. Accordingly, the bandwidth require-
+ment of the internet has grown signiﬁcantly and the uti-
+lization of data compression technologies has started to gain
+popularity. A recent survey [11] indicates that among the top
+1000 corporations, the utilization of compression for their
+web servers has increased from 3% in 2003 to 27% in 2007.
+Typically, network traﬃc includes HTML, JavaScript code,
+or Cascading Style Sheets (CSS); and graphics/media in
+
+Permission to make digital or hard copies of all or part of this work for
+personal or classroom use is granted without fee provided that copies are
+not made or distributed for proﬁt or commercial advantage and that copies
+bear this notice and the full citation on the ﬁrst page. To copy otherwise, to
+republish, to post on servers or to redistribute to lists, requires prior speciﬁc
+permission and/or a fee.
+ANCS ’08 November 6-7, 2008, San Jose, CA, USA
+Copyright 2008 ACM 978-1-60558-346-4/08/0011 ...$5.00.
+
+Table 1: Characteristics of 21K downloads
+
+Site
+amazon
+aol
+bankofamerica
+blogit
+cnn
+gatech
+ibm
+llbean
+mapquest
+ml
+myspace
+nytimes
+psu
+tdameritrade
+tripadvisor
+walmart
+yahoo
+youtube
+ALL
+
+Number Comp. Original Comp’d
+sizes
+23929
+14731
+6682
+4750
+13551
+8093
+5848
+6012
+13743
+4133
+7742
+6675
+2783
+6412
+14268
+15286
+8214
+15959
+10375
+
+sizes
+135667
+56064
+38979
+16695
+61145
+24294
+30139
+24174
+65452
+16248
+27395
+27309
+9349
+27247
+68246
+107030
+33979
+88855
+50900
+
+of ﬁles
+962
+587
+1027
+2076
+1843
+1535
+966
+148
+1441
+825
+138
+1107
+1381
+221
+1677
+1626
+1895
+1474
+20929
+
+ratio
+5.67
+3.81
+5.83
+3.51
+4.51
+3.00
+5.15
+4.02
+4.76
+3.93
+3.54
+4.09
+3.36
+4.25
+4.78
+7.00
+4.14
+5.57
+4.91
+
+the format of GIF, PNG, JPG, or MP3/4. While graph-
+ics/media are already compressed, text can beneﬁt signif-
+icantly from compression. This fact is shown in Table 1.
+Here, we collected a set of approximately 21,000 web pages
+from 18 popular websites. The web pages contain HTML,
+XML, CSS, and JSP, while graphics/media contents are ex-
+cluded. We refer to this set as 21K. The average uncom-
+pressed ﬁle size is 50.9KB. Utilizing gzip, one of the most
+common utility, the average size of a compressed ﬁle is re-
+duced to 10.37KB, yielding an average compression ratio of
+4.91. Given the signiﬁcant savings that can be obtained
+through compression, HTTP/1.1 incorporates HTTP mes-
+sage body compression by means of content encoding. The
+most commonly utilized compression/decompression algo-
+rithms is Deﬂate as deﬁned in RFC 1951 [3], implementing
+the Lempel-Ziv algorithm [21]. The Lempel-Ziv compression
+algorithm identiﬁes substrings in the input stream that have
+occurred in the past and replaces them with < dist, length >
+tuples. As such, the compressed stream consists of a se-
+quence of literal and copy requests. It is common practice
+to further compress the tokens with Huﬀman encoding. De-
+ﬂate is the common algorithm that underlies popular tools
+such as gzip and zip.
+
+The decompression is achieved in reverse order: Huﬀman
+decoding followed by Lempel-Ziv decompression. Figure 1
+illustrates how the Lempel-Ziv decompression is performed.
+The top part of the picture shows an uncompressed string
+
+141
+
+decompress and analyze any packet of the ﬂow as it arrives
+and do so with minimum delay, i.e. the IPS cannot wait for
+all the packets of a compressed data stream reassmebling the
+compressed content. In consequence, the high concurrency
+of network traﬃc extends to the decompression module, re-
+quiring it to be stateful, i,e. the IPS has to maintain state
+for each data stream when processing a packet of the stream.
+For dictionary-based compression/decompression methods,
+the state of a stream is the dictionary (a.k.a. the history).
+
+In this paper we utilize the ISS IPS stack [7], where state-
+ful decompression is implemented in software. Depending on
+the workload, a signiﬁcant number of cycles can be spent in
+software decompression. Hence, as line speeds are increas-
+ing, it is crucial to accelerate the decompression. With the
+growth in utilization of HTTP compressed content, it is ex-
+pected to have a large number of concurrent compressed data
+streams in ﬂight, each containing a series of packets holding
+sections of a compressed ﬁle.
+In consequence, the multi-
+plexing of the plurality of streams causes the decompression
+requests associated with back-to-back packets belong to dif-
+ferent data streams. This workload forces the decompression
+accelerator to maintain state of each compressed ﬂow or data
+stream that needs to be pushed to and loaded from mem-
+ory for processing every compressed packet. Such a frequent
+stream “context” switching can introduce signiﬁcant delays.
+In addition, in the network/web environment, accelerators
+generally occupy a limited area of processor chips. It is not
+an option to keep the states of all active streams on the ac-
+celerator, where the size of the state of each stream is 32KB,
+the default for the Deﬂate standard.
+
+This paper makes following contributions:
+
+–To reduce the delays associated with the frequent switch-
+ing of states associated with stateful decompression, we pro-
+pose a novel hardware acceleration mechanism (fetch-on-
+demand) that can eﬀectively hide the context-switching over-
+head. It asynchronously brings the dictionary data residing
+in memory into the accelerator on-demand, without block-
+ing the accelerator from continuing with operations that
+not depending on the memory-residing data. This fetch-on-
+demand mechanism is feasible because it explores the par-
+allelism in dictionary-based decompression algorithms.
+In
+dictionary-based decompression, the writes into the output
+buﬀer are independent and can be carried out in parallel or
+out-of-order. Through extensive simulation studies, we es-
+tablish that given reasonable memory bandwidth, the other-
+wise signiﬁcant overhead of history-fetch associated to state-
+ful decompression can be successfully hidden by out-of-order
+execution and fetch-on-demand.
+
+–We describe the characterization of HTTP compressed
+workloads applied on a real Intrusion Detection/Prevension
+System (ISS IPS), which clearly indicates the necessity of ef-
+ﬁcient hardware accelerated stateful decompression: 95 fold
+speedup over the ISS IPS’ software implementation (assum-
+ing software CPI as 1.1); 47% improvement on throughput,
+35% improvement on average response time for a complete
+workload with 2.6% packets containing compressed data.
+
+–We exploit and evaluate the design space for the fetch-on-
+demand decompression acceleration mechanism, which facil-
+itate eﬃcient implementation of the accelerator in terms of
+design complexities and hwardware resource.
+
+The rest of the paper is organized as follows: Section 2 de-
+scribes the characteristics of workloads and dynamics when
+subjected to the ISS IPS system. Section 3 presents the
+
+Figure 1: Lempel-Ziv Decompression Example
+
+being compressed into a list of literal and copy requests. For
+the decompression, in each step, the input pointer processes
+a record of the compressed stream. For a literal record, the
+literal is copied from the input buﬀer to the output/history
+buﬀer. For a copy request, a string is copied from the existing
+history to the end of the buﬀer. Here the history is also
+referred as dictionary.
+
+The typical steps of transmitting an HTML ﬁle utiliz-
+ing HTTP-compression include: (a) At the sender side, an
+HTML ﬁle is compressed in the application layer, then bro-
+ken up into multiple packets by the lower network layers
+and sent out; (b) At the receiver side, the packets are re-
+assembled to recover the compressed ﬁle ﬁrst and then are
+decompressed in the application layer to retrieve the origi-
+nal content. In this usage scenario, each decompression re-
+quest works on one complete block of uncompressed data
+(e.g. a compressed ﬁle) and diﬀerent requests do not share
+states. This kind of decompression is referred to as state-
+less. Stateless decompression can be addressed by state-of-
+art compression/decompression accelerators [16, 8, 2]. For
+any decompression request, the accelerator creates and ref-
+erences a temporary history buﬀer private to the request,
+only streams out the decompressed data.
+
+Our motivation for this paper originates from the inspec-
+tion of piecemeal compressed content in the context of en-
+terprise level intrusion detection systems (IDS) and intru-
+sion prevention systems (IPS). IDS/IPS systems [15, 7] are
+inline network devices that attempt to detect/prevent both
+protocol-based and content-based intrusions. Protocol-based
+intrusions are for example denial-of-service attacks and port
+scans, which can be detected via analysis of packet header
+information. Content-based attacks, e.g. buﬀer overﬂow, in-
+sert particular bytes into packets or across packets to exploit
+vulnerabilities in the network and application stacks of com-
+munication endpoints. The eﬀectiveness of an IPS is pinned
+to its ability to identify (via content scan and analysis) and
+stop attacks at its earliest possibility, i.e. to stop forwarding
+the ﬁrst packet of a ﬂow that could result in vulnerability ex-
+ploitation. For an IPS system, The incoming network traﬃc
+is highly parallel, containing packets of potentially millions
+of concurrent ﬂows that need to be tracked and inspected
+with tight latency requirements. The high concurrency is
+commonly addressed by multi-threaded systems, i.e. net-
+work processors, with hardware accelerators [10].
+
+In a packet processing system, IPS in particular, while
+the compression at the sender is done at ﬂow or data stream
+level, the inspection is done at packet level where packets
+for the multitude of ﬂows arrive interspersedly. Speciﬁcally,
+for a ﬂow with compressed content, the IPS stack needs to
+
+142
+
+(a) 2.1K
+
+(a) In original pkt order
+
+(b) HTTPC
+
+(b) CDF
+
+Figure 2: Dataset Characteristics
+
+Figure 3: Packet weight/instructions distribution
+
+mechanism and design considerations for decompression ac-
+celerator. In Section 4, we present a comprehensive evalua-
+tion of the fetch-on-demand architecture, its design options,
+and its beneﬁts on software performance. Section 5 discusses
+related work and Section 6 concludes the paper.
+
+2. WORKLOAD CHARACTERIZATION
+
+In this section we describe two workloads to identify the
+speciﬁc compression and runtime characteristics associated
+with HTTP related content (i.e. HTML, Cascading Style
+Sheets, or JavaScript ﬁles). The ﬁrst workload is comprised
+of a 10% representative subset (i.e. 2100 ﬁles) of the previ-
+ously described 21K workload. We refer to this as the 2.1K
+workload. The second workload is a packet trace obtained
+from an ISS client account that consists of 387K packets
+and embodies 10101 distinct ﬂows (connections). Of these
+ﬂows, 1391 ﬂows carry compressed content which amount to
+3% of packets embodying compressed content. For each of
+the 1391 ﬂows we reconstructed their content as individual
+uncompressed ﬁles.
+
+In the ﬁrst analysis we utilized the popular gzip/gunzip
+tools to establish the compression proﬁle of the two ﬁle sets.
+The proﬁles are shown in Figure 2 and consist of the sorted
+original ﬁle sizes, the sorted compressed ﬁle sizes, and the
+compression ratios associated with the original ﬁle as well as
+in sorted order. It can be seen that both ﬁle sets have similar
+proﬁles; not considering the boundary cases, compression
+ratios typically range from a factor of 4 to 7, ﬁle sizes range
+from 10KB to 100KB and generally speaking compressibility
+slightly improves with increasing ﬁle size.
+
+Next, we turn to the ﬂow concurrency. We instrumented
+the ISS stack to track the number of active ﬂows that are
+currently in a decompression state. A ﬂow enters this state
+when the ﬁrst HTTP-compressed content identiﬁer is en-
+countered in one of its packets and it leaves this state when
+the number of sequenced bytes expressed in the HTTP-
+compressed content header has been received. The average
+
+number of ﬂows active in decompression state in the HTTPC
+packet workload is 8 with a maximum of 18. The HTTPC
+workload exhibits an average bitrate of 107Mb/s. If follows
+that at 10Gb/s this workload would have on average 744
+ﬂows in decompression state and at 40Gb/s 2976 respec-
+tively. As the utilization of compressed content is expected
+to grow to potentially 30% of packets we can estimate in the
+order of 30K ﬂows to be in active decompression state at any
+given time. Using a resource simulator, we tracked the tem-
+poral locality of subsequent decompression requests on the
+same ﬂow and learned that the high number of ﬂows in active
+decompression state caused every subsequent decompression
+request to be attributed to a diﬀerent ﬂow.
+
+Currently available decompression accelerators do not pro-
+
+vide stateful decompression nor support for rapid state switch-
+ing, which forced the current ISS IPS stack to utilize a soft-
+ware decompression module. To determine the overhead of
+this software implementation to the overall application per-
+formance we collected the instruction count for each packet
+using a hardware simulator [12]. The results for a 10000
+packet window are shown in Figure 3 (a). For each packet
+we plot the instruction count with and without the over-
+head of software decompression. For clarity, for packets not
+containing compressed content, we only plot for the w/o De-
+comp.. The results show that packets with high instructions
+counts all perform decompression. Figure 3 (b) shows the
+cumulative distribution function (CDF) of the instruction
+counts including and excluding software decompression over-
+head. The chart shows that 41% of instructions are spent
+in software decompression despite the fact that only 3% of
+a packets are performing decompression.
+
+Therefore,
+
+it is crucial to utilize hardware acceleration
+which can provide signiﬁcant performance improvement (2x).
+In the next section we will discuss the design of hardware de-
+compression acceleration that can satisfy the high number
+of active decompression streams and the frequent context
+switching that is associated with network workloads.
+
+143
+
+Figure 4: Parallelism of stateful decompression
+
+Figure 5: History buﬀer enabling fetch-on-demand
+
+3. HARDWARE STATEFUL DECOMPRES-
+
+SION
+
+3.1 Basic Approach
+
+The Lempel-Ziv decompression algorithm can essentially
+be explained as executing a list of instructions, which are
+either copy or literal operations. A copy operation copies a
+string of characters within the history buﬀer, while a literal
+operation copies a single character from the input buﬀer to
+the history buﬀer. Here, all the copies write to distinct re-
+gions of the history buﬀer, and low-level parallelism exists in
+the decompression process. Figure 4 shows the decompres-
+sion of a segment of the compressed data, containing a list
+of copies and literal operations whose write-to addresses do
+not overlap. However, dependencies exist across the copies.
+The dependencies among copy operations implicitly form a
+DAG (Direct Acyclic Graph), which can be parallelized at
+the granule-level of individual copies.
+
+For the stateless decompression accelerator, the history
+data of a data stream resides in a fast memory (usually
+SRAM) in the acceleration unit. Copies can be eﬃciently
+executed in parallel via pipelined-execution. For stateful de-
+compression, almost every time the accelerator receives a de-
+compressoin request, it potentially needs to load the history
+data of the corresponding stream from the main memory,
+which is gated by memory latency. One possibility to make
+the history data available in the accelerator’s fast memory is
+to fetch the complete history buﬀer before the execution of
+any of the copy operations. However, the reference pattern
+of the history data associated with a decompression request
+is highly irregular. First, a large portion of the history data
+is not referenced for a decompression request. In addition,
+more recent history has a higher reference frequency than
+older history. These observations suggest that fetching the
+complete history data before the processing of a decompres-
+sion request will fetch un-needed data into the accelerator,
+introducing unnecessary delay and bus/memory traﬃc.
+
+Here, we propose to load history data on-demand dur-
+ing the execution of decompression copy operations. Specif-
+ically, we classify the copy operations into fast copies and
+slow copies. A fast copy has its source data available in the
+
+Figure 6: The DAG of the slow copies
+
+accelerator’s fast memory. A slow copy either does not have
+all of its source data available in the fast memory or part
+of its source data depends on another slow copy (i.e., the
+address region of its copy source overlaps with the address
+region of the destination of another slow copy). With this
+classiﬁcation, when we encounter a slow copy, we set it aside,
+leave a hole in the history buﬀer and continue to execute the
+fast copies.
+In the meanwhile, a load module fetches the
+source data of the slow copies from main memory to the
+accelerator’s fast memory. Whenever the source data of a
+pending slow copy has been fetched into the fast memory,
+the pending slow copy is ready to be executed. Because
+in the original LZ token buﬀer, the outstanding or “ready”
+slow copies were ahead of the fast copy operations that are
+waiting to be executed, executing the “ready” slow copies as
+soon as possible can avoid unnecessarily classifying the sub-
+sequent copy operations as slow and therefore result in more
+copies being executed in order. We call this scheme fetch-
+on-demand or asynchronous fetch-on-demand. The scheme
+does not try to aggressively execute the Lempel-Ziv decom-
+pression requests in parallel per se. Instead, similar to super-
+scalar architectures, it exploits the “out-of-order” execution
+of the fast copies that overlap with the loads of history data
+from main memory for the slow copies.
+
+Figure 5 shows one way to partition the history buﬀer in
+the fast memory to facilitate the fetch-on-demand mecha-
+nism. The decompression maintains a write pointer, which
+is updated after each copy or literal operation. Here, we
+maintain one additional pointer, the commit pointer, which
+separates the committed region and the outstanding region.
+The committed region contains output of the completed copy
+and literal operations, ready to be written to the main mem-
+ory. The outstanding region contains outputs of fast copies
+and holes corresponding to the slow copies. Whenever a slow
+copy is ﬁnished, a hole in the outstanding region is ﬁlled, and
+the commit pointer may get advanced.
+
+There are beneﬁts to ﬁll the holes in the oustanding region
+in order. Intuitively, it will keep the size of the outstanding
+region to its minimum, which will have the commit pointer
+advanced promptly and data in the committed region copied
+out in-time. In addition, in-order commit reduce the number
+of slow copies that indirectly depend on the main memory.
+Figure 6 shows the dependence DAG of the slow copies
+(squares in the ﬁgure), where some depend (represented by
+arrows) on loads from main memory and others indirectly
+depend on the memory loads. The load engine executes the
+DAG in wave-fronts (separated by the curves), where the
+slow copies in the same wave-front can be executed in par-
+allel. Here, the maximal parallelism explored by the load
+engine is limited to the maximal outstanding load requests
+supported by the data transmit path (e.g., the memory bus
+in a bus-based system).
+
+144
+
+buﬀer is written into main memory asynchronously, avoiding
+additional latency.
+
+The Huﬀman decoding and LZ decompression units oper-
+ate in pipeline-fashion thus only the initialization of Huﬀman
+decoding will not overlap with the LZ decompression. The
+initialization involves loading a Huﬀman table that has less
+than 100 bytes, negligible compared to the LZ dictionary
+(20KB in average). An additional work item speciﬁed in
+the Deﬂate algorithm is the creation of dynamic Huﬀman
+table (DHT). In the HTTPC workload, the DHT creation is
+in average invoked once for 6 packets. In software it takes
+1.08% of the total instructions spent for decompression. In
+the context of this paper, we expect the overhead of DHT
+creation will be further amortized across the decompression
+requests of the same data stream.
+
+3.2 Options for the History Buffer
+Prefetch the Most Recent History
+
+Because the Lempel-Ziv compression algorithm tries to
+ﬁnd the most recent recurrence, the decompression algo-
+rithm references the history data that is immediately pre-
+ceeding the output generated by the currently active decom-
+pression request, i.e., recent history, more frequently than
+the history data further back. Here we refer to the history
+data data preceeding the recent history).
+
+Figure 8 conﬁrms this eﬀect. The ﬁgure shows the CDF
+of the bytes loaded from memory for stateful decompression
+requests of the ISS HTTPC data set. The reference distance
+plot corresponds to the reference-back distances for all the
+copy operations. The plot shows that for any given copy op-
+eration, the closer the data to the write pointer, the higher its
+chance of being referenced. Speciﬁcally, 80% of the bytes are
+generated by the copy operations whose reference distances
+are smaller than 2KB. The Fixed ref-dist plot corresponds to
+the copy operations that reference the history data generated
+by previous decompression requests of the same data stream
+of the currently active request. These copy operations poten-
+tially need their source data loaded from main memory. The
+plot shows that for the operations depending on previously
+generated history, 45% of the bytes can be fetched by refer-
+encing back up to 2KB of the previously generated history.
+The chart suggests that the availability of recent history in
+the fast memory has a more signiﬁcant performance impact
+than the rest of the history. It will be beneﬁcial to prefetch
+a short recent history into the accelerator before processing
+a decompression request. In addition, there is more reuse of
+the data in recent history than the data in distant history.
+Overall, prefetching recent history will reduce the total num-
+ber of loads from main memory. In addition, the prefetching
+of recent history data can be overlapped with the initial-
+ization of the Huﬀman decoding module (e.g., receiving the
+input stream, loading the dynamic Huﬀman table, etc.).
+
+Figure 9 (a) shows a history buﬀer that has the history
+partitioned into a prefetched recent history and previous his-
+tory regions. When using a circular buﬀer to implement the
+sliding history buﬀer in the accelerator’s fast memory, the
+buﬀer can be separated into four regions as shown in Fig-
+ure 9 (b), where the recent-history region was prefetched to
+the end of the circular history buﬀer. Figure 9 (c) shows the
+initial state of the history buﬀer.
+
+Small On-Accelerator History Buﬀer
+
+According to the reference distance distribution of Lempel-
+Ziv decompression, it may not be necessary to keep a large
+
+Figure 7: Decompression Engine Organization
+
+Figure 7 shows the high-level diagram of a decompres-
+sion accelerator that supports the fetch-on-demand scheme.
+The architecture supports the popular Deﬂate decompres-
+sion algorithm, which is composed of Huﬀman decoding and
+Lempel-Ziv decompression. We assume that the decompres-
+sion accelerator is attached to the system’s memory bus,
+that general packet inspection is performed by the system’s
+CPUs (e.g. cores or hardware threads) and that these CPUs
+communicate and synchronize with the accelerator through
+established mechanism such as MMIO.
+
+In this paper, we concentrate on the Lempel-Ziv step of
+the Deﬂate decompression, corresponding to the LZ unit in
+the diagram. As shown in the diagram, the Huﬀman decod-
+ing unit is composed of steps 1, 2, and 3, where it receives
+the input stream (compressed data) and decodes bit-streams
+into Lempel-Ziv operation tokens, which are kept in the LZ
+token buﬀer. Here, the LZ token buﬀer is a FIFO.
+
+The fetch-on-demand method ﬁrst fetches an LZ operation
+from the LZ token buﬀer and routes it to the copy engine or
+the load engine. Speciﬁcally, if the LZ operation is a literal
+operation or a fast copy, the operation is routed to the copy
+engine. Otherwise, the operation is routed to the load engine
+as long as the load engine has resource to queue the oper-
+ation. The copy engine is responsible for performing string
+copies inside the fast memory, among the LZ token buﬀer,
+the outstanding buﬀer, and the history buﬀer. The load en-
+gine is responsible for loading the history data needed by a
+list of copy operations into the outstanding buﬀer. Multiple
+outstanding slow copy operations are kept in the load engine.
+When the data for any such operations become available in
+the fast memory, the operations are marked as ready and
+routed to the copy engine via a FIFO. Here, among the copy
+operations that are routed to the copy engine, the ones from
+the load engine have higher priority. When the decompres-
+sion accelerator is attached to a bus-based system, the load
+engine manages the bus bandwidth allocated to the acceler-
+ator. In addition, the load engine manages the copy opera-
+tions that indirectly depend on data in main memory. Such
+requests got routed to the load engine because their source
+address region overlaps with the holes in the outstanding re-
+gion in Figure 5. Therefore, whenever there are new data
+loaded into the outstanding buﬀer, the copy operations di-
+rectly depending on the data are routed to the copy engine
+ﬁrst. Then, the load engine checks the outstanding copy
+operations that indirectly depending on the newly-available
+data. Finally, the data in the committed region of the history
+
+145
+
+Figure 8: Reference Distance Distribution
+
+(b) Recent history prefetch with a circular buﬀer
+
+circular buﬀer (e.g., 32KB to support Deﬂate). A more re-
+source eﬃcient (e.g., less area) and smaller circular buﬀer
+may provide reasonable trade-oﬀ. Figure 9 (d) shows a cir-
+cular buﬀer with reduced size. Note that the write region
+can quickly advance to be overlapped with the recent history
+region, and eventually overlap with the committed region.
+The possible side eﬀect of reducing the size of the circular
+buﬀer is that the data in the recent-history region and the
+committed region may be over-written, and will need to be
+reloaded from the main memory when they are referenced
+later. The performance impact of having a small circular
+history buﬀer on the accelerator is evaluated in Section 4.
+
+History Reuse
+
+Our initial analysis on the reuse of the history data for the
+Deﬂate decompression suggests a similar distribution to that
+of the reference-distance: the further back into the history,
+the less data reuse. Assuming a block size of 64 bytes, the
+reuse rate on average across the history data is 1.6. This sug-
+gests that complex and expensive caching mechanism may
+not be beneﬁcial with considerations of chip resources.
+
+We study a simple mechanism which keeps a tag for each
+of the cache-aligned blocks of the history buﬀer. The tag
+is a bit that indicates whether a block is holding valid his-
+tory data. We only cache history data whose address falls
+in the cachable previous history region (Figure 9 (e)). The
+history buﬀer caches the data whose addresses fall between
+the recent history oﬀset and the previous history oﬀset. In
+addition, the size of the cachable region reduces while the
+write pointer advances. Eventually, the cachable previous
+history region may become empty.
+
+3.3 Simulator
+
+To investigate whether, or how well, our fetch-on-demand
+approach for decompression helps hide the latency of stateful
+decompression, we developed a simulator to implement steps
+4-9 of Figure 7. The input to the simulator was composed
+of a list of decompresion requests, each of which contained
+a list of copy or literal operations.
+
+We assume a general purpose computer system, where the
+software submits the decompression request to the accelera-
+tor, together with a record containing the addresses to the
+input buﬀer and to the history/output buﬀer. The data of
+both buﬀers initially reside in the main memory. We model
+the data traﬃc between the main memory and the acceler-
+ator, following the model of representitive memory bus sys-
+tems [6, 19, 13].
+
+Table 2 shows the parameters used in the simulation. The
+parameters for the memory bus are straightforward for a typ-
+ical pipelined bus architecture such as that in POWER5 [13].
+
+(a) Recent history prefetch
+
+(c) Initial state
+
+(d) Over-writing scenario
+
+(e) Reuse the history data
+
+Figure 9: Scenario of The History Buﬀer
+
+For the copy engine, we assume a sequential implementation
+of contiguous copy operations. For a copy of multiple units
+each of which has 16 bytes, the copies for all the units are
+pipelined, with a pipeline latency of 12 CPU cycles and a
+stage delay of 1 cycle. The contiguous literal operations
+were not pipelined, thus each took 2 cycles. We observed
+little impact of changing the literal operation latency to 1
+cycle, which is expected because the average number of lit-
+eral operations of a decompression request for our datasets
+is relatively small, about 300 literals vs 500 copies.
+
+We used process time and stall time for performance as-
+sessment. The process time is the cycles spent for decom-
+pression operations whose source data are available on the
+accelerator, including three operations: (a) literal operation;
+(b) copy inside the history buﬀer; and (c) copy from the out-
+standing buﬀer to the history buﬀer. The stall time counts
+for the durations when the copy engine is waiting for (a) re-
+turn of memory loads, (b) free bus slots to become available
+or (c) the load engine becoming available for receiving slow
+copy operations. In the end, the overhead of a decompres-
+sion request is deﬁned as the ratio of the stall time and the
+process time.
+
+4. EVALUATION
+
+In this section, we use three workloads to evaluate the
+eﬀectiveness of the fetch-on-demand stateful decompression
+mechanism. We also evaluate the performance trade-oﬀs of
+the various design options. Finally, we show the perfor-
+
+146
+
+Table 2: Simulation Parameters
+
+Memory Bus, Load Engine
+
+architecture
+
+# outstanding loads
+load unit
+latency per load unit
+peak bus BW
+
+separated read/write buses
+pipelined
+16
+64B
+200 cycles
+5 Bytes/cycle
+
+Copy Engine
+
+feature
+copy unit
+latency per copy unit
+pipeline stage latency
+literal op latency
+
+pipelined for one copy request
+16B
+12 CPU cycles
+1 CPU cycles
+2 CPU cycles
+
+mance and QoS impact of our hardware acceleration solu-
+tion for stateful decompression on an IPS stack. Besides the
+HTTPC and 2.1K workloads, we also used the two Canter-
+bury ﬁle sets [1], which are standard workloads for evaluating
+compression algorithms. There exist two ﬁle sets, large and
+standard, that contain a variety of diﬀerent ﬁle types with
+relatively low compression ratios, 3.43 and 3.83. Although
+less representative for HTTP-compression as compared to
+21K or HTTPC, it serves as a veriﬁcation data point.
+
+4.1 Performance of Fetch-On-Demand
+
+To demonstrate the advantage of the proposed method
+for stateful decompression, we compared it with several al-
+ternative methods for bringing the needed history data onto
+the decompression accelerator and executing the copy and
+literal-put operations. The results are show in Figure 10
+for the three sets of workloads. The most straightforward
+approach was to load the valid data of the in-memory his-
+tory buﬀer onto the accelerator before starting any writing
+into the on-accelerator output-buﬀer. We call this method
+prefetch history. We estimated the execution time of prefetch
+history as the sum of the process time and the time needed
+to fetch the complete history data, which depends on the
+available bandwidth of the memory bus.
+
+Another alternative method is to fetch the needed his-
+tory data on-demand, but stall the accelerator, i.e., not pro-
+cessing the decompression operations beyond the copy cor-
+responding to the outstanding load (referred to as AFOD. In
+the simplest form of this method, no caching on the accelera-
+tor is maintained for the synchronously loaded history data,
+and the history data are always loaded in the unit of cache-
+line. Given that the average length of the copies (avg. copy
+lengths for HTTPC, 2.1K, canterbury-large, and -standard
+are 17.9, 16.6, 8.1, and 9.7, respectively) are smaller than the
+common cache-line size (64B for our simulator), the SFOD
+introduces bigger overhead than the prefetch history.
+
+Based on the eﬀect that the reference rate of the history
+data reduces exponentially along the distance from the writ-
+ing location, it is natural to prefetch a small part of the
+most recent history onto the accelerator, and leave the rest
+of the history data to be loaded on-demand. We refer to
+this method that prefetching 2KB recent history as SFOD-
+2K. Since the maximal copy length of the Deﬂate standard
+is 258 bytes, in the worst case we have six 64B cache-lines
+worth of data. In our pipelined bus model, 2.5 B/c band-
+width can be reached by using 8 out of 16 bus slots, i.e.,
+supporting 8 outstanding loads. For the SFOD methods,
+the bandwidth of the available buses are mostly idle; dou-
+
+Figure 10: Performance of Fetch-on-demand
+
+bling the total memory/bus bandwidth does not reduce its
+latencies. For the prefetch history and AFOD (asynchronous
+fetch-on-demand), the performance improves when more bus
+bandwidth is available. We show the execution time for two
+bandwidth conﬁgurations, 2.5 B/c for 8 outstanding requests
+and 5 B/c for 16 outstanding requests.
+
+The results for the HTTPC and 2.1K workloads show that
+with 5 B/c bus bandwidths, the AFOD almost completely
+hides the latency of the on-demand references of the history
+data residing in main memory. The total execution is almost
+the same as the best possible performance proc time where
+all history data is on the accelerator. The AFOD achieves
+up to 70% speedup, a.k.a. 40% time reduction, compared
+to the best alternative method. For the Canterbury work-
+loads, particularly for the large workload, the AFOD has
+25% overhead over the proc time. Nevertheless, the perfor-
+mance improvement over the best alternative still holds.
+
+In summary, the experimental results show that when
+compared to alternative mechanisms, our asynchronous fetch-
+on-demand mechanism eﬀectively reduces the response time
+of stateful decompression for packetized data.
+
+4.2 Explore the Design Space for Asynchronous
+
+Fetch-On-Demand
+
+In this section, we show the detailed performance of AFOD
+for the various design options described in Section 3. Specif-
+ically, the design options are (1) reducing the on-accelerator
+history/output buﬀer to save area; (2) prefetching the most
+recent history onto the accelerator at the beginning of the
+decompression; (3) caching the fetched history data to cut
+down the bus traﬃc. Figure 11 shows the performance (over-
+head as stall-time / proc-time) variations while changing
+the size of the on-accelerator history buﬀer, the size of the
+prefetched recent history, the available outstanding requests
+on the bus (available bandwidth), and the caching. The
+top chart is for the HTTPC workload and bottom chart for
+the 2.1K workload. The legend speciﬁes the size of the on-
+accelerator history buﬀer, and whether or not caching is en-
+
+147
+
+Figure 11: Design Space Exploration
+
+abled. Each group of bars corresponds to a speciﬁed cap
+of the bus bandwidth. Each group contains 8 bars: 4 for
+caching disabled, 4 for caching enabled. Each of the 4 bars
+corresponds to a speciﬁed size of the on-accelerator history
+buﬀer. The sizes are 4096, 8192, 32768, 65536. For the
+cases of prefetching recent history, the stall-times exclude
+the latency of the prefetching, expected to be hidden by the
+initialization of the Huﬀman decoding unit.
+
+We gain the following observations from the charts. First,
+permitting 16 outstanding bus requests and providing a large
+on-accelerator history buﬀer almost completely hide the la-
+tency of on-demand fetching the memory-residing history
+data. Limiting the history buﬀer size on the accelerator in-
+creases the stall-time. From 32KB to 8KB, the overhead
+increases by about 30% - 40%. This is persistent with or
+without caching for the history data. Second, caching gives
+a 30% - 40% overhead reduction, except for the cases where
+the cap on outstanding requests is 16. Therefore, caching
+should be an option when the bus bandwidth is tight or there
+is a need to attach multiple accelerators on the bus. Third,
+when prefetching recent history, prefetching 1KB recent his-
+tory gives up to 20% overhead reduction and prefetching
+2KB shows about 5% further overhead reduction. Finally,
+the eﬀects of the above three factors (on-accelerator history-
+window size, caching, and size of the prefetched recent his-
+tory) are orthogonal to each other. Therefore, they can be
+independently applied for an implementation.
+
+Figure 12 shows the bus traﬃc in term of bytes per cycle
+for HTTPC and 2.1K, respectively. The maximum band-
+width quota for the ﬁrst chart is 2.5 B/c, and 5 B/c for the
+second chart. For each packet, the load on the bus was sam-
+
+pled every 200 cycles. The data shown is averaged across all
+packets in a workload. In the legends, the format 0K-64K
+refers to the size of the prefetched recent history and the
+size of the on-accelerator history buﬀer. The results show
+that at the beginning of processing a packet, the load on the
+bus is signiﬁcantly higher than later. This is due to the na-
+ture of the dictionary-based decompression, which references
+the most recent occurrences of the same patterns. Thus the
+earlier copies tend to reference back to the previous history
+more intensively. The fact that the bus is not congested all
+the time suggests that multiple decompression accelerators
+can share the bus if proper skewing can be scheduled.
+
+The 0K-64K and 0K-8K results show similar eﬀects at the
+beginning of the time line. Later in the time line, the 0K-8K
+consumes slightly more bus bandwidth. This should occur
+because some packets have large output byte counts, and
+some freshly written data is over-written and being refer-
+enced later. Nevertheless, the results indicate that the over-
+head of refetching the committed history is not signiﬁcant.
+Thus, prefetching recent history can oﬀer signiﬁcant savings
+on the consumption of bus bandwidth.
+
+4.3
+
+Impact on the IPS stack
+
+We implemented a separate event simulator to evaluate
+the impact of compression hardware in the context of a
+multi-core host to allow for concurrent requests to a set of
+WH accelerators. The simulator takes the instruction counts
+previously identiﬁed into account and replaces the software
+decompression instruction count with those identiﬁed in the
+accelerator model. We then scale the HTTPC input work-
+load to achieve a desired load. Through resource contention
+tracking on the accelerator, we identiﬁed that 2 accelera-
+
+148
+
+Figure 13: Impact of Hardware Acceleration
+
+stack by HW acceleration, bounded by the weight of the
+decompression in the IPS stack.
+If only considering the
+decompression work, the software in the IPS stack for the
+HTTPC workload spends about 64 instructions per decom-
+pressed byte (obtained via instruction proﬁling), and the
+HW decompression takes 0.74 cycles (in host system’s count)
+per decomp’d byte. If we assume a CPI as 1.1 for software
+implementation, the accelerator yields 95 folds throughput
+compared to running the software on a single core general
+purpose system.
+
+There has been a body of research on improving perfor-
+mance of the Lempel-Ziv decompression in SW and HW by
+parallelism exploration [14, 18, 17, 5, 20, 9]. The main dif-
+ference between these techniques and our work is that, we
+address the issue of stateful decompression, where the soft-
+ware creates and maintains the history for live data streams
+in main memory and the history of a packetized data stream
+is not available on the accelerator’s fast memory except for
+that associated to active decompression requests.
+
+Among these techniques, systolic array based algorithms
+are studied intensively [14, 18], which essentially implement
+pipelined execution of the LZ decompression to optimize for
+throughput. Their techniques are orthogonal to our fetch-
+on-demand technique, and can be extended for stateful de-
+compression with the extension similar to the load engine
+described in this paper. IBM Memory Expansion Technol-
+ogy (MXT) [20] aimed to extend the capacity and band-
+width via on-line cache-line compression/decompression. To
+achieve latency optimized compression/decompression oper-
+ations for relative short data streams (e.g. up to 1KB), MXT
+implements parallel decompression by having parallel de-
+compression units accessing a “cooperative dictionary” [5].
+In this mechanism, the decompression process depends on
+the compression side to construct the dynamic dictionary.
+
+Software-based parallelization of Lempel-Ziv algorithm is
+discussed in [17, 9]. Because it is ineﬃcient for software to
+explore the ﬁne-grained parallelism at the level of Lempel-
+Ziv copies, their decompression algorithms implement par-
+allel operations at a higher level of granularity and needs
+additional information from the software.
+
+Stateful decompression has been addressed in industry by
+proposing additional protocol operations in the application
+layer of system network stacks [4], where the sender side
+and the receiver side work cooperatively by exchanging spe-
+cial ACK vectors. This exchange is used to alter the history
+used by the sender, where the receiver could force a smaller
+
+Figure 12: Impact on Bus Traﬃc
+
+5. RELATED WORK
+
+tor engines were suﬃcient to limit stalls due to accelerator
+availability to less than 1% system wide, even if the work-
+load contains 30% of packets requiring decompression. For
+the rest of this section, we apply 1 accelerator per host.
+
+Previously, we stated that the total weight of software
+decompression in the stack of the ISS IPS system is 41%
+while performing packet content inspection on the HTTPC
+workload (with 2.6% packets containing compressed data).
+In Figure 13, we show the impact of the HW acceleration on
+the quality of services (QoS) for the ISS IPS stack.
+
+In the chart, the blue plots correspond to the QoS perfor-
+mance for the software solution and the red plots for utilizing
+HW decompression. The miss rate gives the percentage of
+packets that exceed the desired maximum response time of
+1 millisecond. When the incoming packet rate increases, the
+system will be limited by available compute cycles and the
+miss rates jump from 2.5% to 90%.
+
+The data show that the HW decompression based IPS sys-
+tem does not start getting saturated until the packet income
+rate reaches 8.7G/s, achieving a 47% improvement over the
+software based solution before both system hitting their QoS
+miss knees (where the miss rate exceeding the QoS speciﬁ-
+cation). The maximal throughput achievable is improved by
+34%. More signiﬁcantly, if the ISS IPS QoS response time
+requirement–100 micro-second–is enforced, the HW-based
+solution can sustain at 198% higher throughput. Latency-
+wise, the HW decompression based solution, when not sat-
+urating the system, reduces the average response time (Avg
+Resp) by 35% and maximum response time (Max Resp) by
+49%. Overall, the result shows that the HW decompression
+based solution signiﬁcantly improves the overall performance
+and QoS of a software based IPS system.
+
+Note here that the improvement on the IPS system are ob-
+tained by replacing the software decompression in the IPS
+
+149
+
+[5] P. A. Franaszek, J. T. Robinson, and J. Thomas.
+
+Parallel Compression with Cooperative Dictionary
+Construction. In Data Compression Conf., pages
+200–209, 1996.
+
+[6] IBM. Core Connect Bus Architecture. IBM White
+
+Paper at http:// www.ibm.com/ chips/ techlib/
+techlib.nsf/ literature/ CoreConnect Bus Architecture,
+1999.
+
+[7] IBM Internet Security Systems (ISS). Proventia
+
+Network IPS GX6116. http:// www.iss.net/ products/
+index.html, 2008.
+
+[8] Indra Networks. SC MX4E Compression Card.
+
+http://www.indranetworks.com/SCMX4E.html, 2008.
+
+[9] S. T. Klein and Y. Wiseman. Parallel Lempel Ziv
+
+Coding. Discrete Applied Mathematics,
+146(2):180–191, 2005.
+
+[10] P. Piyachon and Y. Luo. Eﬃcient memory utilization
+on network processors for deep packet inspection. In
+ANCS ’06: the 2006 ACM/IEEE symposium on
+Architecture for networking and communications
+systems, pages 71–80, 2006.
+
+[11] Port80 Software. Port80 Surveys HTTP Compression
+
+on the Top 100 Corporations’ Web Sites. http://
+www.port80software.com/ surveys/
+top1000compression/, 2007.
+
+[12] H. Shaﬁ, P. J. Bohrer, J. Phelan, C. A. Rusu, and J. L.
+Peterson. Design and Validation of a Performance and
+Power Simulator for PowerPC Systems. IBM Journal
+of Research and Development, 47(5), 2003.
+
+[13] B. Sinharoy, R. N. Kalla, J. M. Tendler, R. J.
+
+Eickemeyer, and J. B. Joyner. POWER5 System
+Microarchitecture. IBM Journal of Research and
+Development, 49(4), 2005.
+
+[14] M. E. G. Smith and J. A. Storer. Parallel Algorithms
+for Data Compression. J. ACM, 32(2):344–373, 1985.
+
+[15] Snort.org. Snort Home Page. http://www.snort.org,
+
+2008.
+
+[16] C. Spackman. Compression/Decompression Tradeoﬀs
+
+for Data Networking and Storage. http://
+www.networksystemsdesignline.com/ howto/, 2007.
+
+[17] L. M. Stauﬀer and D. S. Hirschberg. Parallel Text
+
+Compression. Technical report, 1993.
+
+[18] J. A. Storer and J. H. Reif. A Parallel Algorithms for
+
+High-speed Data Compression. J. Parallel and
+Distributed Computing, 13(2):222–227, 1991.
+
+[19] J. M. Tendler, J. S. Dodson, J. J. S. Fields, and
+
+B. Sinharoy. POWER4 System Microarchitecture. IBM
+Journal of Research and Development, 46(1), 2002.
+
+[20] R. B. Tremaine, P. A. Franaszek, J. T. Robinson,
+C. O. Schulz, T. B. Smith, M. E. Wazlowski, and
+P. M. Bland. IBM Memory Expansion Technology
+(MXT). IBM Journal of Research and Development,
+45(2):271–286, 2001.
+
+[21] J. Ziv and A. Lempel. A Universal Algorithm for
+
+Sequential Data Compression. IEEE Trans. on
+Information Theory, 23(3):337–343, 1977.
+
+history. They also facilitate sending the ACK vector with
+compressed contents to allow the receiver to reconstruct the
+state and thereafter the decompression is not independent.
+In contrast, our approach keeps the decompression side in-
+dependent from the compression side by complying the pop-
+ular compression standards. To achieve this, we keep the
+state (i.e. the history) of a data stream local at the receiver,
+thus keep the receiver completely isolated from the sender.
+In the networking, particularly internet/web environment,
+it is highly advantageous not to post dependency on the
+sender/compression sides.
+
+6. CONCLUSION
+
+Most state-of-the-art decompression accelerators do not
+address the issue of maintaining the dictionary across multi-
+ple decompression sessions corresponding to a common com-
+pressed ﬁle, while implementing dictionary-based algorithms.
+In the networking environment, particularly for increasingly
+important intrusion detection and prevention systems, de-
+compression has to be done at packet level where packets for
+the multitude of data streams arrive interspersedly. Stateful
+decompression is required, which needs the decompression
+states (dictionaries) of the concurrently active streams to be
+repeatedly loaded into the engine for each request.
+
+To mitigate the otherwise signiﬁcant overhead associated
+with stateful decompression in the traﬃc-intensive network-
+ing service system, we proposed a novel asynchronous fetch-
+on-demand method and its variations that can eﬀectively
+hide the fetch of the dictionary data, thus minimizing its
+overhead. The methods can be integrated into a decompres-
+sion engine attached to a general purpose computing sys-
+tem to support eﬃcient stateful decompression. Through ex-
+tensive workload analysis and simulation-based performance
+evaluation, aside from revealing the characteristics of text
+compression on the internet, we established that the pro-
+posed methods can achieve close-to optimal performance,
+more than 50% improvement on decompression rate com-
+pared to alternative hardware acceleration methods. We fur-
+ther explored several independent design options that have
+non-trivial impacts on performance and/or simplicity of the
+implementation of the proposed mechanism.
+
+While applied on a real Intrusion Detection/Prevension
+System (ISS IPS), the proposed hardware stateful decom-
+pression method yields at least 95 times speedup over ISS
+IPS’ software implementation of stateful decompression op-
+erations; 47% improvement on throughput, 35% improve-
+ment on average response time for a workload with 2.6%
+packets containing compressed data.
+
+7. REFERENCES
+[1] R. Arnold and T. Bell. A Corpus for The Evaluation
+
+of Lossless Compression Algorithms. In Data
+Compression Conf. (DCC), 1997.
+
+[2] Comtech AHA Corporation. AHA362-PCIX GZIP
+
+Compression Accelerator Quick Start Guide. http://
+www.aha.com/ show pub.php?id=200, 2008.
+
+[3] L. P. Deutsch. RFC 1951: Deﬂate Compressed Data
+
+Format Speciﬁcaiton V1.3. available at http://
+www.ietf.org/ rfc/ rfc1951.txt, by Internet Engineering
+Task Force, 1996.
+
+[4] S. M. Dorward and S. Quinlan. Method and apparatus
+for data compression of network packets. U. S. Patent
+6,388,584, 2002.
+
+150
+
+

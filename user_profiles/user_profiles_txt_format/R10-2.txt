@@ -1,0 +1,3539 @@
+Adaptive Multi-Level Cache Allocation in Distributed
+
+Storage Architectures∗
+
+Ramya Prabhakar, Shekhar Srikantaiah, Mahmut Kandemir, Christina Patrick
+
+Department of Computer Science and Engineering, The Pennsylvania State University
+
+University Park, PA-16802, USA
+
+{rap244,srikanta,kandemir,patrick}@cse.psu.edu
+
+ABSTRACT
+Increasing complexity of large-scale applications and contin-
+uous increases in data set sizes of such applications combined
+with slow improvements in disk access latencies has resulted
+in I/O becoming a performance bottleneck. While there
+are several ways of improving I/O access latencies of data-
+intensive applications, one of the promising approaches has
+been using diﬀerent layers of the I/O subsystem to cache
+recently and/or frequently used data so that the number
+of I/O requests accessing the disk is reduced. These dif-
+ferent layers of caches across the storage hierarchy intro-
+duce the need for eﬃcient cache management schemes to
+derive maximum performance beneﬁts. Several state-of-the-
+art multi-level storage cache management schemes focus on
+optimizing aggregate hit rate or overall I/O latency, while
+being agnostic to Service Level Objectives (SLOs). Also,
+most of the existing works focus on diﬀerent cache replace-
+ment algorithms for managing storage caches and discuss
+diﬀerent exclusive caching techniques in the context of multi-
+level cache hierarchy. However, the orthogonal problem of
+storage cache space allocation to multiple, simultaneously-
+running applications in a multi-level hierarchy of storage
+caches with multiple storage servers has remained an open
+research problem. In this work, using a combination of per-
+application latency model and a linear programming model,
+we proportion storage caches dynamically among multiple
+concurrently-executing applications across the diﬀerent lev-
+els of the storage hierarchy and across multiple servers to
+provide isolation to applications while satisfying the applica-
+tion level SLOs. Further, our algorithm improves the overall
+system performance signiﬁcantly.
+
+Categories and Subject Descriptors
+D.4.2 [Operating Systems]: Storage Management – Allo-
+cation/deallocation strategies
+
+∗
+
+This work is supported in part by NSF grants #0937949,
+
+#0621402, #0724599, #0821527, and #0833126.
+
+Permission to make digital or hard copies of all or part of this work for
+personal or classroom use is granted without fee provided that copies are
+not made or distributed for proﬁt or commercial advantage and that copies
+bear this notice and the full citation on the ﬁrst page. To copy otherwise, to
+republish, to post on servers or to redistribute to lists, requires prior speciﬁc
+permission and/or a fee.
+ICS’10, June 2–4, 2010, Tsukuba, Ibaraki, Japan.
+Copyright 2010 ACM 978-1-4503-0018-6/10/06 ...$10.00.
+
+General Terms
+Management, Design, Performance, Experimentation, Algo-
+rithms
+
+Keywords
+Storage cache, Multi-level, Multi-server, SLO, I/O
+
+1.
+
+INTRODUCTION
+
+Improving I/O performance is critical for maximizing per-
+formance of large-scale parallel applications on emerging
+high-end architectures. State-of-the-art storage systems in
+high-performance computing platforms are typically orga-
+nized as a cluster of I/O-server nodes (equivalent to ﬁle
+server or database server in the context of enterprise class
+systems) requesting data from a cluster of storage servers
+connected to them over a network. Applications issue streams
+of I/O requests to the underlying I/O servers that in turn
+request data from multiple storage servers. Such architec-
+tures can signiﬁcantly enhance the scalability and availabil-
+ity of the systems and reduce operation costs. In general,
+the storage architecture can be multi-tiered although two-
+tiered systems are most commonly used. Typical storage hi-
+erarchies in both high-performance computing domain and
+enterprise storage domain are shown in Figure 1.
+In the
+case of high-performance computing domain, applications
+executing on compute nodes issue I/O requests that are for-
+warded to I/O servers. I/O servers that accommodate the
+ﬁrst level of storage caches forward requests to the under-
+lying storage servers. These storage servers accommodate
+the second level of storage caches. Typically, both the I/O
+servers and the storage servers are shared among concur-
+rently executing applications. Similarly, in the enterprise
+domain, database/ﬁle servers forward I/O requests issued
+by applications executing on web servers to the underly-
+ing storage servers. The database/ﬁle server cache at the
+ﬁrst level and the storage server cache at the second level
+are shared among applications. The problem of managing
+shared resources in high-performance computing domain is
+isomorphic to the one in enterprise systems. That is, the
+interference among competing applications and the resul-
+tant unpredictable system behavior are critical issues that
+need to be addressed when the resources are shared across
+diﬀerent layers of a hierarchy in both these systems.
+
+Some existing solutions for managing multi-level storage
+caches [22, 32, 31, 15, 34, 14] consider single-server archi-
+tectures. However, many storage systems in both high-
+performance computing and enterprise-class computing have
+
+211
+
+Applications executing concurrently on compute nodes
+
+Web applications executing on web servers
+
+I/O requests forwarded 
+
+to I/O Servers
+to I/O Servers
+
+First Level 
+Caching
+Caching
+
+Commodity 
+
+Network
+
+Second Level
+
+Caching
+
+I/O Server
+
+I/O Server
+
+I/O Server
+
+I/O Server
+
+Storage 
+Storage 
+Server
+
+Storage 
+Storage 
+Server
+
+Storage 
+Storage 
+Server
+
+Storage 
+Storage 
+Server
+
+ 
+
+e
+c
+a
+p
+s
+ 
+ 
+ 
+e
+e
+e
+g
+g
+g
+a
+a
+a
+r
+r
+r
+o
+o
+o
+t
+t
+t
+s
+s
+s
+ 
+ 
+ 
+l
+l
+l
+
+a
+a
+a
+c
+c
+c
+i
+i
+i
+g
+g
+g
+o
+o
+o
+
+i
+
+i
+
+l
+l
+l
+ 
+s
+n
+a
+t
+n
+a
+m
+S
+S
+F
+F
+V
+V
+P
+P
+
+ 
+ 
+
+s
+s
+r
+r
+e
+e
+v
+v
+r
+r
+e
+e
+s
+s
+ 
+ 
+e
+e
+g
+g
+a
+a
+r
+r
+o
+o
+t
+t
+s
+ 
+ 
+ 
+d
+d
+d
+n
+n
+n
+a
+a
+a
+O
+O
+O
+/
+/
+/
+I
+I
+I
+ 
+ 
+ 
+
+ 
+ 
+ 
+
+h
+h
+h
+t
+t
+t
+o
+o
+o
+b
+b
+b
+n
+n
+n
+o
+o
+o
+
+ 
+ 
+ 
+
+Database/File Servers
+
+Network
+
+I/O requests 
+forwarded to 
+forwarded to 
+File Servers
+
+First Level 
+First Level 
+Caching
+
+Second Level 
+
+Caching
+
+Storage
+Storage
+Servers
+
+Figure 1: Architecture of multi-level multi-server storage systems. The architecture on the left represents
+typical high-performance storage systems and the one on the right represents typical enterprise storage
+systems.
+
+multiple storage servers, as shown in Figure 1. The pro-
+posed solutions in recent literature do not consider multi-
+server scenarios in which data blocks are accessed by ap-
+plications from more than one storage server cache. MC2
+[31] uses application hints to partition multi-level cache in
+the presence of multiple clients to achieve the shortest I/O
+response times. Similarly, other recent works [23, 32, 9]
+focus on maximizing I/O performance. Such schemes are
+oblivious to providing certain I/O performance guarantees
+to all applications. However, in utility computing or ser-
+vice oriented environments, the service provider may set up
+diﬀerent service-level agreements (SLAs) to diﬀerent clients
+that encapsulate guarantees in I/O performance, reliability,
+manageability, and other metrics. In the high-performance
+computing domain, applications like weather prediction, de-
+mand time-critical performance guarantees from the I/O
+subsystem. Such an environment would require the storage
+system to be able to allocate shared resources proportionally
+to cater to the level of the performance guarantee demanded
+by each application.
+
+Researchers have developed many replacement policies to
+manage the storage cache, such as LRU [4], LRFU [6], LRU-
+k [20], 2Q [12], MQ [34], LIRS [10], and ARC [18]. These
+replacement algorithms were designed for single server sys-
+tems. In recent works [31, 15], storage cache management
+using combinations of these replacement policies based on
+access patterns of applications have been proposed for dis-
+tributed I/O environments with multi-level cache hierar-
+chies. However, the problem of storage cache space alloca-
+tion is orthogonal to the replacement policy used to manage
+the blocks within the allocated space.
+
+We propose a multi-level, multi-server storage cache al-
+location algorithm, called MLMS, that addresses the prob-
+lem of automated cache partitioning in distributed storage
+systems, that involve caching at the I/O servers at the ﬁrst
+level and multiple shared storage server caches at the second
+level. MLMS allocates or partitions the storage cache space
+among the applications dynamically and lets the underlying
+replacement policy to manage the movements of individual
+blocks within the allocated space. Figure 2 shows a spec-
+trum of allocation policies on the x-axis and replacement
+policies on the y-axis. The diﬀerent allocation policies rep-
+
+resented in this ﬁgure range from uncontrolled (storage cache
+space shared among applications without any explicit par-
+titioning) to MLMS (dynamically partitioning cache space
+at multiple levels among applications) including fair share
+(equally partitioning shared caches at multiple levels among
+applications). Similarly, the spectrum of replacement poli-
+cies may include any previously proposed replacement pol-
+icy ranging from the least recently used (LRU) scheme that
+works with an inclusive storage cache hierarchy to replace-
+ment policies that work well with exclusive storage cache
+hierarchies like DEMOTE [28] with the least recently and
+frequently used (LRFU) scheme. Each point in this two-
+dimensional space is valid and represents a combination of
+an allocation policy and a replacement policy in managing
+the storage cache.
+
+In this paper, we make the following contributions:
+• We ﬁrst build a per-application I/O latency model with
+both the levels of storage caches to predict the storage cache
+space required by competing applications to meet a speciﬁed
+I/O latency requirement. Using these latency models, we
+predict the cache space to be allocated for each application
+in the ﬁrst level (I/O server) cache and, the total cache
+space to be allocated for each application, across all the
+storage servers that form the second level cache, such that
+the speciﬁed SLO constraint is satisﬁed.
+
+• We then use linear programming (LP) to determine the
+cache space allocations from individual storage servers at
+the second level for each of the concurrently-executing ap-
+plications. At regular intervals, our algorithm records the
+observed I/O latency and current cache size (allocation) for
+each application at run-time so that it is able to repeat the
+process, re-ﬁtting the I/O latency model to account for the
+new observation and repartitioning the caches to account
+for the new values, thereby capturing the dynamic phase
+changes exhibited by applications.
+
+• We present experimental results obtained using a set
+of I/O-intensive workloads to demonstrate that our stor-
+age cache partitioning strategy can accomplish performance
+insulation among multiple competing applications as well
+as improve the eﬀective utilization of the multiple levels of
+shared storage cache space, thereby improving the overall
+I/O performance while continuously providing service level
+
+212
+
+Demote
+
+ 
+ 
+t
+t
+n
+n
+e
+e
+m
+m
+e
+e
+c
+c
+a
+a
+p
+p
+e
+e
+R
+R
+
+l
+l
+
+y
+y
+c
+c
+i
+i
+l
+l
+
+o
+o
+P
+P
+
+LRU
+
+Uncontrolled
+
+LRU
+LRU
+
+Uncontrolled
+
+Demote
+
+Demote
+
+Demote
+
+MLMS
+
+LRU
+LRU
+
+MLMS
+
+Fair 
+share
+
+LRU
+LRU
+
+Fair 
+share
+
+Fair 
+share
+
+Uncontrolled
+
+MLMS
+
+Allocation Policy
+
+Figure 2: Two dimensional space of cache replace-
+ment policies and cache space allocation policies.
+
+guarantees to applications.
+
+2. BACKGROUND AND MOTIVATION
+
+2.1 System Model
+
+The role of the multiple levels of storage caching is criti-
+cal for data-intensive applications that target emerging plat-
+forms with a number of processors, I/O nodes, and disks. A
+representation of the I/O stack in both enterprise and high-
+performance computing domains is given in Figure 1. We
+assume that each I/O server can serve multiple applications
+that use it. In this paper, our target system has two levels of
+caching in which I/O servers host the ﬁrst level and storage
+servers host the second level cache. The I/O servers and
+storage servers are connected by a network. The connec-
+tivity could be complete, where each I/O server has access
+to all the storage servers, or partial, where each I/O server
+has access to only a subset of the available storage servers.
+In general, our scheme works for any connectivity between
+I/O servers and storage servers. The storage servers are
+further connected to the physical storage system like disk
+arrays that hold the data. All the resources managed by
+the I/O stack (e.g., I/O server caches, storage server caches,
+disk caches, network bandwidth, disk bandwidth, etc) are
+dynamically shared among various applications, leading to
+possible destructive interferences among these applications.
+It is important to note that an I/O call at the application
+level goes, in general, across multiple layers in this stack be-
+fore it ﬁnally reaches the disks. In addition, the I/O calls
+originating from diﬀerent applications can compete for the
+resources shared in the stack. Therefore, proper manage-
+ment of these shared resources across the I/O stack is very
+important. Given this I/O stack with shared resources re-
+siding potentially at each layer and hard-to-predict runtime
+behavior of large-scale applications, achieving service level
+objectives (SLOs) is a very diﬃcult problem.
+
+Our coordinated cache management scheme enables ﬁne-
+grain resource management across the diﬀerent applications
+by determining the minimum amount of resources at each
+level for achieving the required SLO for an application, and
+then distributing additional cache space (if any) to appli-
+cations in proportion to their projected gains to maximize
+the value of a global (inter-application) metric. Our par-
+titioning scheme is envisioned to be incorporated as part
+of a metadata server that dynamically receives information
+about applications’ SLO. It then computes the best allo-
+cation of storage cache space for each application, at each
+
+level, and it also calculates the best possible distribution of
+cache space across multiple storage servers. The metadata
+server further provides hints to each storage server in the
+system about the the computed cache partition sizes. It is
+important to note that our approach can in general be ex-
+tended to any shared resource and to any application metric
+speciﬁed in the service level agreements.
+
+A variety of approaches have been used in the past to
+specify SLOs for applications. Wachs et al [25] propose to
+use an SLO speciﬁcation called R-value, which is a conﬁg-
+urable parameter. Its value ranges between 0 and 1 of the
+cache absorption rate (hit rate) achieved by the applica-
+tion, within its share of the available storage server cache.
+Soundararajan et al [22] propose an alternate mechanism
+where the service provider ﬁrst executes each application in
+isolation on the entire infrastructure, and then, executes ap-
+plications by sharing the available infrastructure among all
+the applications in order to determine the possible SLOs of
+applications, such that resources are best utilized and ser-
+vice provider revenues are maximized. In our work, the SLO
+speciﬁcations of applications are indicative of the maximum
+degradation tolerable in terms of average I/O access laten-
+cies, with respect to their average I/O latencies with a fair
+share of the aggregate cache space at each level (i.e., equal
+partitioning of the storage cache space at each level). For
+instance, if an application’s average I/O latency is 10 ms for
+hundred I/O accesses in the fair share case and the speciﬁed
+SLO is 5% maximum tolerable degradation, then the service
+level guarantee provided to the application in terms of mean
+I/O latency would be a maximum of 10.5 ms for hundred
+I/O accesses.
+
+Note that, by specifying the SLO in terms of fair share
+of the cache space, we can guarantee that the service level
+objectives are always met irrespective of the load on the
+system. Although one may argue that, for such an SLO
+speciﬁcation, we can trivially adopt to a static fair partition
+to ensure that SLO is always guaranteed, such a scheme
+would not optimize global performance of all the applica-
+tions. We also believe that a minimal performance guaran-
+tee is necessary for any performance optimization scheme,
+as a purely performance oriented scheme (targeting a global
+performance metric) may harm some application’s perfor-
+mance beyond tolerable limits. Therefore, our objective is to
+maximize a global performance metric without aﬀecting the
+performance of any single application beyond what it can
+tolerate (speciﬁed as an SLO requirement). Alternatively,
+one can think of SLO being speciﬁed as an absolute value
+of performance (e.g., maximum tolerable average latency).
+However, in order to guarantee such an absolute minimum
+performance, we need to have an admission control policy.
+Our scheme can be extended to have an admission control
+policy by estimating the amount of resources remaining af-
+ter satisfying the SLO requirements of each application, as
+we can compute this information at runtime.
+
+2.2 A Motivating Example
+
+We present a motivating example to highlight the need for
+multi-level storage cache partitioning. We experiment with
+four high-performance, I/O-intensive applications: BTIO,
+HPIO, MPI-Tile-IO, and IOR. The detailed characteristics
+of these applications as well as detailed description of our
+experimental platform are given later in Section 4. We ex-
+periment with two I/O servers at the ﬁrst level and four
+
+213
+
+Independent
+First-Level-Only
+
+Uncontrolled
+Second-Level-Only
+
+ 
+
+y
+c
+n
+e
+t
+a
+L
+ 
+O
+/
+I
+ 
+
+d
+e
+z
+i
+l
+
+a
+m
+r
+o
+N
+
+1.15
+
+1.05
+
+0.95
+
+0.85
+
+0.75
+
+0.65
+
+0.55
+
+0.45
+
+BTIO
+
+HPIO
+
+IOR
+
+MPI-TILE-IO
+
+Figure 3: Normalized I/O latencies observed by ap-
+plications under diﬀerent schemes of execution.
+
+storage servers at the second level. Two applications (BTIO
+and HPIO) share the ﬁrst I/O server and the other two
+applications (MPI-Tile-IO and IOR) share the second I/O
+server. The storage servers at the second level are shared by
+all four applications. We conducted experiments with the
+following four diﬀerent schemes: independent, uncontrolled,
+ﬁrst-level only, and second-level only.
+
+In the independent scheme, each application is executed
+alone on the entire system and hence applications do not
+share available resources and there is no interference from
+any other application. In the uncontrolled scheme, all the
+four applications are executed on the entire system at the
+same time, without enforcing any partitioning of the shared
+storage cache space. The ﬁrst-level only and second-level
+only schemes, partition only the ﬁrst and second levels of
+storage caches (using the miss ratio curves as described in
+[33]), respectively while the other level is shared by all the
+applications. Figure 3 presents our results with I/O latency
+normalized with respect to fair share cache allocation in both
+the levels of cache. We see that the I/O latency achieved by
+applications in the independent scheme is the best possible
+value the system can provide for individual applications. An
+SLO speciﬁcation of a maximum tolerable degradation of 5%
+of average I/O latency from the fair share cache allocation
+in both the levels of cache was used for this experiment. We
+see from these results that the uncontrolled scheme and ﬁrst-
+level-only scheme always violate the SLO speciﬁcation. The
+second-level-only scheme meets the speciﬁcation only in the
+case of IOR and violates the speciﬁcation for the remaining
+applications. Managing only the second level leads to im-
+proved I/O latencies compared to managing only the ﬁrst
+level or uncontrolled schemes in general (except MPI-Tile-
+IO), as the cost of missing in the second level (disk access
+latency) is much higher than the cost of missing in the ﬁrst
+level, i.e., accessing the storage servers. However, in case of
+MPI-Tile-IO, the storage cache hit rate in the I/O servers
+(ﬁrst level) is so high that management of ﬁrst level only
+overcomes the beneﬁts of managing only the second level.
+Hence, in this case, managing only the ﬁrst level gives bet-
+ter results compared to uncontrolled and second level only
+schemes, though it still does not meet the speciﬁed SLO.
+These results motivate the need for an alternate scheme for
+managing these two levels of storage cache space. In the rest
+of this paper, we present and evaluate a scheme that parti-
+tions both levels of storage caches in a coordinated fashion.
+
+Applications’ Service Level Agreement (SLAs)
+
+Step 1.1: Application characterization step 
+builds per-application latency model using 
+builds per-application latency model using 
+
+statistical regression
+
+Step 1.2: SLO fulfillment step determines 
+Step 1.2: SLO fulfillment step determines 
+minimal allocations in two levels of cache 
+necessary to satisfy the SLO requirements
+
+Step 1.3: Infeasible partition filtering step 
+
+eliminates allocations that overrule 
+constraints on available cache space
+
+Step 1.4: Fair speedup optimization step 
+allocates the remaining cache space to 
+
+applications to maximize fair speedup metric
+
+Linear Programming Module distributes 
+
+cache allocation in the second level among 
+
+multiple storage servers
+multiple storage servers
+
+o
+t
+ 
+ 
+ 
+l
+l
+l
+
+a
+a
+a
+v
+v
+v
+r
+r
+r
+e
+e
+e
+t
+t
+t
+n
+n
+n
+
+i
+i
+i
+ 
+ 
+ 
+t
+t
+t
+n
+n
+n
+e
+e
+e
+m
+m
+m
+e
+e
+e
+c
+c
+c
+r
+r
+r
+o
+o
+o
+f
+f
+f
+n
+n
+n
+e
+e
+e
+y
+y
+y
+r
+r
+r
+e
+e
+e
+v
+v
+v
+e
+e
+e
+n
+n
+n
+
+ 
+ 
+ 
+
+ 
+ 
+ 
+
+i
+i
+i
+ 
+ 
+ 
+k
+k
+k
+c
+c
+c
+a
+a
+a
+b
+b
+b
+d
+d
+d
+e
+e
+e
+e
+e
+e
+F
+F
+F
+
+ 
+ 
+ 
+
+y
+y
+y
+c
+c
+c
+a
+a
+a
+r
+r
+r
+u
+u
+u
+c
+c
+c
+c
+c
+c
+a
+a
+a
+n
+n
+n
+o
+o
+o
+i
+i
+i
+t
+t
+t
+c
+c
+c
+i
+i
+i
+d
+d
+d
+e
+e
+e
+r
+r
+r
+p
+p
+p
+e
+e
+e
+v
+v
+v
+o
+o
+o
+r
+r
+r
+p
+p
+p
+m
+m
+m
+
+ 
+ 
+ 
+
+i
+i
+i
+
+ 
+ 
+
+:
+1
+1
+p
+p
+e
+e
+t
+t
+S
+S
+
+ 
+ 
+ 
+
+e
+e
+e
+g
+g
+g
+a
+a
+a
+r
+r
+r
+o
+o
+o
+t
+t
+t
+S
+S
+S
+
+ 
+ 
+ 
+l
+l
+l
+
+e
+e
+e
+v
+v
+v
+e
+e
+e
+L
+L
+L
+-
+i
+t
+l
+u
+M
+
+i
+i
+
+g
+g
+n
+n
+n
+n
+o
+o
+i
+i
+t
+t
+i
+i
+t
+t
+r
+r
+a
+a
+P
+P
+e
+e
+h
+h
+c
+c
+a
+a
+C
+C
+
+ 
+ 
+
+ 
+
+ 
+:
+2
+p
+e
+t
+S
+
+ 
+ 
+
+e
+e
+g
+g
+a
+a
+r
+r
+o
+o
+t
+t
+S
+S
+ 
+ 
+r
+r
+e
+e
+v
+v
+r
+r
+e
+e
+S
+S
+-
+i
+i
+t
+t
+l
+l
+u
+u
+M
+M
+
+i
+i
+i
+
+g
+g
+g
+n
+n
+n
+n
+n
+n
+o
+o
+o
+i
+i
+i
+t
+t
+t
+i
+i
+i
+t
+t
+t
+r
+r
+r
+a
+a
+a
+P
+P
+P
+e
+e
+e
+h
+h
+h
+c
+c
+c
+a
+a
+a
+C
+C
+C
+
+ 
+ 
+ 
+
+Figure 4: High level operation of our scheme with
+applications issuing requests to the I/O server in
+turn serviced by storage servers.
+
+3. MLMS: MULTI-LEVEL MULTI-SERVER
+
+STORAGE CACHE PARTITIONING
+
+3.1 Overview
+
+Our multi-level multi-server storage cache partitioning scheme
+
+(MLMS) consists of two main steps at a high level as shown
+in Figure 4. The ﬁrst step considers the multi-level partition-
+ing by allocating storage cache space between the two levels
+of caching: I/O servers and storage servers. In the second
+step, we further partition the allocation of each application
+across available multi-server storage caches.
+
+As shown in Figure 4, step 1 of MLMS is divided into four
+sub-steps: application characterization, SLO fulﬁllment, in-
+feasible partition ﬁltering, and fair speedup optimization.
+We describe the these steps in detail in the following sec-
+tion. The cache partition sizes determined for each applica-
+tion in both I/O server cache and storage server cache are
+enforced for an interval of time called the enforcement inter-
+val. In every enforcement interval, our algorithm records the
+observed I/O latency and current cache size allocation for
+each application at run-time and gives a feedback, so that
+it is able to repartition the caches, thereby capturing the
+dynamic phase changes exhibited by applications. Applica-
+tions and storage servers can be partially connected where
+each application Appi can be serviced from a subset of K dif-
+ferent storage servers St Serv 1, St Serv 2...St Serv K, or
+fully connected where each application Appi can be serviced
+from all the K servers.
+
+3.2 Step 1: Multi-Level Cache Partitioning
+
+The multi-level cache partitioning scheme used in MLMS
+can be divided into four steps. In the ﬁrst step, called the
+application characterization step, we build a per-application
+I/O latency model as a function of the two-levels of storage
+cache allocations using statistical regression. In the second
+step, called the SLO fulﬁllment step, we determine the mini-
+mal allocations in the two levels of cache necessary to satisfy
+the SLO requirements for each of the applications. In the in-
+feasible partition ﬁltering step, we eliminate the allocations
+to multiple applications that overrule the constraints on the
+
+214
+
+Figure 5: Application characterization model and its use in the SLO fulﬁllment step.
+
+(a) The three-dimensional I/O latency model
+maintained for every application at run-time.
+The model is updated with new cache alloca-
+tions in both levels of caches and their corre-
+sponding I/O latency values in every enforce-
+ment interval.
+
+available storage cache in the servers shared by multiple ap-
+plications.
+In the fourth and the ﬁnal step, fair speedup
+optimization, we allocate the remaining cache space in all
+servers to each application in a way that maximizes the sys-
+tem performance as measured by the fair speedup metric.
+Step 1.1: Application characterization. Our approach
+employs a prediction module that helps us decide the min-
+imum amount of cache space (from both I/O and storage
+servers) to satisfy the SLO for an application. More speciﬁ-
+cally, we use statistical regression to build a prediction model
+that models the I/O access latency of each application as a
+function of the total cache space required at each level. Sta-
+tistical regression [19] is an established tool to ﬁnd the best
+curve that ﬁts a set of measured values. We use the method
+of least squares to ﬁnd the regression curve because it min-
+imizes the sum of the squared errors in prediction. An im-
+portant property of regression is that the best ﬁt curve can
+be computed incrementally from a set of measured values.
+The more values we have, the more accurate is the predic-
+tion. However, we can start predicting with as few values as
+necessary. The learning module builds the per-application
+I/O latency model using the least squares method using a
+certain number of sampling points while bootstrapping the
+whole process. Once a partition is determined at the end of
+the fair speedup optimization step and enforced, the newly
+measured I/O latency values for the enforced cache alloca-
+tions is used to update the model. This way, the algorithm
+iteratively updates each application’s latency model at every
+enforcement interval in order to experimentally gather more
+sample points to increase the accuracy of prediction. Figure
+5(a) gives a sample 3-D I/O latency surface at a particu-
+lar enforcement interval built for an application. Using this
+curve, one can predict the set of (I/O server cache, storage
+server cache) values that satisfy the SLO for this applica-
+tion. Note that, since this curve is updated at runtime, we
+use the most recently observed I/O latency values (i.e., cap-
+ture dynamic phase changes) and consequently, make better
+predictions.
+Step 1.2: SLO fulﬁllment. In every enforcement inter-
+val, the I/O latency model built in the application char-
+acterization step and the service level objective, SLOAppi
+from each application Appi is used to calculate the assured
+I/O latency IO Latassured for each application. Recall that,
+the SLOs are indicative of the maximum degradation toler-
+able in average I/O latencies, with respect to their I/O la-
+
+(b) The points of intersection between the
+plane perpendicular to the latency axis at la-
+tency = IO Latassured and the 3-D model
+represent the points that fulﬁll the SLO re-
+quirements of the application.
+
+tencies in fair share of cache space in I/O servers at the
+ﬁrst level and storage servers at the second level. That
+is, if IO Latf air is the I/O latency of an application Appi
+when allocated a fair share of cache in both levels of storage
+caches, then the assured I/O latency (even in the presence
+of other applications), IO Latassured for that application
+would be IO Latassured = SLOAppi × IO Latf air. Using
+the 3-D surface model and the calculated IO Latassured, we
+obtain several points that lie on the curve and intersect an
+imaginary plane perpendicular to the I/O latency axis at a
+value of IO Latassured, i.e., cache allocations on each level
+of the storage cache hierarchy that can satisfy the speciﬁed
+SLO. This is depicted in Figure 5(b). These cache alloca-
+tion points form the SLO fulﬁllment set for each applica-
+tion. The remaining points are not of interest because those
+points either do not satisfy the SLO (that are above the
+IO Latassured) or (those that are below the IO Latassured)
+belong to a large set of points, and selecting any point in this
+set may not yield a fair global cache allocation when multi-
+ple applications are executing in the system. Therefore, our
+SLO fulﬁllment set for each application contains points that
+intersect the curve at the value of IO Latassured.
+Step 1.3: Infeasible partition ﬁltering. Theoretically,
+any of the cache allocations from the SLO fulﬁllment set of
+an application satisﬁes the SLO requirement of that applica-
+tion. However, in practice, considering the manner in which
+applications share the storage caches in the I/O servers and
+the storage servers, we can derive constraints on the avail-
+able cache space for combinations of applications. From the
+set of all possible allocations of the available cache space
+(considering the sharing among applications) that are pre-
+dicted to satisfy the SLO of all the applications, we ﬁlter out
+all the allocations that do not satisfy the constraints on the
+available cache space. We call the remaining set of alloca-
+tions as the feasibility set. For example, if two applications
+share an I/O server cache and the feasibility set contains an
+entry (that meets the SLO requirements) such that the sum
+of allocations in the I/O server cache exceeds the available
+cache space, we eliminate such allocations in this step.
+Step 1.4: Fair speedup optimization. Although any
+point from the feasibility set can be chosen to determine the
+cache allocations in the ﬁrst and second levels, the criteria
+used for selecting the point from the many feasible options
+is important because it determines the free cache space re-
+maining in each level after satisfying the speciﬁed SLO and
+
+215
+
+thereby determines the opportunity for optimizing a global
+performance metric such as fair speedup. Once the cache
+capacity required to satisfy the SLO of applications is allo-
+cated, we have two scenarios: (1) All SLO requirements were
+met and no cache resources were spared or (2) All SLO re-
+quirements were met and some cache resources were spared.
+In the second case, we need to distribute the remaining
+cache space among the applications. For each allocation in
+the feasibility set, we compute a distribution of the remain-
+ing cache space at each level. The remaining cache space
+(at each level) can either be equally distributed among all
+concurrently-executing applications or be distributed among
+applications in proportion to the projected gains that each
+application will exhibit in terms of reducing the I/O latency
+per-unit allocation of cache at that level. We use the second
+approach since our objective is to improve the system perfor-
+mance once SLOs of applications are satisﬁed. Fair-speedup
+metric [5] is a metric used to quantify the improvements
+in I/O latency when multiple applications are using the sys-
+tem. The fair-speedup metric (FS) relative to a base scheme
+is deﬁned as the harmonic mean of per application I/O la-
+tency improvement with respect to the base scheme (fair
+share): F S(scheme) = N/ PN
+, where N is
+the number of applications in the workload. Note that, fair
+speedup metric is an indicator of the overall improvement in
+I/O latencies across the applications. Another key property
+of the fair speedup metric is that it increases when an ap-
+plication’s I/O latency improves without hurting the other
+applications. This is possible if the other applications can
+achieve the same I/O latency with a lower cache allocation.
+By deﬁnition, the base scheme has a fair speedup of 1 and a
+higher value of the fair speedup metric indicates better im-
+provement in I/O latency as well as better fairness among
+applications. Therefore, we can obtain a possible partition of
+the caches at multiple levels for each entry in the feasibility
+set that now utilizes all the available cache apart from guar-
+anteeing that SLO requirements of all applications are met.
+For each of these alternatives, we compute the predicted fair
+speedup achieved for the set of concurrently-executing ap-
+plications (from the per-application I/O latency model) and
+choose the partition that derives the highest fair speedup.
+This ensures that we improve the fair speedup achieved to
+the best possible extent after utilizing all the available cache
+space at each level.
+
+IOAppi (scheme)
+
+IOAppi (base)
+
+i=1
+
+Algorithm 1 details the diﬀerent steps in multi-level par-
+titioning. The storage cache sizes determined at I/O server
+and storage server that satisfy the SLO of each application
+are given by Alloc IOServAppi and Alloc StorageServAppi,
+respectively.
+If any unused cache space remains after the
+SLOs are satisﬁed, we distribute it among applications in
+proportion to projected gains of each application to deter-
+mine CS IOServAppi and CS StorageServAppi, the total
+cache space to be allocated to each application in I/O server
+and storage server in the storage cache hierarchy. We can en-
+force the determined cache size in I/O server (CS IOServAppi)
+for each application directly, as we assume in our system
+model that each application caches its data in only one I/O
+server at the ﬁrst level. However, CS StorageServAppi is to
+be distributed for each application among multiple storage
+servers at the second level. The next subsection describes
+this multi-server cache partitioning in more detail.
+
+Algorithm 1: Multi Level partition(Napps, NIOS ,
+IOScap[NIOS ], NST S , ST Scap[NST S ], SLO App[Napps])
+
+/*Napps: number of applications, NIOS : number of IO servers,
+IOScap[NIOS ]: cache capacity of IO servers,
+NST S : number of storage servers,
+ST Scap[NST S ]: cache capacity of storage servers,
+SLO[Napps]: SLO speciﬁcation of each application
+
+Goal: Maximizes fair speedup and maintains latency of each
+application bounded within SLO of the application*/
+
+// Application characterization step (one-time)
+for i ← 1 to Napps
+
+do
+
+Initialize IOSalloc and ST Salloc to bootstrap allocations
+Bootstrap(IOSalloc, ST Salloc)
+
+for each enforcement interval
+
+for i ← 1 to Napps // for each app
+
+// Application characterization (iterative)
+IOlats[i] ← measured IO latencies for app i
+Build3DmodelusingIOlats[i], IOSalloc, ST Salloc
+
+Napps
+
+Napps
+
+// SLO fulﬁllment step
+IOSf air ← IOSaggregate
+,
+ST Sf air ← ST Saggregate
+IO latf air[i] ←
+GET Latency(3D surf [i], IOSf air, ST Sf air)
+IO latassured[i] ← SLO Appi × IO latf air[i]
+SLO f ulf illment set ← points that lie on a
+plane that intercepts the 3D surf [i] at
+latency=IO latassured[i]
+
+do
+
+8
+
+>>>>>>>>>>>>>>>>>>>>>><
+>>>>>>>>>>>>>>>>>>>>>>:
+
+do
+
+// Infeasible partition ﬁltering step
+Filter the infeasible partitions from possible combinations
+of allocations (Alloc Level1Appi, Alloc Level2Appi)
+from the SLO fulﬁllment set of each application
+to eliminate entries requiring more than available
+aggregate cache at either level to get the feasibility set
+
+// Fair speedup optimization step
+for each (IOS Appi, ST S Appi) for each application i
+in the feasibility set
+
+Napps
+i=1
+
+IOS Appi <
+
+NIOS
+j=1
+
+IOScap[j]
+
+“P
+Distribute
+according to projected gain among applications
+
+IOScap[j] −
+
+NIOS
+j=1
+
+Napps
+i=1
+
+P
+
+”
+
+IOS Appi
+
+P
+
+P
+
+Napps
+i=1
+
+ST S Appi <
+
+NST S
+j=1
+
+ST Scap[j]
+
+“P
+Distribute
+according to marginal gain among applications
+
+ST Scap[j] −
+
+NST S
+j=1
+
+Napps
+i=1
+
+P
+
+”
+
+ST S Appi
+
+Predict the fair speedup from each partition. Select
+the overall partition (CS Level1Appi, CS Level2Appi)
+that achieves maximum fair speedup.
+
+P
+
+P
+
+if
+
+(
+
+if
+
+(
+
+8
+
+>>>>>>>>>>><
+>>>>>>>>>>>:
+
+
+
+8
+
+>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>><
+>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>:
+
+3.3 Step 2: Multi-Server Cache Partitioning
+
+The second step of our MLMS partitioning scheme (see
+Figure 4) involves multi-server cache partitioning, where the
+total cache space required by each application in the second
+level (ST SApp1, ST SApp2 . . . ST SAppN , obtained from ﬁrst
+step of our algorithm) is distributed across available stor-
+age server caches using a linear programming (LP) based
+model. We formulate the problem as a system of linear
+equations in the following manner. Suppose each server
+St Server j has a total storage cache capacity of ST SSizej.
+We partition each server cache (St Server j) such that the
+cache allocation ST SAppi for each application Appi, is dis-
+tributed across K servers under the following constraints:
+PK
+j=1 cij ≥ ST SAppi where cij is the share of application
+
+216
+
+Table 1: Important experimental parameters.
+
+Parameter
+
+Value
+
+Number of I/O Servers
+
+Number of Storage Servers
+
+Number of Applications
+I/O Server Cache Size
+
+Storage Server Cache Size
+
+Disk Capacity
+
+Disk RPM
+
+Disk Seek Time
+
+Enforcement Interval
+
+Cache Block Size
+
+Replacement Policy in I/O Server Cache
+
+Replacement Policy in Storage Server Cache
+
+Service Level Objective (SLO)
+
+2
+4
+4
+
+512 MB
+
+1 GB
+1 TB
+10,045
+5 msec
+30 sec
+16 KB
+LRU
+LRFU
+
+5%
+
+Appi in cache St Server j, where j ranges from 1 to K.
+Also, the total cache used by concurrently running applica-
+tions on each server St Server j is less than or equal to its
+total available cache ST SSizej , i.e., PN
+i=1 cij ≤ ST SSizej .
+The LP solver determines every cij (the share of application
+Appi in cache St Server j) using the constraints mentioned
+above. MLMS enforces the determined cache partition sizes
+(cij) in every enforcement interval during runtime to cater
+to the dynamically-changing storage cache requirements of
+the applications.
+It is important to note that the solver
+distributes cache allocations’ of each application over the
+available server caches as uniformly as possible so that no
+single server is overloaded.
+
+4. MEASUREMENT AND ANALYSIS
+
+4.1 Experimental Setup and Applications
+
+We built a storage cache simulator to support multiple
+storage servers and two-level storage caching. It is interfaced
+with DiskSim 3.0, an accurate time-aware disk simulator
+[29] that simulates the Seagate ST39102LW disk model. It
+is possible to measure individual cache hit rates and I/O
+access latency of applications in both the I/O server caches
+and the storage server caches. To interface with the linear
+programming module, we have integrated this setup with
+PCx [3], an LP solver. PCx is an interior point predictor-
+corrector linear programming package.
+
+Our simulator uses application traces that were collected
+using a modiﬁed version of strace. Traces record informa-
+tion about the I/O operations with access type, time, ﬁle
+identiﬁer (inode), and I/O size. The applications are ex-
+ecuted on four compute nodes. We use four large scale
+traces of the following I/O-intensive applications in the high-
+performance domain: BTIO is a NAS Parallel Benchmark
+that is an I/O version of the BT (Block Tridiagonal) bench-
+mark [27]. The BT benchmark is based on a CFD code
+that uses an implicit algorithm to solve the 3D compress-
+ible Navier-Stokes equations.
+It performs large reads and
+writes using basic MPI I/O to perform the ﬁle operations.
+We use class B version of the benchmark and it outputs
+1.6GB data. IOR is a ﬂexible I/O benchmark developed
+by the Scalable I/O Project (SIOP) at LLNL that performs
+Interleaved or Random (IOR) reads and writes to/from a
+single ﬁle [21]. The application operates on a single shared
+ﬁle with maximum write at 183MB/sec and maximum read
+at 282MB/sec. HP-IO is a high-performance I/O bench-
+mark that is used as a tool for evaluating/debugging non-
+
+contiguous I/O performance for MPI-IO [2]. It allows the
+user to specify a variety of noncontiguous I/O access pat-
+terns and verify the output. Finally, MPI-tile-I/O is an
+application that tests the performance of MPI-I/O for non-
+contiguous access workload. We also use four large scale
+traces of the following applications in the enterprise domain:
+TPCC is an on-line transaction processing (OLTP) appli-
+cation trace, that involves a mix of ﬁve diﬀerent concurrent
+transactions on a database [16]. We collected traces of the
+TPCC database benchmark on Postgres 7.1.2. TPC-H is a
+decision support benchmark that exercises diﬀerent ad-hoc
+queries and concurrently modiﬁes the database. The queries
+involve a huge volume of I/O read and write requests. TPC-
+R is a business reporting and decision support benchmark
+similar to TPC-H, but with additional optimizations based
+on advance knowledge of the queries. It consists of a suite
+of business oriented queries and concurrent data modiﬁca-
+tions. Glimpse, which stands for GLobal IMPlicit SEarch,
+provides indexing and query schemes for ﬁle systems, and
+is used to search for text strings under the /usr directory
+[17]. The applications have been scaled to operate on disk-
+resident data sets ranging from 4GB to 20GB.
+
+These applications have been chosen such that they cover
+a large spectrum of data intensiveness and exhibit varying
+data access/reuse patterns and storage cache locality. Each
+application has a speciﬁc average I/O latency requirement
+speciﬁed as its SLO. Our default conﬁguration of a multi-
+server platform consists of two I/O servers and four storage
+servers executing four applications, with a 512MB storage
+cache in each of the I/O servers, which gives an aggregate
+shared cache capacity of 1GB in the ﬁrst level and a 1GB
+storage cache in each of the storage servers, which gives an
+aggregate shared capacity of 4GB in the second level.
+In
+this conﬁguration, two applications share each of the I/O
+servers in the ﬁrst level and all the four applications share
+the storage servers in the second level of the system. Each
+time a cache allocation is made, it is enforced for an interval
+of enforcement interval which has a default value of 30 sec.
+We use 16 KB cache blocks in all our experiments. We
+study the behavior of applications after warming the cache
+for 1/10 of the execution time of the applications, and the
+SLO is set to 5% for all the applications. Table 1 lists the
+default values of our major simulation parameters.
+
+4.2 Base Schemes
+
+Independent: In this scheme, the entire infrastructure
+is available to each application. The applications are ex-
+ecuted independently and hence there is no sharing. The
+I/O latency in this scheme provides an upper bound on the
+improvements our scheme can achieve.
+
+Fair share: In this scheme, the aggregate storage cache
+is divided equally amongst competing applications and each
+application can use only its assigned allocation, thereby pro-
+viding isolation. Note that this is a static allocation scheme
+and the allocations do not change to cater to the varying
+resource demands of the applications with time. The SLO
+can be determined with reference to either the independent
+scheme or the fair share scheme. We use the fair share
+scheme as a guideline to specify the SLO in our experiments.
+In this scheme, all server
+caches are shared among the concurrently-executing appli-
+cations and the amount of storage cache used by any appli-
+cation is bound only by the aggregate cache capacity of the
+
+Uncontrolled partitioning:
+
+217
+
+Independent
+First-Level-Only
+First-Level-Only
+
+Uncontrolled
+Second-Level-Only
+Second-Level-Only
+
+Independent
+First-Level-Only
+First-Level-Only
+
+Uncontrolled
+Second-Level-Only
+Second-Level-Only
+
+FairShare-LRU
+Uncontrolled-LRU
+MLMS-LRU
+MLMS-LRU
+
+FairShare-LRFU
+Uncontrolled-LRFU
+MLMS-LRFU
+MLMS-LRFU
+
+FairShare-LRU
+Uncontrolled-LRU
+MLMS-LRU
+MLMS-LRU
+
+FairShare-LRFU
+Uncontrolled-LRFU
+MLMS-LRFU
+MLMS-LRFU
+
+ 
+ 
+ 
+ 
+ 
+
+y
+y
+y
+y
+y
+c
+c
+c
+c
+c
+n
+n
+n
+n
+n
+e
+e
+e
+e
+e
+t
+t
+t
+t
+t
+a
+a
+a
+a
+a
+L
+L
+L
+L
+L
+ 
+ 
+ 
+ 
+ 
+O
+O
+O
+O
+O
+/
+/
+/
+/
+/
+I
+I
+I
+I
+I
+ 
+ 
+ 
+ 
+ 
+
+d
+d
+d
+d
+d
+e
+e
+e
+e
+e
+z
+z
+z
+z
+z
+i
+i
+i
+i
+i
+l
+l
+l
+l
+l
+
+a
+a
+a
+a
+a
+m
+m
+m
+m
+m
+r
+r
+r
+r
+r
+o
+o
+o
+o
+o
+N
+N
+N
+N
+N
+
+1.2
+1.1
+1.1
+1
+0.9
+0.9
+0.8
+0.7
+0.6
+0.6
+0.5
+0.4
+0.4
+
+1.3
+
+1.2
+1.2
+
+1.1
+
+1
+
+0.9
+0.9
+
+ 
+ 
+ 
+ 
+ 
+
+y
+y
+y
+y
+y
+c
+c
+c
+c
+c
+n
+n
+n
+n
+n
+e
+e
+e
+e
+e
+t
+t
+t
+t
+t
+a
+a
+a
+a
+a
+L
+L
+L
+L
+L
+ 
+ 
+ 
+ 
+ 
+O
+O
+O
+O
+O
+/
+/
+/
+/
+/
+I
+I
+I
+I
+I
+ 
+ 
+ 
+ 
+ 
+
+d
+d
+d
+d
+d
+e
+e
+e
+e
+e
+z
+z
+z
+z
+z
+i
+i
+i
+i
+i
+l
+l
+l
+l
+l
+
+0.8
+
+a
+a
+a
+a
+a
+m
+m
+m
+m
+m
+r
+r
+r
+r
+r
+0.7N
+o
+o
+o
+o
+o
+N
+N
+N
+N
+0.6
+0.6
+
+y
+y
+y
+y
+y
+c
+c
+c
+c
+c
+n
+n
+n
+n
+n
+e
+e
+e
+e
+e
+t
+t
+t
+t
+t
+a
+a
+a
+a
+a
+L
+L
+L
+L
+L
+ 
+ 
+ 
+ 
+ 
+O
+O
+O
+O
+O
+/
+/
+/
+/
+/
+I
+I
+I
+I
+I
+ 
+ 
+ 
+ 
+ 
+
+d
+d
+d
+d
+d
+e
+e
+e
+e
+e
+z
+z
+z
+z
+z
+i
+i
+i
+i
+i
+l
+l
+l
+l
+l
+
+a
+a
+a
+a
+a
+m
+m
+m
+m
+m
+r
+r
+r
+r
+r
+o
+o
+o
+o
+o
+N
+N
+N
+N
+N
+
+1.2
+
+1.1
+1.1
+
+1
+1
+
+0.9
+
+0.8
+
+0.7
+0.7
+
+0.6
+0.6
+
+ 
+ 
+ 
+ 
+ 
+
+y
+y
+y
+y
+y
+c
+c
+c
+c
+c
+n
+n
+n
+n
+n
+e
+e
+e
+e
+e
+t
+t
+t
+t
+t
+a
+a
+a
+a
+a
+L
+L
+L
+L
+L
+ 
+ 
+ 
+ 
+ 
+O
+O
+O
+O
+O
+/
+/
+/
+/
+/
+I
+I
+I
+I
+I
+ 
+ 
+ 
+ 
+ 
+
+d
+d
+d
+d
+d
+e
+e
+e
+e
+e
+z
+z
+z
+z
+z
+i
+i
+i
+i
+i
+l
+l
+l
+l
+l
+
+a
+a
+a
+a
+a
+m
+m
+m
+m
+m
+r
+r
+r
+r
+r
+o
+o
+o
+o
+o
+N
+N
+N
+N
+N
+
+1.1
+
+1
+
+0.9
+
+0.8
+0.8
+
+0.7
+0.7
+
+0.6
+0.6
+
+BTIO
+
+HPIO
+
+TPCH
+
+TPCR
+
+tpch
+
+tpcr
+
+tpcc
+
+glimpse
+
+BTIO
+
+HPIO
+
+IOR
+
+MPI-TILE-IO
+
+tpch
+
+tpcr
+
+tpcc
+
+glimpse
+
+Comparison
+
+of
+(a)
+various
+schemes with
+our MLMS scheme in
+terms of I/O latencies
+of
+high-performance
+applications.
+
+(b) Comparison of var-
+ious schemes with our
+MLMS scheme in terms
+of I/O latencies of en-
+terprise applications.
+
+(a) Normalized
+latencies
+performance
+tions
+complete connectivity.
+
+I/O
+high-
+applica-
+executing with
+
+of
+
+(b) Normalized
+I/O
+latencies of enterprise
+applications
+execut-
+ing
+complete
+with
+connectivity.
+
+Figure 6: I/O latency in diﬀerent applications in
+comparison with diﬀerent base schemes.
+
+multi-server storage system. That is, the system does not
+enforce any partitioning of the shared storage cache in both
+the levels. Although this simple scheme is ﬂexible in accom-
+modating bursty traﬃc and encourages sharing of buﬀered
+data, more often than not, it is plagued by the problem of
+inter-application interferences, leading to unpredictable ap-
+plication behavior. This leads to lack of performance guar-
+antees.
+
+First level only: This scheme learns a model of the vari-
+ations in I/O latency with allocation of storage cache in the
+I/O servers only and the storage caches in the second level,
+i.e., storage servers are shared by all the applications.
+
+Second level only: This scheme learns a model of the
+variations in I/O latency with allocation of storage cache in
+the storage servers only and the storage caches in the I/O
+servers, i.e., the ﬁrst level are shared by all the applications
+that have access to them. Note that these last two schemes
+are special cases of MLMS.
+
+4.3 Overheads
+
+The overheads involved in computations in the multi-level
+cache partitioning step is insigniﬁcant compared to the pe-
+riod of the enforcement interval.
+It is roughly about 20
+milliseconds, once in every enforcement interval of 30 sec-
+onds, corresponding to an overhead of about 0.07%. The
+overhead in multi-server cache partitioning that comes from
+the linear programming step is also very small, since our lin-
+ear programming problem is relatively simple. Speciﬁcally,
+it costs about 90 milliseconds in every enforcement interval,
+on an average (0.3% overhead). Note that, we are simulat-
+ing the entire framework and the results presented in Section
+4.4 include all these overheads.
+
+4.4 Performance Analysis
+
+We performed experiments to compare our MLMS scheme
+with respect to the base schemes described above. Figure 6
+plots the I/O latency of applications normalized with respect
+to the fair share case, assuming an SLO of 5% degradation
+for all the applications from their respective fair share of
+storage cache space. We present results with both the high-
+performance applications and the applications in the enter-
+prise domain. We can see that the base schemes in general
+violate the SLO speciﬁcation in most of the cases. The un-
+controlled partitioning and ﬁrst-level only schemes almost
+
+Figure 7: Normalized I/O latencies under diﬀerent
+replacement policies and inclusive/exclusive hierar-
+chies. Each bar in the graph is represented by the
+x–y notation, where x is the allocation strategy and
+y is the replacement policy.
+
+never satisfy the speciﬁed SLO. However, in case of glimpse,
+the results obtained from the uncontrolled partitioning and
+ﬁrst-level only schemes satisfy the SLO, mostly because the
+data set size in glimpse is small enough to ﬁt into the two
+levels of storage caches used in our experiment. Hence, I/O
+latency values are not very sensitive to the diﬀerent schemes
+used. The second-level-only scheme meets the speciﬁcation
+only in the case of IOR and glimpse and violates the speci-
+ﬁcation for all other applications.
+
+In general, managing only the second level leads to im-
+proved I/O latencies compared to managing only the ﬁrst
+level or uncontrolled schemes, probably because a miss in
+the second level storage cache has higher penalty in terms
+of access latency as compared to a miss in the ﬁrst level
+cache. However, in case of MPI-Tile-IO and tpcc, the stor-
+age cache hit rate in the I/O servers is so high that manage-
+ment of ﬁrst level only overcomes the beneﬁts of managing
+only the second level. Our MLMS scheme combines the ad-
+vantages of both the ﬁrst-level only and second-level only
+schemes and performs signiﬁcantly better in terms of the
+average I/O latency of the application. It also satisﬁes the
+speciﬁed SLO constraint for all the applications. Apart from
+our objective metric, i.e., the fair speedup metric, we also
+use Overall I/O latency metric deﬁned as the sum of av-
+erage data access latencies of all the applications accessing
+the system, to quantify the improvements achieved. MLMS
+scheme achieves better average I/O latency of the four high-
+performance applications by 10.3% compared the speciﬁed
+service level objective and by up to 16.1% on an average
+on the overall I/O latency metric. The I/O latency values
+achieved in our MLMS scheme are as close to independent
+execution of individual applications as possible. In addition,
+as compared to the fair share case, we see 5.8% improve-
+ment on the fair speedup metric in case of high-performance
+applications, and 12.6% improvement in case of enterprise
+applications.
+
+Our MLMS scheme is a storage cache space allocation
+scheme and is orthogonal to the replacement policy used to
+manage the storage cache. The multi-level cache space allo-
+cation also works in the presence of inclusive/exclusive hi-
+erarchies. In order to measure the sensitivity of our MLMS
+scheme to the replacement policy and inclusive/exclusive na-
+
+218
+
+Table 2: Connectivity Matrix.
+Applications
+
+Storage Servers
+
+BTIO and TPC-H
+HPIO and TPC-R
+IOR and TPC-C
+
+MPI-Tile-IO and Glimpse
+
+Server3, Server4, Server2
+Server1, Server3, Server4
+Server2, Server4, Server1
+Server1, Server2, Server3
+
+ture of the multi-level hierarchy, we measured the MLMS
+scheme and two other base schemes (fair share and uncon-
+trolled) with the least recently used (LRU) replacement al-
+gorithm with inclusive caching in both the levels and the DE-
+MOTE scheme which uses exclusive caching between both
+the levels (with LRU in the ﬁrst level and least recently and
+frequently used (LRFU) replacement algorithm in the sec-
+ond level). The results given in Figure 7 are obtained with
+a system model in which any storage server can service ap-
+plications requests. We can see from this Figure 7 that the
+DEMOTE scheme with LRFU performs better than LRU
+in both levels with an inclusive hierarchy in general. This
+is true for any allocation scheme used whether it is static
+such as the fair share scheme or dynamic such as our MLMS
+scheme.
+It can also be observed that the MLMS scheme
+outperforms both the fair share and uncontrolled partition-
+ing schemes under both the LRU and LRFU replacement
+schemes. However, the choice of a good replacement pol-
+icy and exclusive caching is crucial to multi-level hierarchies
+as it is observed that fair share scheme with LRFU and
+exclusive caching can outperform our MLMS scheme with
+LRU and inclusive caching, although it is not better than
+MLMS with the LRFU policy itself. Overall, MLMS with
+LRFU outperforms the fair share and uncontrolled parti-
+tioning base schemes by 7.1% and 17.4%, respectively. To
+demonstrate that our scheme can be applied to any generic
+system architecture, in Figure 8 we present results compar-
+ing our MLMS scheme with respect to base schemes where
+applications are serviced by a subset of storage servers at
+the second level. The connectivity between applications and
+storage servers is as shown in Table 2. These results also in-
+dicate that our MLMS scheme works very well with partial
+connectivity as well (i.e., it satisﬁes SLOs of all the appli-
+cations, and achieves 5.7% and 13.1% improvement on the
+fair speedup metric compared to the fair share scheme, in
+high-performance applications and enterprise applications,
+respectively).
+
+4.5 Sensitivity Analysis
+Sensitivity to Cache sizes: The impact of changing the
+I/O server (ﬁrst level) cache size on the performance of our
+MLMS scheme was studied and the results are presented
+in Figure 9. As we can see from this ﬁgure, the MLMS
+scheme satisﬁes all application SLOs, irrespective of the I/O
+server cache size (256 MB to 1GB per server). In both high-
+performance applications (Figure 9(a)) and enterprise ap-
+plications (Figure 9(b)), we notice that increasing the I/O
+server cache size generally leads to better performance of
+MLMS due to higher amounts of cache remaining after sat-
+isfying the SLO. Note that our SLO speciﬁcation is relative,
+and therefore equal to 5% tolerable degradation from the
+fair share of the given amount of total I/O server cache.
+The improvements in overall I/O latency with the MLMS
+scheme over the fair share case with 256 MB, 512 MB and
+1 GB of I/O server cache is 7.9%, 8.2%, and 17.5%, re-
+
+FairShare-LRU
+Uncontrolled-LRU
+MLMS-LRU
+
+FairShare-LRFU
+Uncontrolled-LRFU
+MLMS-LRFU
+
+FairShare-LRU
+Uncontrolled-LRU
+MLMS-LRU
+
+FairShare-LRFU
+Uncontrolled-LRFU
+MLMS-LRFU
+
+BTIO
+
+HPIO
+
+IOR
+
+MPI-TILE-IO
+
+tpch
+
+tpcr
+
+tpcc
+
+glimpse
+
+(a) Normalized
+latencies
+performance
+tions
+partial connectivity.
+
+I/O
+high-
+applica-
+executing with
+
+of
+
+(b) Normalized
+I/O
+latencies of enterprise
+applications
+executing
+with partial connectiv-
+ity.
+
+Figure 8: Normalized I/O latencies under diﬀerent
+replacement policies and inclusive/exclusive hierar-
+chies. Each bar in the graph is represented by the
+x–y notation, where x is the allocation strategy and
+y is the replacement policy.
+
+256MB
+
+512MB
+
+1GB
+
+256MB
+
+512MB
+
+1GB
+
+y
+c
+n
+e
+t
+a
+L
+ 
+O
+/
+I
+ 
+
+d
+e
+z
+i
+l
+
+a
+m
+r
+o
+N
+
+1.2
+1.1
+1
+0.9
+0.8
+0.7
+0.6
+0.5
+0.4
+
+y
+c
+n
+e
+t
+a
+L
+ 
+O
+/
+I
+ 
+
+d
+e
+z
+i
+l
+a
+m
+r
+o
+N
+
+1
+
+0.95
+
+0.9
+
+0.85
+
+0.8
+
+0.75
+
+0.7
+
+0.65
+
+0.6
+
+y
+c
+n
+e
+t
+a
+L
+ 
+O
+/
+I
+ 
+
+d
+e
+z
+i
+l
+
+a
+m
+r
+o
+N
+
+1.2
+1.1
+1
+0.9
+0.8
+0.7
+0.6
+0.5
+0.4
+
+1
+1
+
+0.95
+
+0.9
+0.9
+
+0.85
+0.85
+
+0.8
+
+y
+y
+y
+y
+y
+c
+c
+c
+c
+c
+n
+n
+n
+n
+n
+e
+e
+e
+e
+e
+t
+t
+t
+t
+t
+a
+a
+a
+a
+a
+
+l
+l
+l
+l
+l
+ 
+ 
+ 
+ 
+ 
+
+O
+O
+O
+O
+O
+/
+/
+/
+/
+/
+I
+I
+I
+I
+I
+ 
+ 
+ 
+ 
+ 
+
+d
+d
+d
+d
+d
+e
+e
+e
+e
+e
+z
+z
+z
+z
+z
+i
+i
+i
+i
+i
+l
+l
+l
+l
+l
+
+0.75
+0.75
+
+a
+a
+a
+a
+a
+m
+m
+m
+m
+m
+0.7
+r
+r
+r
+r
+r
+o
+o
+o
+o
+o
+N
+N
+N
+N
+0.65N
+
+0.6
+0.6
+
+BTIO
+
+HPIO
+
+IOR
+
+MPI-TILE-IO
+
+tpch
+
+tpcr
+
+tpcc
+
+glimpse
+
+(a) Sensitivity of our
+MLMS scheme with re-
+spect
+I/O server
+(Level 1) cache size in
+high-performance stor-
+age systems.
+
+to
+
+(b) Sensitivity of our
+MLMS scheme with re-
+spect
+I/O server
+(Level 1) cache size in
+enterprise storage sys-
+tems.
+
+to
+
+Figure 9: Sensitivity of diﬀerent applications to
+changing cache size in the I/O server.
+
+spectively, in case of the high-performance applications and
+9.4%, 10.8%, and 24.2%, respectively, in case of the enter-
+prise applications. We also experimented by changing the
+storage server (second level) cache size on the performance
+of our MLMS scheme. We do not present the results here
+due to lack of space.
+In summary, the results show that
+the MLMS scheme satisﬁes all application SLOs for a wide
+range of storage server cache sizes and improves the overall
+I/O latency signiﬁcantly. The improvements in overall I/O
+latency in MLMS scheme from the fair share case, with re-
+spect to cache sizes 512 MB, 1 GB, and 2 GB were 6.4%,
+8.2%, and 19.5%, respectively, in case of high-performance
+applications and 9.6%, 10.8%, and 19.2%, in case of enter-
+prise applications.
+Sensitivity to SLO speciﬁcation: Figure 10 shows the
+sensitivity of our MLMS scheme to the speciﬁed SLO re-
+quirement. Note that, when applications specify a higher
+tolerable degradation in the performance from the fair share
+case, the fair speedup optimization step becomes a more
+dominant factor in the decision of the ﬁnal partition chosen
+as there would be many entries in the feasibility set at the
+end of the previous step (infeasible partition ﬁltering step).
+This can be observed as a huge improvement in performance
+in some of the applications that derive maximum beneﬁts
+
+219
+
+1%
+
+5%
+
+10%
+
+1%
+
+5%
+
+10%
+
+BTIO MPI-TILE-IO
+
+y
+c
+n
+e
+t
+a
+L
+ 
+O
+/
+I
+ 
+
+d
+e
+z
+i
+l
+
+a
+m
+r
+o
+N
+
+1.05
+1
+0.95
+0.9
+0.85
+0.8
+0.75
+0.7
+0.65
+0.6
+
+y
+y
+y
+y
+y
+c
+c
+c
+c
+c
+n
+n
+n
+n
+n
+e
+e
+e
+e
+e
+t
+t
+t
+t
+t
+a
+a
+a
+a
+a
+
+l
+l
+l
+l
+l
+ 
+ 
+ 
+ 
+ 
+
+O
+O
+O
+O
+O
+/
+/
+/
+/
+/
+I
+I
+I
+I
+I
+ 
+ 
+ 
+ 
+ 
+
+d
+d
+d
+d
+d
+e
+e
+e
+e
+e
+z
+z
+z
+z
+z
+i
+i
+i
+i
+i
+l
+l
+l
+l
+l
+
+a
+a
+a
+a
+a
+m
+m
+m
+m
+m
+r
+r
+r
+r
+r
+o
+o
+o
+o
+o
+N
+N
+N
+N
+N
+
+1.05
+1.05
+1
+0.95
+0.95
+0.9
+0.85
+0.85
+0.8
+0.75
+0.7
+0.7
+0.65
+0.6
+0.6
+
+BTIO
+
+HPIO
+
+IOR
+
+MPI-TILE-IO
+
+tpch
+
+tpcr
+
+tpcc
+
+glimpse
+
+(a) Sensitivity of our
+MLMS
+scheme with
+respect to diﬀerent SLO
+speciﬁcation in high-
+performance
+storage
+systems.
+
+(b) Sensitivity of our
+MLMS scheme with re-
+spect to diﬀerent SLO
+speciﬁcation in enter-
+prise storage systems.
+
+Figure 10: Sensitivity of diﬀerent applications to dif-
+ferent SLO speciﬁcations.
+
+from additional cache capacities (e.g., BTIO in Figure 10(a)
+and TPCC in 10(b)) at the cost of the performance (albeit
+bounded by the SLO speciﬁcation) of some other cache in-
+sensitive applications (e.g., BTIO in Figure 10(a) and TPCH
+and TPCR in 10(b)). On the other hand, with a stringent
+SLO speciﬁcation such as 1% tolerable degradation for all
+applications, almost all applications achieve similar bene-
+ﬁts. In order to study the eﬀectiveness of MLMS in track-
+ing diﬀerent SLO speciﬁcations by diﬀerent applications, we
+also experimented with two high-performance applications
+(BTIO and MPI-Tile-IO) sharing a single I/O server and
+two storage servers. SLO speciﬁcation of BTIO was set to a
+maximum tolerable degradation of 2% and that of MPI-Tile-
+IO was set to 8%. The variations in I/O latency with time
+in our scheme for the two applications is shown in Figure
+11. We can observe that individual SLO speciﬁcations are
+always respected, i.e., the normalized I/O latency of BTIO
+is always less than 1.02 and that of MPI-Tile-IO is always
+less than 1.08.
+Sensitivity to enforcement interval: In all the experi-
+ments above, we have used a default value for enforcement
+interval of 30 seconds. Enforcement interval is an important
+design parameter since it decides how often our scheme runs
+to adapt dynamic behavior of the applications. However, it
+is not highly application speciﬁc as it can be selected to be
+smaller than most phase changes that requires a dynamic
+response from MLMS. Also, if the enforcement interval is
+too small, it can lead to repeated reconﬁgurations resulting
+in incurring high overheads. In order to study this param-
+eter quantitatively, we conducted a sensitivity experiment
+for the MLMS scheme to varying the enforcement interval.
+From detailed experiments, we noticed that a signiﬁcantly
+broad range of values for the enforcement interval (from 20
+seconds to 70 seconds) leads to comparable beneﬁts.
+
+5. RELATED WORK
+
+Shared Cache Management in Storage Systems:
+Recently, many researchers have explored shared cache par-
+titioning designs that attempt to avoid conﬂicts among mul-
+tiple applications [24, 31, 25, 11, 26]. For example, [11] fol-
+lows the dynamic partition principle, i.e., server buﬀers are
+dynamically allocated to the clients in accordance to their
+working set sizes. In Argon [25], the cache partitioning algo-
+rithm uses a simulator to predict the cache absorption rate
+
+y
+c
+n
+e
+t
+a
+
+l
+ 
+
+O
+/
+I
+ 
+
+d
+e
+z
+i
+l
+
+a
+m
+r
+o
+N
+
+1.1
+1
+0.9
+0.8
+0.7
+0.6
+0.5
+0.4
+0.3
+0.2
+0.1
+0
+
+0
+
+10 20 30 40 50 60 70 80 90 100
+
+Execution progress
+
+Figure 11: Variations in I/O latency with time with
+each application specifying a diﬀerent SLO speciﬁ-
+cation.
+[13, 7] partition the shared
+with hypothetical cache sizes.
+ﬁle system cache between multiple processes by detecting the
+access patterns. A common characteristic of all these tech-
+niques is that they do not have any special treatment for
+multi-server scenarios, where blocks are accessed by clients
+that belong to more than one server cache.
+
+Service Level Guarantees in Shared Server Cache:
+[8, 14] describe an architecture for a shared storage proxy
+cache which can provide long-term hit rate assurances to
+competing classes using feedback control. [1] describes end-
+to-end performance management in Ceph scalable ﬁle sys-
+tem by transforming application-level requirements into I/O
+reservations and guaranteeing those reservations in each com-
+ponent of the data path from the client to the server. Most
+existing mechanisms for providing performance guarantees
+in storage systems throttle data traﬃc for a single storage
+node [30]. Many techniques have been proposed for man-
+aging multi-level server caches in the presence of multiple
+clients [28, 31].
+[32] proposes managing multiple levels of
+storage caches using diﬀerent replacement policies based on
+access patterns of applications. MC2 [31] uses application
+hints to partition multi-level cache and to achieve the short-
+est I/O response times when there are multiple clients. How-
+ever, they do not discuss scenarios when data is shared over
+multiple servers. Also, MC2 does not provide guarantees to
+service level objectives of concurrently-running applications
+in the system.
+In comparison, we propose a cache parti-
+tioning scheme that determines the best partition sizes for
+applications in a multi-level multi-server storage architec-
+ture. Our approach also guarantees service level objectives
+in terms of application speciﬁed I/O latency constraints.
+The problem of SLO based cache partitioning in distributed
+storage systems that involve multiple levels of shared caches
+has not been addressed before.
+
+6. CONCLUSIONS
+
+In a distributed I/O environment, storage caches are gen-
+erally organized as multi-level cache hierarchies residing on
+multiple servers and typically shared by multiple concurrently-
+executing applications that may destructively interfere with
+each other. In such a scenario, storage cache allocation in-
+volves proportioning storage caches among applications dy-
+namically across diﬀerent levels of the hierarchy and across
+multiple servers such that the SLOs of concurrently execut-
+ing applications are satisﬁed and the fair speedup metric
+is maximized.
+In this work, we provide an algorithm for
+partitioning the aggregate storage cache space among the
+
+220
+
+[17] U. Manber and S. Wu. Glimpse: a tool to search
+
+through entire ﬁle systems. In USENIX , 1994.
+
+[18] N. Megiddo and D. S. Modha. Arc: A self-tuning low
+
+overhead replacement cache. In FAST, 2003.
+
+[19] W. Mendenhall and T. Sincich. A second course in
+statistics: Regression analysis. Prentice Hall, 2003.
+
+[20] E. J. OˇSNeil, P. E. OˇSNeil, and G. Weikum. The
+
+LRU-k page replacement algorithm for disk buﬀering.
+In ACM SIGMOD Intl. Conf. on Management of
+Data, 1993.
+
+[21] H. Shan et al. Using IOR to analyze the I/O
+
+performance for HPC platforms. In Tech. Report,
+National Energy Research Scientiﬁc Computing
+Center (NERSC), LBNL, 2003.
+
+[22] G. Soundararajan et al. Dynamic partitioning of the
+
+cache hierarchy in shared data centers. In VLDB ,
+2008.
+
+[23] G. Soundararajan et al. Dynamic resource allocation
+
+for database servers running on virtual storage. In
+FAST, 2009.
+
+[24] G. E. Suh, S. Devadas, and L. Rudolph. A new
+memory monitoring scheme for memory-aware
+scheduling and partitioning. In HPCA, 2002.
+
+[25] M. Wachs, M. Abd-El-Malek, E. Thereska, and G. R.
+
+Ganger. Argon: Performance insulation for shared
+storage servers. In FAST, 2007.
+
+[26] Y. Wang and A. Merchant. Proportional-share
+
+scheduling for distributed storage systems. In FAST,
+2007.
+
+[27] P. Wong. NAS parallel benchmarks I/O version 2.4. In
+
+Tech. Report NAS-03-002, Computer Sciences
+Corporation, NASA Advanced Supercomputing (NAS)
+Division, NASA Ames Research Center, 2003.
+
+[28] T. M. Wong and J. Wilkes. My cache or yours?
+
+Making storage more exclusive. In USENIX , 2002.
+
+[29] B. Worthington, G. R. Ganger, and Y. N. Patt. The
+
+disksim simulation environment. University of
+Michigan, EECS, Technical Report CSE-TR-358-98,
+1998.
+
+[30] J. Wu and S. A. Brandt. Providing quality of service
+support in object-based ﬁle system. In MSST, 2007.
+[31] G. Yadgar, M. Factor, K. Li, and A. Schuster. MC2:
+
+Multiple clients on a multi-level cache. In ICDCS,
+2008.
+
+[32] G. Yadgar, M. Factor, and A. Schuster. Karma:
+
+Know-it-all replacement for a multi-level cache. In
+FAST, 2007.
+
+[33] P. Zhou, V. Pandey, J. Sundaresan, A. Raghuraman,
+
+Y. Zhou, and S. Kumar. Dynamic tracking of page
+miss ratio curve for memory management. In
+ASPLOS, 2004.
+
+[34] Y. Zhou and J. F. Philbin. The multi-queue
+
+replacement algorithm for second level buﬀer caches.
+In USENIX , 2001.
+
+competing applications and then, distributing each applica-
+tion’s cache allocation across all the servers the application
+is serviced from. Our goal is to maximize a global perfor-
+mance metric without aﬀecting the performance of any sin-
+gle application beyond what it can tolerate (speciﬁed as an
+SLO requirement). As a future work, we plan to further
+evaluate the design by changing the number of applications
+dynamically, prioritizing certain applications over the other
+applications, and measuring the eﬀects of repartitioning on
+the performance of applications.
+
+7. REFERENCES
+
+[1] D. O. Bigelow et al. End-to-end performance
+
+management for scalable distributed storage. In Proc.
+of the Petascale Data Storage Workshop, 2007.
+
+[2] A. Ching et al. Evaluating I/O characteristics and
+
+methods for storing structured scientiﬁc data. In
+IPDPS, 2006.
+
+[3] J. Czyzyk et al. PCx: Software for linear
+
+programming. In MSST, 1997.
+
+[4] A. Dan and D. Towsley. An approximate analysis of
+
+the LRU and FIFO buﬀer replacement schemes. In
+SIGMETRICS, 1990.
+
+[5] L. K John et al. More on ﬁnding a single number to
+
+indicate overall performance of a benchmark suite. In
+SIGARCH Comput.Archit. News, 2004.
+
+[6] D. Lee et al. On the existence of a spectrum of policies
+that subsumes the least recently used (LRU) and least
+frequently used (LFU) policies. In SIGMETRICS,
+1999.
+
+[7] C. Gniad, A. R. Butt, and Y. C. Hu. Program counter
+based pattern classiﬁcation in buﬀer caching. In OSDI,
+2004.
+
+[8] P. Goyal, D. Jadav, D. S. Modha, and R. Tewari.
+
+Cachecow: Providing QoS for storage system caches.
+In SIGMETRICS, 2003.
+
+[9] S. Jiang and K. Davis. Coordinated multi-level buﬀer
+
+cache management with consistent access locality
+quantiﬁcation. In IEEE Trans. on Computers, 2007.
+
+[10] S. Jiang and X. Zhang. LIRS: An eﬃcient low
+
+interreference recency set replacement policy to
+improve buﬀer cache performance. In SIGMETRICS,
+2002.
+
+[11] S. Jiang and X. Zhang. ULC: A ﬁle block placement
+
+and replacement protocol to eﬀectively exploit
+hierarchical locality in multi-level buﬀer caches. In
+ICDCS, 2004.
+
+[12] T. Johnson and D. Shasha. 2Q: A low overhead high
+
+performance buﬀer management replacement
+algorithm. In VLDB, 1994.
+
+[13] J. M. Kim et al. A low-overhead high-performance
+
+uniﬁed buﬀer management scheme that exploits
+sequential and looping references. In OSDI, 2000.
+
+[14] B. Ko, K. Lee, K. Amiri, and S. Calo. Scalable service
+
+diﬀerentiation in a shared storage cache. In ICDCS,
+2003.
+
+[15] X. Li et al. Second-tier cache management using write
+
+hints. In FAST, 2005.
+
+[16] D. R. Llanos. TPCC-uva: An open-source TPCC
+
+implementation for global performance measurement
+of computer systems. In ACM SIGMOD, 2006.
+
+221
+
+

@@ -1,0 +1,1679 @@
+Array Recovery and High-Level
+Transformations for DSP Applications
+
+BJ ¨ORN FRANKE and MICHAEL O’BOYLE
+University of Edinburgh
+
+Efﬁcient implementation of DSP applications is critical for many embedded systems. Optimizing
+compilers for application programs, written in C, largely focus on code generation and scheduling,
+which, with their growing maturity, are providing diminishing returns. As DSP applications typi-
+cally make extensive use of pointer arithmetic, the alternative use of high-level, source-to-source,
+transformations has been largely ignored. This article develops an array recovery technique that
+automatically converts pointers to arrays, enabling the empirical evaluation of high-level trans-
+formations. High-level techniques were applied to the DSPstone benchmarks on three platforms:
+TriMedia TM-1000, Texas Instruments TMS320C6201, and the Analog Devices SHARC ADSP-
+21160. On average, the best transformation gave a factor of 2.43 improvement across the platforms.
+In certain cases, a speedup of 5.48 was found for the SHARC, 7.38 for the TM-1, and 2.3 for the
+C6201. These preliminary results justify pointer to array conversion and further investigation into
+the use of high-level techniques for embedded compilers.
+
+Categories and Subject Descriptors: D.3.4 [Programming Languages]: Processors—Compilers;
+Optimization
+
+General Terms: Algorithms, Experimentation, Measurement
+
+Additional Key Words and Phrases: Pointer conversion, dataﬂow graphs, embedded processors,
+high-level transformations
+
+1. INTRODUCTION
+
+Digital signal processing (DSP) and media processing are performance-critical
+applications for embedded processors. Demand for performance has led to
+the development of specialized architectures, with application programs hand-
+coded in assembly. More recently, as the cost of developing an embedded system
+becomes dominated by algorithm and software development, there has been a
+move towards the use of high-level programming languages, in particular C.
+As in other areas of computing, programming in C is much less time consum-
+ing than hand-coded assembler, but this comes at the price of a less efﬁcient
+implementation when compared to hand-coded approaches [Frederiksen et al.
+2000].
+
+Authors’ address: Institute for Computing Systems Architecture (ICSA), Division of Informatics,
+University of Edinburgh, JCMB, King’s Buildings, Mayﬁeld Rd., EH9 3JZ, UK.
+Permission to make digital/hard copy of all or part of this material without fee for personal or
+classroom use provided that the copies are not made or distributed for proﬁt or commercial advan-
+tage, the ACM copyright/server notice, the title of the publication, and its date appear, and notice
+is given that copying is by permission of the ACM, Inc. To copy otherwise, to republish, to post on
+servers, or to redistribute to lists, requires prior speciﬁc permission and/or a fee.
+C(cid:176) 2003 ACM 1539-9087/03/0500-0132 $5.00
+
+ACM Transactions on Embedded Computing Systems, Vol. 2, No. 2, May 2003, Pages 132–162.
+
+Array Recovery and High-Level Transformations
+
+†
+
+133
+
+To bridge the gap between application development time on the one hand and
+performance on the other, there has been much interest in optimizing compiler
+technology, where the compiler is responsible for automatically “tuning” the
+program [Araujo 1997; Leupers 1998; Timmer et al. 1995; Sair et al. 1998;
+Bhattacharyya et al. 2000]. This work has primarily focused on efﬁcient code
+generation or scheduling of low-level instructions.
+
+However, code generation and, to a lesser extent, scheduling are platform-
+speciﬁc. More signiﬁcant is the fact that they are relatively mature techniques
+and, there is a diminishing rate of return for increasingly sophisticated ap-
+proaches. In Timmer et al. [1995], for instance, a scheduler is developed for a
+particular in-house core that is optimal in the majority of cases. Thus, if we
+wish to continue to increase performance, it is worth considering alternative
+approaches.
+
+One such approach is to examine high-level, source-to-source, transforma-
+tions. These are inherently portable and have been shown to give signiﬁcant
+performance improvement for general-purpose processors [Kisuki et al. 2000],
+yet there is little empirical evaluation of their impact on embedded applications,
+perhaps due to the historical bottom-up approach to embedded systems.
+
+One major difﬁculty in the use of high-level transformations is the extensive
+usage of pointer arithmetic [Liem et al. 1996; Zivojnovic et al. 1994; Numerix
+2000], which prevents the application of well-developed array-based dataﬂow
+analyses and transformations. Indeed, in Numerix et al. [2000] programmers
+are actively encouraged to use pointer-based code, in the mistaken belief that
+the compiler will generate better code. Although, at one time, these pointer-
+based programs may have performed well with their contemporary compiler
+technology, they frequently make matters worse for the current generation of
+optimizing compilers. This is precisely analogous to the development of early
+scientiﬁc codes in Fortran, where convoluted code was created to cope with the
+inadequacies of the then current compilers, but have now become “dusty decks”,
+making optimization much more challenging.
+
+In this article we develop a technique to transform pointer-based programs
+into an equivalent array-based form, which opens up the opportunity for the ap-
+plication of more extensive high-level transformations. Using this array-based
+form, we empirically evaluate the impact of high-level transformations on three
+different platforms.
+
+There has been limited work in the evaluation of transformations on em-
+bedded systems performance. Most focus on techniques which may be easily
+applied in the presence of pointers but do not consider the interaction with
+other transformations and are very restricted in the benchmarks and platforms
+considered. For instance, source-level software pipelining for DSP applications
+is investigated in Wang and Su [1998] and Su et al. [1999]. The evaluation is
+restricted to a single architecture (Motorola DSP56300) where it achieved good
+results, albeit for a small set of benchmark programs.
+
+In Bodin et al. [1998], the trade-off between memory space and execution
+time with loop unrolling has been investigated and in Kandemir et al. [2000]
+the impact of tiling on power consumption has been evaluated. Although power
+consumption and memory size are also very important issues for embedded
+
+ACM Transactions on Embedded Computing Systems, Vol. 2, No. 2, May 2003.
+
+134
+
+†
+
+B. Franke and M. O’Boyle
+
+Fig. 1. Original pointer-based array traversal.
+
+systems, they are not the focus of this work. Rather, we focus on techniques
+to improve execution time, assuming a ﬁxed amount of embedded memory.
+We empirically evaluate the impact of several high-level transformations on
+the DSPstone [Zivojnovic et al. 1994] benchmark suite on three different em-
+bedded processors. It is shown that by selecting the appropriate transforma-
+tion, we can on average improve the execution time by a factor of 2.43, jus-
+tifying further investigation of high-level transformations within embedded
+compilers.
+
+The article is organized as follows. Section 2 provides a motivating example,
+illustrating the application of pointer-to-array conversion. Section 3 describes
+the program representation used in our conversion, and Section 4 describes
+the conversion algorithm. Section 5 describes the DSPstone benchmarks, the
+three embedded processors, and the transformations investigated, followed in
+Section 6 by a description and analysis of the results. Section 7 discusses re-
+lated work and the incorporation of high-level transformations into a compiler.
+Section 8 concludes with a summary.
+
+2. MOTIVATION
+
+Pointer accesses to array data frequently occur in typical DSP programs.
+Many DSP architectures have specialized address generation units (AGUs)
+[Leupers 1998], but early compilers were unable to generate efﬁcient code for
+them, especially in programs containing explicit array references. Program-
+mers, therefore, used pointer-based accesses and pointer arithmetic within their
+programs in order to give “hints” to the early compiler on how and when to
+use post/preincrement/decrement addressing modes available in AGUs. For in-
+stance, consider Figure 1, a kernel loop of the DSPstone benchmark matrix2.c.
+Here the pointer increment accesses “encourage” the compiler to utilize the
+postincrement address modes of the AGU of a DSP.
+
+If, however, further analysis and optimization is needed before code genera-
+tion, then such a formulation is problematic, as such techniques rely on explicit
+
+ACM Transactions on Embedded Computing Systems, Vol. 2, No. 2, May 2003.
+
+Array Recovery and High-Level Transformations
+
+†
+
+135
+
+Fig. 2. After pointer-to-array conversion to explicit array accesses.
+
+Fig. 3. Loop after delinearisation.
+
+array index representations and cannot cope with pointer references. In order to
+maintain correctness, compilers use conservative strategies, limiting the max-
+imal performance of the produced code.
+
+Although general array access and pointer analysis are, without further
+restrictions, intractable [Maydan et al. 1995], it is easier to ﬁnd suitable re-
+strictions of the array data-dependence problem while keeping the result-
+ing algorithm applicable to real-world programs. Furthermore, as array-based
+analysis is more mature than pointer-based analysis within optimizing com-
+pilers, programs containing arrays rather than pointers are more likely to
+be efﬁciently implemented. This article develops a technique to collect infor-
+mation from pointer-based code in order to regenerate the original accesses
+with explicit indexes that are suitable for further analyses. Furthermore, this
+translation has been shown not to affect the performance of the AGU [Araujo
+1997; Leupers 1998] and enables the application of well-known high-level
+transformations.
+
+Figure 2 shows the loop with explicit array indexes that is semantically
+equivalent to the previous loop in Figure 1. Not only is it easier to read and
+understand for a human reader, but it is amendable to compiler array dataﬂow
+analyses, e.g., Duesterwald et al. [1993].
+
+Once in an array-based form, further program transformations may also be
+applied. Figure 3 shows the example loop after application of pointer-to-array
+conversion and delinearization. Delinearization is the transformation of one-
+dimensional arrays and their accesses into multidimensional arrays [O’Boyle
+and Knijenburg]. The arrays A, B, and C are now 2-dimensional arrays. Such
+a representation enables more aggressive compiler optimizations such as data
+layout optimizations [O’Boyle and Knijenburg].
+
+ACM Transactions on Embedded Computing Systems, Vol. 2, No. 2, May 2003.
+
+136
+
+†
+
+B. Franke and M. O’Boyle
+
+Fig. 4. DSPstone matrix1 C code and the corresponding loop tree.
+
+3. PROGRAM REPRESENTATION
+
+This section brieﬂy describes the program representation used in our pointer-
+to-array conversion algorithm.
+
+The pointer conversion algorithm is a source-to-source transformation that
+requires a high-level intermediate representations, preserving C constructs.
+Therefore, along with the standard control-ﬂow graph (CFG), we use the loop
+tree [Morgan 1998] where loop structures, array accesses, and pointer arith-
+metic are easily identiﬁable.
+
+The loop tree represents a partial order on the loops contained in it. The rela-
+tion of a loop L2 that is an inner loop of loop L1 (or any of its inner loops) can be
+written as L2 ‰ L1. The ‰ relation is reﬂexive, transitive, and antisymmetrical.
+An example of the loop tree representation is given in Figure 4.
+
+3.1 Other Deﬁnitions
+
+For convenience, the innermost embracing loop is denoted inner(x). If the node
+x is outside of any loop, then inner(x) D ?.
+
+The functions lower(L), upper(L) return the lower and upper bounds of a
+loop. range(L) returns the range of a normalized for loop L. In cases where
+the values are not a constant, but an expression, this symbolic expression is
+returned for further processing.
+
+Any node of the loop tree containing a loop header can be contracted to a
+special summary node. This type of node is used to summarize the effects of the
+loop with its possible inner loops on pointers variables. In later analysis steps,
+summary nodes can be handled in the same way as ordinary nodes, i.e., as a
+single statement.
+
+ACM Transactions on Embedded Computing Systems, Vol. 2, No. 2, May 2003.
+
+Array Recovery and High-Level Transformations
+
+†
+
+137
+
+Fig. 5. Overall Algorithm.
+
+4. POINTER-TO-ARRAY CONVERSION
+
+Pointer conversion consists of two main stages. The ﬁrst stage determines
+whether the program is in a form amenable to conversion and consists of a
+number of checks. These checks err on the conservative side, ensuring that any
+program satisfying these constraints may be safely considered by the pointer-
+conversion stage. The second stage gathers information on arrays and pointer
+initialization, pointer increments, and the properties of loop nests. This infor-
+mation is used to replace pointer accesses by the corresponding explicit array
+accesses and to remove pointer arithmetic completely. The overall structure of
+the algorithm is shown in Figure 5.
+
+The pointer-conversion algorithm simply changes the representation of mem-
+ory accesses, and is largely a syntactic change. Therefore, overlapping arrays
+and multiple pointers to the same array that often prevent standard program
+analysis do not interfere with the conversion algorithm.
+
+Section 4.1 describes the restricted form of programs considered by our
+scheme and the checks used to guarantee compliance. This is followed in
+Section 4.2 by a description of the actual conversion algorithm based on a
+dataﬂow framework.
+
+4.1 Assumptions and Restrictions
+
+In order to facilitate pointer conversion and to guarantee its correctness, the
+overall requirement can be broken into a number of checks in the ﬁrst step of
+the algorithm.
+
+Structured loops. Loops are restricted to those with a normalized itera-
+tion range going from the lower bound 0 to some upper bound UB with a step
+of 1. We assume interprocedural constant propagation [Callahan et al. 1986;
+Sagiv et al. 1995; Grove and Torczon 1993] has taken place and the upper bound
+may be a constant or a afﬁne expression only containing outer loop variables in
+the case of a loop nest. Structured loops must have the single-entry/single-exit
+property.
+
+It is relatively trivial to determine that all loops conform to this restric-
+tion; after loop normalization, simply check all loops Li, i 2 1, : : : , n such that
+upper(Li) is an afﬁne expression of syntactically enclosing loops L1, : : : , Li¡1.
+
+Pointer assignments and arithmetic. Pointer assignment and arith-
+metic are restricted in our analysis. Pointers may be initialized to an array
+element whose subscript is an afﬁne expression of the enclosing iterators and
+whose base type is scalar. Simple pointer arithmetic and assignment are also
+
+ACM Transactions on Embedded Computing Systems, Vol. 2, No. 2, May 2003.
+
+138
+
+†
+
+B. Franke and M. O’Boyle
+
+allowed. Ensuring the restrictions on pointer assignment and arithmetic can
+be broken into two stages, the ﬁrst of which is syntactic. Pointer expressions
+and assignments are restricted to the following syntactic categories:
+
+(1) ptr expr = ( ptr (“CC”j“¡¡”) j ptr (“C”j“¡”) constant)
+(2) ptr assign = ptr “D” (ptr expr j“&” array “[”afﬁn expr“]”j“&” var j array )
+(3) ptr assign = ptr “C D” constant
+(4) ptr assign = ptr “¡ D” constant
+
+Note that dynamic memory allocation and deallocation are implicitly ex-
+cluded because of the potentially unbounded complexity of dynamic data
+structures.
+
+In addition, any pointer use must be dominated by a node that contains the
+corresponding pointer assignment. In other words, a pointer cannot be used
+before it has been correctly initialized. This requirement can be stated more
+formally: 8 p 2 P, USE( p)9q 2 P jq 2 DEF(q) ^ DOM(q, p) where P is the set
+of pointers, and USE, DEF and DOM are the usual dataﬂow terms referring to
+the use of a variable, its deﬁnition, and the dominance of one node over another.
+
+Pointers to other pointers. Pointers to pointers are prohibited in our
+scheme. An assignment to a dereferenced pointer may have side effects on
+the relation between other pointers and arrays that is difﬁcult to identify and,
+fortunately, rarely found in DSP programs. We take a conservative approach
+where any variable that is declared as a pointer, dereferenced, or assigned an
+address is considered a pointer variable. Just as pointer-to-pointers are pro-
+hibited, so are function calls that take addresses of pointers as arguments, as
+the pointer may be changed. Thus, taking the address of a pointer is prohibited
+in our scheme. These restrictions imply that function pointers are prohibited,
+which is acceptable for DSP programs as they are rarely, if ever, used.
+
+This pointer classiﬁcation scheme can be realized as a simple, interproce-
+dural noniterative algorithm. Any variable identiﬁed as a pointer either by its
+declaration or use is labelled as a pointer. The set of pointers is passed into
+any called function in which any variable “contaminated” with an already rec-
+ognized pointer is also included in the pointer set. If the address of a pointer
+is taken or a pointed-to variable assigned a pointer value, the program is re-
+jected. This simple pointer classiﬁcation algorithm, described in Figure 6, will
+determine potential pointers to pointer occurrences. At present we take a con-
+servative approach, where pointer conversion is aborted if any potential pointer-
+to-pointer cases are found.
+
+Example. Figure 7 shows a program fragment illustrating legal and ille-
+gal constructs for pointer-to-array conversion. The initializations of pointers
+ptr1 and ptr2 are legal; ptr1 is statically initialized, and ptr2 is initialized
+repeatedly within a loop construct to an array with an afﬁne subscript.
+
+Pointers pta, ptb and ptc are examples of illegal initialization; a block of
+memory is dynamically allocated and assigned to ptra, whereas the initializa-
+tion of ptrb is data-dependent, the subscript b[i] is not an afﬁne expression.
+
+ACM Transactions on Embedded Computing Systems, Vol. 2, No. 2, May 2003.
+
+Array Recovery and High-Level Transformations
+
+†
+
+139
+
+Fig. 6. Pointer-to-pointer analysis.
+
+Fig. 7. Example of legal and illegal pointer usage.
+
+Finally, the assignment to ptrc is illegal, as there is no dominating deﬁnition
+of ptrX.
+
+Pointer arithmetic is restricted in our scheme; the constant increments to
+pointer ptr1 are legal. However, the modiﬁcation of pointer ptr2 is illegal, as it
+includes compile-time unknown values.
+
+Finally, two examples of passing pointers to functions are also shown.
+function1 receives a pointer to the array, thus only the content of the array can
+
+ACM Transactions on Embedded Computing Systems, Vol. 2, No. 2, May 2003.
+
+140
+
+†
+
+B. Franke and M. O’Boyle
+
+Fig. 8. Joining control ﬂow and the meet operator.
+
+be changed, but not the pointer ptr1 itself. However, function2 may change
+the pointer ptr1, which is not permissible.
+
+4.2 Dataﬂow Information
+
+Once the program has been checked, the second stage of the algorithm gathers
+information on pointer usage before pointer conversion.
+
+Information on pointer assignments and modiﬁcations is stored at each node
+of the loop tree. In particular, for each declared pointer, the mapping between
+this pointer and an array, including the position of the pointer within the ar-
+ray, is recorded. Additionally, the label of the node containing the most recent
+assignment to each pointer is stored.
+
+The data for a pointer p is stored in a tuple of the form ((a, x, n), o1, : : : , ol ),
+where a is the array pointed to, x the index of a speciﬁc element p points to,
+n the node the assignment to p occurred in, ok the movement of the pointer
+p in a loop k, and l the number of enclosing loops in the function to be
+analysed.
+
+After initialization, the elements a, x, n, and ok carry the default value
+?, indicating that no speciﬁc information is available. More precisely, ?, de-
+notes the state that the pointer has not been assigned any array element.
+Conversely, the value > is used to express the conﬂict between different as-
+signments. For example, consider the situation in Figure 8. Here, in a node
+of joining control paths, the conﬂict between p pointing to a along the one
+incoming path and p pointing to b along another path is resolved by setting
+the corresponding element to >. From this it becomes clear that p has been
+assigned at least along one control path, but the speciﬁc mapping of p is de-
+pendent on the actual program execution path (denoted > in the corresponding
+ﬁeld).
+
+The number of increments of a pointer must be equal across all control paths
+reaching a particular statement, in order that a pointer reference may be re-
+placed by an array reference. If the number of increments is different on two
+joining paths, again this is denoted by > in the appropriate ﬁeld. Given this
+requirement, it is now possible to deﬁne the meet operator, which combines
+the outcome of following one of two distinct controlﬂow paths at the point at
+V
+which they meet, e.g., immediately after an if-statement. The meet operator
+
+ACM Transactions on Embedded Computing Systems, Vol. 2, No. 2, May 2003.
+
+Array Recovery and High-Level Transformations
+
+†
+
+141
+
+is formally deﬁned as follows
+
+^
+
+D
+
+8
+
+>>>>>>>>>>>>><
+>>>>>>>>>>>>>:
+
+(((a1, x1, n1), o1,1, : : : , o1,l ), ((a2, x2, n2), o2,1, : : : , o2,l ))
+
+((a1, x1, n1), o1,1, : : : , o1,l )
+
+if ((a1, x1, n1), o1,1, : : : , o1,l ) D ((a2, x2, n2), o2,1, : : : , o2,l )
+
+((a1, x1, n1), o1,1, : : : , >, : : : , o1,l )
+
+if a1 D a2, x1 D x2, n1 D n2, o1,k 6D o2,k
+
+((a1, >, n1), >, : : : , >)
+
+if a1 D a2, n1 D n2, x1 6D x2
+
+((>, >, >), >)
+otherwise
+
+This operator is used in Section 4.4 to determine the effects of pointer usage
+
+throughout the program.
+
+4.3 The Flow Functions
+
+Flow functions model the effect of executing a statement on the pointer-to-
+array mapping reaching this statement node. The ﬂow functions have the form
+f : Lm ! Lm with L the dataﬂow information ((a, x, n), o1, : : : , ol ) and m the
+total number of pointers declared in the C function being processed. For each
+node n, a ﬂow function f n is deﬁned. This ﬂow function can be split up into indi-
+vidual functions according to the operation contained in node n. The individual
+functions are either generate, preserve, or exit functions.
+
+¡
+
+¢
+
+f n(t1, : : : , tm) D
+
+n (t1), : : : , f m
+f 1
+
+n (tm)
+
+where
+
+ti D ((ai, xi, ni), oi,1, : : : , oi,l )
+
+4.3.1 Generate Function. Generate functions cover assignments to point-
+ers. An incoming pointer-to-array mapping is generated or updated for any
+pointer p. The general form of a generate function is this:
+
+n (((ap, x p, np), o p,1, : : : , o p,l )) D
+f p
+8
+><
+
+((v, 0, n), o p,1, : : : , o p,l )
+((a, 0, n), o p,1, : : : , o p,l )
+((a, x, n), o p,1, : : : , o p,l )
+
+>:
+
+if p = &v for scalar v
+if p = a for an array a
+if p = &a[x] for an array a
+
+4.3.2 Preserve Function. Preserve functions handle pointer arithmetic,
+i.e., pointer movements relative to its current position. The pointer-to-array
+
+ACM Transactions on Embedded Computing Systems, Vol. 2, No. 2, May 2003.
+
+142
+
+†
+
+B. Franke and M. O’Boyle
+
+mapping is updated according to the operation of node n.
+
+n (((ap, x p, np), o p,1, : : : , o p,k, : : : , o p,l ))
+f p
+
+((ap, x p, np), o p,1, : : : , o p,k C 1, : : : , o p,l )
+
+if p++ and k D inner(n)
+
+((ap, x p, np), o p,1, : : : , o p,k ¡ 1, : : : , o p,l )
+
+if p-- and k D inner(n)
+
+((ap, x p, np), o p,1, : : : , o p,k C c, : : : , o p,l )
+
+if p += c and k D inner(n)
+
+D
+
+((ap, x p, np), o p,1, : : : , o p,k ¡ c, : : : , o p,l )
+
+if p -= c and k D inner(n)
+
+((aq, xq, nq), oq,1, : : : , oq,k, : : : , oq,l )
+
+if p = q and q a pointer
+...
+
+((ap, x p, np), o p,1, : : : , o p,k, : : : , o p,l )
+
+otherwise
+
+8
+
+>>>>>>>>>>>>>>>>>>>>>>>>>><
+>>>>>>>>>>>>>>>>>>>>>>>>>>:
+
+4.3.3 Exit Function. The exit functions represent the transition from state-
+ment to loop level. Since exit nodes occur at the end of a loop body, exit functions
+have the task of summarizing the effects of the single statements in the loop
+body. This is done in such a way that the overall effect of the loop on the pointer
+mapping is returned as the result.
+
+n (((ap, x p, np), o p,1, : : : , o p,k, : : : , o p,l ))
+f p
+
+8
+
+>>>>>>>><
+>>>>>>>>:
+
+D
+
+((ap, x p, np), o p,1, : : : , range(inner(n)) £ o p,l )
+if inner(n) 6D inner(np) and inner(n) D l
+
+((ap, x p, np), o p,1, : : : ,
+
+f k (i0,:::,ik ¡1)
+ik D0
+
+o p,kC1, : : : , o p,l )
+
+if n D ? or (k D inner(n)) (cid:181) inner(np)
+
+P
+
+((ap, x p, l p), o p,1, : : : , o p,kC1, : : : , o p,l )
+
+if (k D inner(n)) 6(cid:181) inner(np)
+
+To compute the total effect of a statement performing pointer arithmetic in a
+loop nest, the total number of iterations of each individual loop must be known.
+Given a generic loop nest in Figure 9, the total number of iterations of the
+innermost loop is
+
+NX
+
+f 1(i0)X
+
+f 2(i0,i1)X
+
+f n(i0,:::,in¡1)X
+
+¢ ¢ ¢
+
+1
+
+i0D0
+
+i1D0
+
+i2D0
+
+inD0
+
+(1)
+
+where f k(i0, : : : ik¡1) is the number of iterations of the kth nested loop, 1 • k • n.
+In the same way, the total number of iterations of an inner loop in level k can
+
+ACM Transactions on Embedded Computing Systems, Vol. 2, No. 2, May 2003.
+
+Array Recovery and High-Level Transformations
+
+†
+
+143
+
+Fig. 9. Loop nest with pointer increments.
+
+be expressed as
+
+X (k) D
+
+NX
+
+f 1(i0)X
+
+f 2(i0,i1)X
+
+f k (i0,:::,ik¡1)X
+
+¢ ¢ ¢
+
+1
+
+i0D0
+
+i1D0
+
+i2D0
+
+ik D0
+
+(2)
+
+Such terms are frequently encountered in analyzing loop nests and can be enu-
+merated using the omega calculator [Pugh 1994] or methods based on Ehrhart
+polynomials [Clauss 1996].
+
+Given Eqs. (1) and (2), the total effect of the pointer increments of a pointer
+
+p in the entire loop nest can be derived as follows:
+
+X (n ¡ 1) £ (mm¡1,pre C mn¡1,post) C
+
+X (n) £ mnC
+
+: : :
+
+X (0) £ (m0, pre C m0,post) D
+
+P
+
+n¡1
+kD0(X (k) £ mk,pre C mk,post) C X (n) £ mn
+
+where mk,pre,mk,post is the size of the pointer increment in loop k before enter-
+ing/after exiting the k C 1 loop, as shown in Figure 9.
+
+For rectangular iteration spaces and constant numbers of pointer increments
+on each loop level, the total number of pointer increments evaluates to afﬁne
+expressions dependent on the iteration variables. Otherwise, if all upper loop
+bounds are afﬁne expressions in the outer index variables, the resulting expres-
+sions are polynomial functions of the index variables.
+
+Summaries of the effects of inner loops are constructed starting with the
+innermost loop level. Once the total effect of an inner loop has been determined,
+the algorithm progresses with the statements after this loop. Each time an end
+of a loop is seen, its summary is computed. In a nonperfect loop nest, other
+statements than ends of loops can occur. These are treated as usual until the
+next end of a loop terminates the next higher loop level, which in turn initiates
+the summary computation for this loop.
+
+ACM Transactions on Embedded Computing Systems, Vol. 2, No. 2, May 2003.
+
+144
+
+†
+
+B. Franke and M. O’Boyle
+
+4.4 Equation System
+
+The ﬂow functions specify the effects of a statement locally, i.e., on a per node
+or statement basis. All ﬂow function together form an equation system whose
+solution is the global dataﬂow solution. This solution has its representation in
+the IN[n] and OUT[n] sets associated with each node.
+
+Solving the dataﬂow equation starts with all pointers uninitialized, i.e., 8 p :
+
+((ap, x p, np), o p,1, : : : , o p,l ) D ((?, ?, ?), ?), resulting in
+
+IN[n] D (((?, ?, ?), ?), : : : , ((?, ?, ?), ?)):
+
+The equation system is solved by visiting all nodes in reverse postorder,
+beginning at the start node no and computing the IN[n] and OUT[n] sets as
+follows:
+
+OUT[n] D f n(IN[n])
+OUT[m]
+
+^
+
+IN[n] D
+
+m2pred(n)
+
+Only a single iteration is required to propagate the pointer mapping values.
+Thus, its runtime complexity is O(N ) with N the number of nodes in the CFG.
+Unlike iterative dataﬂow analysis, this algorithm does not compute any ﬁx
+point. The transition from statement to loop level is done at the end of the loop
+body when the ﬂow function of the loop node is computed.
+
+4.5 Pointer Conversion
+
+In a second pass over the CFG, step 2b in the algorithm, pointer accesses and
+arithmetic are, respectively, replaced and removed. Replacement is based on
+the dataﬂow information gathered during the analysis stage. From this infor-
+mation, the index expressions of the array accesses are constructed.
+
+A pointer reference can only be replaced if its array, a, and offset, o, compo-
+nents of the tuple ((a, x, l ), o1, : : : , ol ) are unambiguous. This is the case when
+a, o 62 f?, >g.
+
+The information required for the conversion of pointer access into an ar-
+ray access is spread throughout the computed dataﬂow values. The necessary
+components for the construction of the array access are
+
+(1) array name (available at the node containing the pointer access);
+(2) initial offset (available at the node containing the pointer access);
+(3) local offset (available at the node containing the pointer access);
+(4) coefﬁcients of the index variables (available at the loop exit nodes); and
+(5) global offset (available at the exit node).
+
+The array name is the name of the array to which the pointer to be replaced
+refers. The initial offset is a constant term, and specifying the start position of
+the pointer in an array as given in an initial assignment. Local and global offsets
+specify the distances a pointer has been moved in the current and outer loop
+bodies, respectively, since the start of the iteration. Finally, the coefﬁcients of
+
+ACM Transactions on Embedded Computing Systems, Vol. 2, No. 2, May 2003.
+
+Array Recovery and High-Level Transformations
+
+†
+
+145
+
+the index variables are multiplicative factors specifying the effect of all previous
+iterations on the current pointer position.
+
+More precisely, the conversion of a pointer-based memory access in a node n
+via pointer p requires the information kept in the IN sets of node n and all the
+summarizing exit nodes of its embracing outer loops. Let the IN set for node n
+and pointer p be IN p
+D ((a, x, l ), o1, : : : , ol )). The explicit array access replacing
+n
+the pointer expression of the original program will have a form a[exp] where a is
+the name of an array and exp is an expression for the selection of a single array
+element. The index expression exp is the sum of several components, which are
+only partly available from node n. In general, the expression exp has following
+form exp D expinitial
+
+C expglobal.
+
+C explocal
+
+C expcoeff
+
+Both the initial offset expinitial and the local offset explocal can be determined
+
+from IN p
+
+n, as expinitial
+
+D x and explocal
+
+D ok where k D inner(n).
+
+The global offset expglobal and the expression containing the loop index vari-
+ables expcoeff are constructed from the data at the exit nodes at the same and
+all higher loop levels, respectively, as node n. For the global offset expglobal, the
+IN p
+k set of the exit node of the loop at level k D inner(n) is inspected. By as-
+sumption, there are no assignments to pointer p in any node of the loop prior
+to n. Therefore, expglobal can be expressed as the sum of all oi with i < k, i.e.,
+the pointer has been moved by as many steps as the sum of the steps in any of
+the outer loops seen so far.
+
+Finally, the term expcoeff is a sum of products of loop index variables and
+£ ji, where the
+their coefﬁcients. Its general form is expcoeff
+coeff j are the coefﬁcients and the ji are the loop index variables of the loops
+at level i. During the computation of the coefﬁcients coeff j , two cases must be
+distinguished: (a) loop nests without pointer assignments in it; and (b) loop
+nests containing pointer assignments.
+
+inner(n)
+j D1
+
+coeff j
+
+P
+
+D
+
+Case (a).
+
+If a pointer is not assigned a new value in any level of the loop and
+the pointer progresses at least by one step in the loop, the expression expcoeff
+will contain coefﬁcients 6D 0 for all levels j , j ‚ inner(n). The coefﬁcient for
+level k D inner(n) is the offset ok, i.e., the number of positions a pointer has
+been moved in the loop body, multiplied by the number of iterations of that loop.
+For all outer loops, the coefﬁcients are computed as the sum of the number of
+pointer movements o j on the current level and the total effect of the inner loops
+o j C1 and multiplied by the current loop range.
+
+Case (b). For loops containing an assignment to a pointer p, the coefﬁcients
+
+for all the levels up to the one with the assignment are 0.
+
+For all pointers successfully converted into explicit array accesses through-
+out an entire loop or loop nest, expressions containing pointer arithmetic can be
+removed. In this step, only the expressions modifying a pointer are discarded;
+the actual pointer accesses have already been converted in the previous step
+of the conversion. If there are uses of the pointer following a transformed loop
+that cannot be eliminated by the pointer conversion algorithm, an additional
+statement with an update of the pointer, taking into account the total effect of
+the loop on the pointer, must be inserted immediately after the loop.
+
+ACM Transactions on Embedded Computing Systems, Vol. 2, No. 2, May 2003.
+
+146
+
+†
+
+B. Franke and M. O’Boyle
+
+Fig. 10. Dataﬂow solution for matrix1.
+
+An example in the next section illustrates how to interpret the dataﬂow
+
+information and to convert pointer accesses into array accesses.
+
+4.6 Example
+
+Figure 10 shows an example of how the dataﬂow-based array recovery algo-
+rithm works. The solution of the dataﬂow problem for p c in the matrix1 pro-
+gram is shown.
+
+For each node of the program, two dataﬂow values representing the IN and
+OUT sets are kept. These dataﬂow values are computed during the analysis
+stage. The last column of Figure 10 shows the subexpressions constructed dur-
+ing the conversion stage of the algorithm. Putting together the subexpressions,
+described in the previous section, enables the pointer-based access *p c to array
+C in node 8 to be replaced with the explicit memory access C[k ⁄ X C i].
+
+The name of the array (C), the initial offset (0), and the local offset (0) are
+collected from the IN set of node 8. The global offset (0) can be read from node 9,
+the exit node of the innermost loop embracing node 8, which contains the pointer
+access being converted. The coefﬁcients to the loop index variables f, i, and k
+can be extracted from the IN sets of the exit nodes (nodes 9, 11, and 12) of
+the corresponding loops. Since there is no pointer movement in the f loop, the
+coefﬁcient of f is 0. The single step in the i loop is responsible for the 1 £ i
+contribution. Finally, the coefﬁcient of the index variable k of the outermost
+loop is X, since the pointer *p c is moved by X positions per iteration of the k
+loop. This information is gathered from node 12. Now the entire explicit array
+
+ACM Transactions on Embedded Computing Systems, Vol. 2, No. 2, May 2003.
+
+Array Recovery and High-Level Transformations
+
+†
+
+147
+
+access can be constructed from the array name and index expression that results
+from the sum of the different contributions of the subexpressions.
+
+In a similar way the assignment *p c = 0 can be replaced. After the re-
+placement of all accesses via the pointer p c, the statements containing pointer
+arithmetic on p c can be deleted. Finally, after ensuring that no further use of
+p c remains, the declaration of the pointer can be discarded. p a and p b are
+treated in a similar manner. The ﬁnal program is shown in Figure 2.
+
+5. EXPERIMENTAL FRAMEWORK
+
+This article is concerned with the use of pointer-to-array conversion in enabling
+performance-enhancing transformations. In Section 6 we focus on the resulting
+execution time behavior, while here we brieﬂy describe the salient points of the
+processors, benchmarks, and transformations.
+
+5.1 Processors
+
+5.1.1 Analog Devices ADSP-21160. The Analog Devices ADSP-21160 is
+a 32-bit DSP with dual-ported on-chip SRAM and two 32-bit ﬂoating point
+processing elements (PEs) [Analog Devices 1999]. It has 4M bits of internal
+SRAM which is organized in two blocks of 2M bits, giving 38K words of code
+space and 6K/32K of program memory/data memory, respectively. In sequential
+mode (SISD), only one of the two PEs is active. In SIMD mode the second
+PE always performs the same operations as the ﬁrst one, but with different
+data. Basically, the ADSP-21160 is a vector processor with a vector size of
+two. In order to utilize the SIMD mode, the PEs must simultaneously access
+different data banks, i.e., program and data memory, via two independent buses.
+Switching to and from SIMD modes requires special instructions and involves
+some runtime overhead.
+
+5.1.2 Philips TriMedia TM-1. The TriMedia TM-1 is a 32-bit ﬂoating point
+VLIW multimedia processor [Philips 1999]. During each cycle it issues up to
+ﬁve operations in order to exploit instruction-level parallelism. Data and in-
+struction caches with 16kB and 32kB, respectively, are on-chip and speed up
+the data transfer between the processor core and the external RAM. To achieve
+highest performance it is important to have a compiler that schedules as many
+operations as possible in an instruction and to use the caches efﬁciently.
+
+5.1.3 Texas Instruments TMS320C6201.
+
+In contrast to the other two pro-
+cessors, the TMS320C6201 is a 32-bit ﬁxed-point processor [Texas Instruments
+2001]. Like the TriMedia the TI processor is a VLIW CPU with two datapaths
+each containing four functional units and a register ﬁle with 16 registers. The
+on-chip memory is structured as a 64kB block of program memory and two
+32kB blocks of data memory that can be accessed in parallel. External memory
+can be connected via the external memory interface.
+
+5.2 Benchmarks
+
+The benchmarks selected are from the well-known DSPstone [Zivojnovic et al.
+1994] suite. Eleven of the benchmarks containing iterative program structures
+
+ACM Transactions on Embedded Computing Systems, Vol. 2, No. 2, May 2003.
+
+148
+
+†
+
+B. Franke and M. O’Boyle
+
+were selected. Each benchmark is a kernel found in typical DSP applications
+and makes extensive use of pointer arithmetic.
+
+5.3 Transformations
+
+Converting a pointer-based program to one based on arrays enables a number
+of well-studied program transformations to be considered. The transformations
+investigated were selected based on the characteristics of the processors and
+the benchmark suite. As the benchmarks are loop- and array-based, transfor-
+mations extensively studied in the area of scientiﬁc computation were selected
+[Bacon et al. 1994]. Initially, the impact of pointer-to-array conversion was eval-
+uated in isolation. Next, loop unrolling was selected, as it can increase the size
+of the loop body allowing more instruction-level parallelism (TM-1,C6201) to be
+exposed. This was applied both before and after array recovery. The remaining
+transformations relied on pointer-to-array conversion. Delinearization, tiling,
+and padding allow cache to be optimized (TM-1); vectorization allows the ex-
+ploitation of SIMD parallelism on the SHARC, and ﬁnally scalar replacement
+reduces the number of accesses to memory (SHARC, TM-1, C6201).
+
+The pointer-to-array conversion algorithm developed in this article was im-
+plemented in our experimental Octave compiler. All other transformations were
+applied manually.
+
+After applying a transformation on a source-to-source level, the resulting
+code was used as an input for the C compilers of the SHARC (VisualDSP++,
+Release 3.0.1.3), the Philips TriMedia TM-1 (compiler version 5.3.4), and the
+Texas Instruments TMS320C6x (compiler version 1.10). Performance data was
+collected by executing the programs on the manufacturers’ simulators.
+
+6. RESULTS
+
+Since we are interested in high-performance signal processing the emphasis
+of our benchmarking is execution time speedup, given a ﬁxed memory size.
+Code size and power consumption are important constraints, but are beyond
+the scope of this article.
+
+6.1 Transformation-Oriented Evaluation
+
+In this section we examine the effect of each transformation in isolation on the
+benchmarks’ behavior shown in Figures 11 to 16.
+
+Pointer to array conversion. Converting pointers to arrays based on the
+algorithm described earlier enables high-level transformations, and can often
+help the native compiler to perform more accurate analysis such as dependence
+testing. It was successfully applied to all of the benchmarks, and its perfor-
+mance impact varies from program to program and across the three platforms.
+The TriMedia often beneﬁts from the transformation (see Figure 11), while the
+SHARC consistently performs worse. It has a variable, but usually beneﬁcial,
+impact on the C6201. In the case of n complex updates on the TriMedia, we
+have a 2.18 speedup, while there is a slowdown of 0.63 for the same program
+on the SHARC.
+
+ACM Transactions on Embedded Computing Systems, Vol. 2, No. 2, May 2003.
+
+Array Recovery and High-Level Transformations
+
+†
+
+149
+
+Fig. 11. Pointer-to-array conversion.
+
+Pointer-to-array conversion on its own therefore has a mixed impact. On
+examining the generated assembler, the main beneﬁt for the TriMedia is in
+improved data-dependence analysis in nested loops. In the case of the C60,
+however, the generated code is frequently identical, perhaps due to the greater
+maturity of the native compiler. In the case of the SHARC, the generated code
+is similar, but the AGU is not efﬁciently exploited. Its main beneﬁt, how-
+ever, is that it enables further transformations discussed below. Apart from
+unrolling, none of the remaining transformations can be applied without the
+use of pointer-to-array conversion. Furthermore, the largely negative impact
+of pointer-to-array conversion for the SHARC is offset by SIMD vectorization,
+which relies on an array-based form of the program.
+
+ACM Transactions on Embedded Computing Systems, Vol. 2, No. 2, May 2003.
+
+150
+
+†
+
+B. Franke and M. O’Boyle
+
+Fig. 12. Unroll of pointer and array recovered benchmarks.
+
+ACM Transactions on Embedded Computing Systems, Vol. 2, No. 2, May 2003.
+
+Array Recovery and High-Level Transformations
+
+†
+
+151
+
+Fig. 13. SIMD.
+
+Fig. 14. Delinearization.
+
+Fig. 15. Speedup due to delinearization, padding, and tiling.
+
+Although our focus is on performance rather than code size, it is worth noting
+that the effect of pointer-to-array conversion varies across the benchmarks and
+platforms, giving in some cases up to a 10% reduction in object code size and a
+34% increase in one case.
+
+Unrolling. Unrolling was applied to two versions of each program; with
+and without pointer-to-array recovery. Different unroll factors upto a maximum
+of 20 were evaluated, and the best results shown in Figure 12. Unrolling can
+increase ILP for the VLIW machines, but has a variable impact on the SHARC’s
+performance. Here loop unrolling of the pointer-based versions of the lms and
+n real updates programs deteriorates performance. Small programs can bene-
+ﬁt from total unrolling, i.e., mat1x3, but unrolling has little or no beneﬁcial effect
+on the other benchmarks. Usually, the array-based programs slow down after
+loop unrolling; the exceptions being matrix1, matrix2, fir2dim, and mat1x3.
+
+ACM Transactions on Embedded Computing Systems, Vol. 2, No. 2, May 2003.
+
+152
+
+†
+
+B. Franke and M. O’Boyle
+
+Fig. 16. Scalar replacement.
+
+To further understand the negative impact of unrolling on the SHARC, con-
+sider the case of the n real updates benchmark—the main loop body after array
+recovery takes just six instructions and utilizes the ADSP-21160’s capabilities
+to execute an arithmetic operation in parallel with a memory operation. The
+unrolled version, however, is more complex. With its 26 instructions, the code
+size has grown by a factor of 4.33. Although the compiler is able to identify the
+sequential traversal of the arrays, and therefore generates a loop with a ﬁxed
+number of iterations and uses postincrement mode for memory accesses, it also
+generates unnecessary code for the increment of the loop induction variable
+by two. Repeated loading, changing, and storing of index registers additionally
+wastes cycles. The resulting performance of the unrolled loop is far worse than
+of the loop after array recovery only. Thus loop unrolling, even with small unroll
+factors, is not always beneﬁcial, especially on the ADSP-21160.
+
+On the TriMedia and the C6201, however, unrolling generally improves per-
+formance, and does best on the array form of the program. The best unroll
+factors are considered here, but performance does vary with respect to un-
+roll. Unrolling increases code size and is limited by the amount of instruction
+memory.
+
+SIMD vectorization. This transformation is only applicable on the ADSP-
+21160 with its two functional units. Where applicable it generally gives good
+performance, except in the two cases where the overhead of changing to SIMD
+mode is greater than the work available. Both dot product and matrix1x3 have
+small trip counts, and the cost of switching to SIMD mode outweighs the ben-
+eﬁt of vectorization. Array recovery is necessary for this transformation, even
+though, on its own, array recovery decreases performance on the 21160, shown
+in Figure 11. In one case, SIMD vectorization gives a speedup up of 5.48, due
+to parallel use of both vector units and use of both buses and improved code
+generation as a side effect of the pointer-to-array conversion.
+
+Delinearization. This is applicable to just four of the benchmarks shown
+in Figure 14, those containing linearized two-dimensional array traversals.
+
+ACM Transactions on Embedded Computing Systems, Vol. 2, No. 2, May 2003.
+
+Array Recovery and High-Level Transformations
+
+†
+
+153
+
+It aids dependence analysis, especially for the TriMedia, and allows further
+loop and data transformations. Overall, it is generally beneﬁcial for the Tri-
+Media and C6201, but costly for the SHARC. The negative impact on the
+SHARC’s performance is due to slightly more complex code generated for the
+two-dimensional array accesses preventing AGU exploitation.
+
+Array padding. This is used to reduce data cache conﬂicts, and is suitable
+only for the TriMedia, where it improves execution time in those case where it is
+applicable (see Figure 15). Although beneﬁcial in all cases, it is applicable to only
+three programs on one architecture, and hence may be of limited general use.
+
+Loop tiling. This increases cache utilization for the TriMedia. It also im-
+proves some codes on the TI C6201, although it does not contain any data
+cache. In effect, we are matching the working set to that of the local memory
+(see Figure 15). In the case of matrix2, the slowdown is due to the overhead of
+additional loops, which is not offset by increased locality.
+
+Scalar replacement.
+
+In Figure 16, it generally improves the performance
+on the TriMedia for those benchmarks where it is applicable, but is more vari-
+able for the other two architectures.
+
+Summary. The above results show that transformations can have a sig-
+niﬁcant impact on performance. However, this impact is not always beneﬁcial
+and varies depending on machine and benchmark. Furthermore, combinations
+of transformations are not considered. In the next section we look at combining
+transformations and their impact on performance in more detail.
+
+6.2 Benchmark-Oriented Evaluation
+
+In Figure 17, the results for the selected set of benchmarks are summarized.
+For each benchmark program and each architecture, the maximum speedup
+achieved is shown. Figure 18 lists the transformations needed to obtain such
+speedups.
+
+Highlighting the best performance is justiﬁed by the fact that an embedded
+systems programmer or a feedback-directed compiler system would try sev-
+eral different options before selecting the best one. This is discussed further in
+Section 7.
+
+matrix1 (mat1). The matrix1 benchmark computes the product of two
+matrices. After pointer conversion of the original program several different
+transformations and analyses can be applied to this program. The ADSP-21160
+delinearization and subsequent SIMD-style parallelization, result in a speedup
+of 5.48. The transformed program utilizes both datapaths of the Analog Devices
+processor and its two memory banks can be used in parallel, whereas the orig-
+inal program makes poor usage of the available resources.
+
+The TriMedia beneﬁts most from a delinearized version of the array-based
+program to which scalarization, loop unrolling, and padding have been applied.
+Each transformation applied on its own already increases the performance, but,
+in combination a, speedup of 3.82 can be observed. Loop unrolling increases the
+ﬂexibility of the instruction scheduler to ﬁll the ﬁve issue slots of the TM-1 with
+
+ACM Transactions on Embedded Computing Systems, Vol. 2, No. 2, May 2003.
+
+154
+
+†
+
+B. Franke and M. O’Boyle
+
+Fig. 17. Best overall best performance.
+
+instructions, since the new loop body has more instructions to choose from.
+Scalarization reduces the number of memory accesses, whereas padding re-
+duces the number of cache conﬂicts. The situation is similar for the TI C6201B,
+although the best performance is achieved with just array recovery and loop
+unrolling together. The execution speed can be more than doubled on the C6201
+architecture.
+
+matrix2 (mat2). This is based on the same matrix multiplication algo-
+rithm as matrix1, but in this implementation the ﬁrst and last iterations of
+the inner loop are peeled off. Originally intended as a hint to the compiler to
+create efﬁcient code for the available AGUs and to avoid the otherwise neces-
+sary accumulator clear operation before the loop, this transformation prevents
+
+ACM Transactions on Embedded Computing Systems, Vol. 2, No. 2, May 2003.
+
+Array Recovery and High-Level Transformations
+
+†
+
+155
+
+Fig. 18. Best transformation sequence for the DSPstone benchmark suite.
+
+the exploitation of SIMD parallelism of the ADSP-21160. Since the required
+double-word alignment of array data in SIMD loops is violated, the matrix2
+benchmark cannot beneﬁt from parallel loops unless it is “retransformed” back
+into the more regular form of matrix1. Still, pointer conversion and loop un-
+rolling can be applied to yield a speedup of 1.16.
+
+For VLIW architectures the situation is different. On the TriMedia, a
+speedup of 3.52 can be achieved after array recovery, padding, scalarization,
+and 5-fold unrolling.
+
+The TI DSP, unlike the SHARC, beneﬁts from the differences of the matrix2
+implementation, after array recovery and 3-fold unrolling a speedup of 2.39
+is possible. This speedup mainly results from array recovery, with unrolling
+contributing only a small percentage. The inspection of the assembly code gen-
+erated by the compiler reveals a more efﬁcient inner loop due to a higher
+degree of instruction parallelism. After array recovery, the number of opera-
+tions in the loop is not only smaller, but the number of operations executed
+in parallel is higher. The explicit array accesses increased the efﬁciency of the
+data-dependence analysis supporting the compiler built-in software pipelining
+transformation.
+
+matrix1x3 (mat3). This program computes the matrix product of a 3 £ 3
+matrix and a 3 £ 1 vector in a simple loop with few iterations. For the ADSP-
+21160, array recovery and total loop unrolling of the very small loop can speed
+up the execution by a factor of 1.93. The largest speedup on the TriMedia can be
+achieved with total loop unrolling of either the pointer or array-based version
+of the program. Although loop unrolling in general increases the code size, it is
+well justiﬁed in this case, as the loop iteration range as well as the loop body
+are very small. On the C6201B, total loop unrolling of the array-based code can
+also account for the largest possible speedup, but the performance gain on this
+architecture is smaller than on the TriMedia.
+
+ACM Transactions on Embedded Computing Systems, Vol. 2, No. 2, May 2003.
+
+156
+
+†
+
+B. Franke and M. O’Boyle
+
+ﬁr. This program is an implementation of a ﬁnite response ﬁlter, and con-
+tains a single loop. After array recovery the loop is amendable to loop reversal
+and loop splitting, which in turn allows SIMD parallelization of one of the result-
+ing loops. Although only a single loop can be parallelized for the ADSP-21160, a
+speedup of 1.32 is achieved. Since the other loop contains a memory access to a
+nondouble-word aligned array element, this loop must be executed sequentially.
+Further transformations in order to overcome this restriction are possible, but
+are beyond standard compiler analysis. Loop unrolling of the array-based loop
+gives the best results on the TriMedia. The 8-fold unrolling results in a speedup
+of 2.20. Again on the C6201, the same set of transformations accounts for the
+largest speedup, which is 1.08. Once again the speedup achieved is smaller on
+the TI processor than the TriMedia.
+
+ﬁr2dim (ﬁr2). This is a two-dimensional ﬁnite response ﬁlter. In theory,
+the fir2dim benchmark could be parallelized for the ADSP-21160, but the com-
+piler is overly restrictive with the use of the SIMD loop directive. In sequential
+execution mode, scalarization can be applied after array recovery of the pro-
+gram, and a speedup of 1.66 obtained. Unlike the other programs where scalar-
+ization cannot improve performance, fir2dim beneﬁts from this transformation
+because it can be applied across the three inner loops where redundant memory
+accesses are removed. The compiler is not able to remove these accesses without
+this high-level code transformation. On the TriMedia a speedup of 7.38 is possi-
+ble after array recovery, delinearization, scalarization and total unrolling of the
+three small inner loops. For the C6201, a pointer-based version of the program
+achieved the best performance, but only after it had been converted into the
+array-based representation, which allowed the application of array dataﬂow
+analysis and scalarization. After scalarization and loop unrolling, the program
+was converted back into the pointer-based form, which gave an overall speedup
+of 1.02. Although the speedup is small, this example shows that it is possible to
+apply transformations that could not be applied to the pointer-based program.
+In addition, it is possible to go back to pointer-based code when it appears to
+improve the overall performance.
+
+convolution (conv). This loop can easily be parallelized for the ADSP-
+21160 after array recovery, and the execution time is reduced to 25.9% of the
+original time. For the TriMedia 10-fold loop unrolling does best, resulting in a
+speedup of 3.56. Similarly, the largest speedup on the C6201 is achieved with
+8-fold unrolling. The increased size of the loop body provides the TriMedia and
+TI compiler with an increased ﬂexibility for instruction scheduling and reduces
+the number of NOP-operations.
+
+n real updates (real). This loop can be easily parallelized for the ADSP-
+21160 and a speedup of 3.91 is achieved. The TriMedia beneﬁts most from
+pointer conversion and unrolling. Array recovery helps the compiler to prove
+independence of different memory accesses, whereas loop unrolling increases
+the number of instructions in the loop body. The maximum speedup achievable
+on the TriMedia is 3.78. However, the maximum speedup on the C6201 is rather
+small,1.02, due to 9-fold loop unrolling of the pointer-based code.
+
+ACM Transactions on Embedded Computing Systems, Vol. 2, No. 2, May 2003.
+
+Array Recovery and High-Level Transformations
+
+†
+
+157
+
+n complex updates (comp). Full SIMD parallelization fails due to an
+overly restrictive compiler, but it is still possible to take advantage of the two
+functional units of the ADSP-21160 after array recovery, loop splitting, and par-
+allelization of one of the resulting loops. For the TriMedia, array recovery was
+once again proven to be useful, supporting other transformations such as de-
+linearization and scalarization. Together with 2-fold loop unrolling, a speedup
+of 2.52 was obtained. The same set of transformations, but without unrolling,
+also achieved the largest speedup on the C6201.
+
+dot product (dot). The original pointer-based program performs best on
+the ADSP-21160. SIMD parallelization is applicable, but the overhead involved
+in switching from sequential to SIMD mode and back is larger than the beneﬁt
+obtained from parallel processing. Also, loop unrolling is not beneﬁcial, as it
+increases the execution time. In contrast, loop unrolling of either the pointer or
+array-based program results in a speedup of 4.6 on the TriMedia. This VLIW
+architecture clearly beneﬁts, and can take advantage of the removal of the loop
+construct during instruction scheduling. The original loop with just two itera-
+tions causes many NOP operations and branch penalties that can be eliminated
+by complete unrolling. The TI compiler handles the loop as well as the unrolled
+straight-line code, so the runtime of the original program cannot be decreased
+by unrolling.
+
+iir biquad N sections (iir). This is a benchmark that implements an in-
+ﬁnite impulse response ﬁlter with N biquad sections. SIMD parallelization can-
+not be applied to this program due to a loop-carried data dependence in its loop
+body. However, the sequential version for the ADSP-21160 can be improved by
+array recovery, delinearization and scalarization giving a speedup to a factor
+of 1.14. Array recovery and 5-fold unrolling gives the best performance with a
+speedup of 4.41 on the TriMedia. An inspection of the compiler-generated as-
+sembly code shows a much tighter packing of operations into machine instruc-
+tions, i.e., the number of wasted issue slots ﬁlled with NOPs is signiﬁcantly
+reduced. Experiments on the C6201 were less successful due to technical prob-
+lems with this program in the available simulation environment. However,
+initial results show only small chances of achieving a signiﬁcant speedup due
+to a good performance of the original code.
+
+lms. This is the kernel of a least-mean square ﬁlter. The lms program con-
+tains two loops that can both beneﬁt from SIMD parallelization. After array
+recovery, loop reversal is applicable, so that the Analog Devices compiler ac-
+cepts the ﬁrst loop as a SIMD loop. An overall speedup of 1.70 is achieved on
+the ADSP-21160. The TriMedia and the C6x architecture both beneﬁt most from
+array recovery and loop unrolling, and speedups of 3.16 and 1.56, respectively,
+are possible.
+
+6.3 Architecture-Oriented Evaluation
+
+Overall, the TriMedia beneﬁts the most from high-level transformations, with
+an average speedup of 3.69; and the C60 beneﬁts the least, with a speedup of
+1.39; and with SHARC somewhere in between, with an average speedup of 2.31.
+
+ACM Transactions on Embedded Computing Systems, Vol. 2, No. 2, May 2003.
+
+158
+
+†
+
+B. Franke and M. O’Boyle
+
+TriMedia.
+
+In all but one case, the best optimization for each program re-
+quired pointer-to-array conversion. Although, as was shown in Figure 11, this
+alone can improve performance on the TriMedia, its major beneﬁt was in en-
+abling further transformations such as delinearization, padding, and scalar
+replacement. Although unrolling was useful in all cases, it required additional
+transformations in all, bar one case, to give the best performance. The TriMedia,
+in general, beneﬁtted the most from the application of combined transforma-
+tions. This is mainly due to its more complex architecture, in particular the
+combination of a 5-way VLIW processor and an on-chip cache. Finally, the Tri-
+Media probably beneﬁted most from the transformations in part due to its
+relatively immature compiler.
+
+TI C6201. The C6201 beneﬁts least of all from the application of high-level
+transformations. Yet even with a mature native compiler, it is possible to get on
+average a speedup of 1.39. In all but four cases, pointer-to-array conversion was
+required to get the best performance—two cases being when no optimization
+gave any improvement. Unrolling was once again useful in exposing ILP, espe-
+cially when combined with pointer-to-array conversion. Unlike the TriMedia,
+smaller transformation sequences seemed to perform best. The C60 rarely ben-
+eﬁted from scalar replacement, as the native compiler was largely capable of
+detecting redundant memory accesses in all but two cases.
+
+SHARC. Unlike the two previous platforms, the SHARC gained the best
+speedup when its SIMD capabilities were exploited. Although pointer-to-array
+conversion always degraded performance in isolation, when combined with
+SIMD vectorization, in six cases it provided signiﬁcant performance improve-
+ment. Overly restrictive requirements on the pragma prevented fuller exploita-
+tion of the SHARC SIMD capabilities.
+
+Summary. Overall, selecting the appropriate high-level transformations
+gave on average a 2.43 speedup across the three platforms investigated. In
+26 out of 33 cases, pointer-to-array conversion contributed to the increased
+performance and in only three cases was the best performance gained with
+transformations other then pointer-to-array conversion.
+
+7. RELATED WORK AND DISCUSSION
+
+There has been little work in evaluating the impact of transformation sequences
+on real DSP processors. In Andreyev et al. [1996] a heuristic optimization
+method is presented that strongly relies on the information of how a certain
+compiler for a speciﬁc processor exploits high-level program constructs for code
+generation. This approach is very restricted, in the sense that it cannot easily
+be transferred to a different processor or even a different compiler for the same
+processor. Although aimed at DSP applications, the authors present only a few
+results for a general-purpose processor (Pentium).
+
+An address optimization based on a sequence of source-to-source transforma-
+tions is shown and evaluated in Gupta et al. [2000]. This optimization relies on
+explicit array accesses and does not work with pointer-based programs. Here
+our pointer-conversion algorithm can be applied as a preparatory stage that
+
+ACM Transactions on Embedded Computing Systems, Vol. 2, No. 2, May 2003.
+
+Array Recovery and High-Level Transformations
+
+†
+
+159
+
+enables further optimization. Although aiming at DSP applications, the exper-
+imental results come from general-purpose CPUs. It is not at all obvious that
+the transformation extends to DSPs as the authors claim, and a demonstration
+of this is still outstanding.
+
+Software pipelining as a source-to-source transformation in the context of
+DSP applications is investigated in Wang and Su [1998] and Su et al. [1999].
+The combined effect of different optimizations is neglected apart from two nor-
+malization transformations (renaming and loop distribution) needed by this
+approach.The evaluation of the effectiveness of the presented transformation
+is performed on a single architecture (Motorola DSP56300) where it achieved
+good results, albeit for a small set of benchmark programs.
+
+The effect of unroll-and-jam and scalar replacement for imperfectly nested
+loops is evaluated in Song and Lin [2000]. A simple heuristic method is used
+to determine the unroll factor, and the results are compared with strip-mining,
+loop distribution, and loop unrolling. The SC140 processor serves as the tar-
+get architecture for the experimental evaluation. The results are promising,
+although the number of benchmark programs is very small, and only a single
+architecture was considered.
+
+One of the main reasons that there has been little evaluation of transforma-
+tion sequences is due to the pointer-based nature of many of the benchmarks.
+In our previous work [Franke and O’Boyle 2001] we developed a basic pointer
+conversion algorithm. This, however, was restricted in that it was unable to
+fully handle nested loop constructs and functions. Recent work [van Engelen
+and Gallivan 2001] has extended our previous work, based on induction-
+variable recognition. It can handle a much greater variety of recurrence re-
+lations among pointers and covers many difﬁcult program types, fortunately
+rarely found in practice. It is, however, limited in its applicability to programs
+without functions. There is also little consideration of conﬂicting index func-
+tions in the presence of control-ﬂow or the potential side-effects of pointers to
+pointers.
+
+This article has shown that array recovery and selecting an appropriate
+transformation combination can lead to good performance. However, selecting
+the right transformation is a much more difﬁcult task. There has been much
+work investigating the use of static analysis to determine the best transforma-
+tion [Kandemir et al. 1999]. This approach is highly attractive in the context of
+general-purpose computing, as the analysis is typically a small fraction of the
+compilation time. Transformation selection based on static analysis is a fast,
+but unfortunately frequently inaccurate approach. Proﬁle-directed approaches
+have proved promising where actual runtime data is used to improve optimiza-
+tion selection.
+
+In the OCEANS project [Barreteau 1998] high- and low-level optimizations
+within an iterative compilation framework for embedded VLIW processors were
+investigated. Experimental results for the TriMedia TM-1000 show that such
+an approach has promise. Recently, we have further investigated the use of it-
+erative compilation, where different optimizations are selected and evaluated,
+with the eventual best-performing one selected [Kisuki et al. 2000]. Such an
+approach has a much longer compilation time, but this is not a major issue
+
+ACM Transactions on Embedded Computing Systems, Vol. 2, No. 2, May 2003.
+
+160
+
+†
+
+B. Franke and M. O’Boyle
+
+in embedded systems. Using such an approach, a compiler should automati-
+cally ﬁnd the best speedups shown in Figure 18, and is the subject of ongoing
+research.
+
+8. CONCLUSION
+
+The contribution of this article is to introduce a new technique for transforming
+C code with pointer-based array accesses into explicit array accesses to enable
+high-level optimizations on DSP architectures. The approach was implemented
+and integrated in our experimental compiler and tested on the DSPstone bench-
+mark suite. This article has also empirically demonstrated the usefulness of
+applying high-level transformations to DSP applications across three differ-
+ent platforms. Selecting the appropriate transformation, gives on average a
+2.43 speedup across the three platforms investigated. The programs consid-
+ered are relatively straightforward kernels, and future work will investigate
+larger applications to determine how to proﬁtably extend our restricted conver-
+sion scheme where the potential scope for high-level optimizations is greater.
+Given the empirical evidence justifying the use of high-level transformations,
+the next step is to build a compiler strategy exploiting such transformations. Fu-
+ture work will investigate both static and iterative approaches to optimization
+selection and consider the integration of high-level optimization with low-level
+code selection and scheduling.
+
+REFERENCES
+
+com.
+
+ALLEN, R. AND JOHNSON, S. 1988. Compiling C for vectorization, parallelization, and inline ex-
+pansion, In Proceedings of the SIGPLAN ’88 Conference of Programming Languages Design and
+Implementation (Atlanta, GA, June 1988).
+
+ANALOG DEVICES INC. 1999. ADSP-21160 SHARC DSP Hardware Reference. http://www.analog.
+
+ANDREYEV, A. L., BALYAKHOV, D. I., AND RUSSAKOV, V. P. 1996. The technique of high-level optimiza-
+tion of DSP algorithms implementation, International Conference on Signal Processing Applica-
+tions & Technology (ICSPAT), 1996.
+
+DE ARAUJO, G. C. S. 1997. Code generation algorithms for digital signal processor. Dissertation,
+
+Princeton University, Dep. Electrical Engineering.
+
+BACON, D. F., GRAHAM, S. L., AND SHARP, O. J. 1994. Compiler transformations for high-performance
+
+computing. ACM Comput. Surv. 26, 4, (1994), 345–420.
+
+BARRETEAU, M. ET AL. 1998. OCEANS optimising compilers for embedded applications, In Pro-
+
+ceedings Euro-Par 98, LNCS 1470 (1998), 1123–1130.
+
+BHATTACHARYYA, S. S., LEUPERS, R., AND MARWEDEL, P. 2000. Software synthesis and code gener-
+ation for signal processing systems. IEEE Trans. Circuits Syst. II: Analog and Digital Signal
+Processing, 47, 9.
+
+CALLAHAN, D., COOPER K. D., KENNEDY, K., AND TORCZON, L. 1986.
+
+BODIN, F., CHAMSKI, Z., EISENBEIS, C., ROHOU, E., AND SEZNEC, A. 1998. GCDS: A compiler strategy
+for trading code size against performance in embedded applications. INRIA, Tech. Rep. RR-3346.
+Interprocedural constant propa-
+gation. In Proceedings of the SIGPLAN Symposium on Compiler Construction (1986), 152–161.
+CLAUSS, P. 1996. Counting solutions to linear and nonlinear constraints through ehrhart poly-
+nomials: applications to analyze and transform scientiﬁc programs. In Proceedings of the 1996
+International Conference on Supercomputing (Philadelphia, PA, May 1996), ACM Press, 278–285.
+DUESTERWALD, E., GUPTA, R., AND SOFFA, M. 1993. A practical data ﬂow framework for array ref-
+erence analysis and its use in optimizations. In Proceedings of the SIGPLAN Conference on
+Programming Languages Design and Implementation, (Albuquerque, NM, 1993), 67–77.
+
+ACM Transactions on Embedded Computing Systems, Vol. 2, No. 2, May 2003.
+
+Array Recovery and High-Level Transformations
+
+†
+
+161
+
+FRANKE, B. AND O’BOYLE, M. 2001. Compiler transformation of pointers to explicit array accesses
+
+in DSP applications. In Proceedings of ETAPS CC 2001 (Genova, Italy, 2001).
+
+FREDERIKSEN, A., CHRISTIANSEN, R., BIER, J., AND KOCH, P. 2000. An evaluation of compiler-processor
+interaction for DSP applications. In Proceedings of the 34th IEEE Asilomar Conference on Signals,
+Systems, and Computers (Paciﬁc Grove, CA, Oct. 2000).
+
+GROVE,D. AND TORCZON, L. 1993.
+
+Interprocedural constant propagation: A study of jump func-
+tion implementations. In Proceedings of the ACM SIGPLAN ’93 Conference on Programming
+Language Design and Implementation (1993), 90–99.
+
+GUPTA, S., MIRANDA, M., CATTHOOR, F., AND GUPTA, R. 2000. Analysis of high-level address code
+transformations for programmable processors. In Proceedings of Design and Test in Europe Con-
+ference (DATE, 2000).
+
+KANDEMIR, M., VIJAYKRISHNAN, N., IRWIN, M. J., AND KIM, H. S. 2000. Experimental evaluation
+of energy behavior of iteration space tiling. In Proceedings of the International Workshop on
+Languages and Compilers for Parallel Computing (Yorktown Heights, NY, Aug. 2000).
+
+KANDEMIR, M., RAMANUJAM, J., AND CHOUDHARY, A. 1999.
+
+Improving cache locality by a combination
+
+of loop and data transformations. IEEE Trans. Comput. 48, 2 (Feb. 1999), 159–167.
+
+KISUKI, T., KNIJNENBURG, P. M. W., AND O’BOYLE, M. F. P. 2000. Combined selection of tile sizes and
+unroll factors using iterative compilation. In Proceedings of PACT 2000, Parallel Architectures
+and Compiler Technology (Oct. 2000), IEEE Press, 237–248.
+
+LIEM, C., PAULIN, P., AND JERRAYA, A. 1996. Address calculation for retargetable compilation and
+exploration of instruction set architecture. In Proceedings of the 33rd ACM Design Automation
+Conference (DAC, Las Vegas, NV, 1996).
+
+LEUPERS, R. 1998. Novel code optimzation techniques for DSPs. In Proceedings of the 2nd Euro-
+
+pean DSP Education and Research Conference (Paris, 1998).
+
+MAYDAN, D. E., HENNESSY, J. L., AND LAM, M. S. 1995. Effectiveness of data dependence analysis,
+
+Int. J. Parallel Program. 23, 1, (1995), 63–81.
+
+MORGAN, R. 1998. Building an Optimizing Compiler. Butterworth-Heinemann, Boston, MA.
+NUMERIX-DSP Digital Signal Processing Web Site, http://www.numerix-dsp.com/c coding.pdf,
+
+O’BOYLE M. F. P. AND KNIJNENBURG, P. M. W. 1998.
+
+Integrating loop and data transformations for
+global optimisation. In Proceedings of PACT ’98, Parallel Architectures and Compiler Technology
+(Oct. 1998), IEEE Press, 12–19.
+
+PHILIPS SEMICONDUCTORS 1999. TriMedia TM-1300 http://www.semiconductors.philips.com,
+
+2000.
+
+1999.
+
+PUGH, W. 1994. Counting solutions to presburger formulas: How and why. In Proceedings of
+the SIGPLAN Conference on Programming Languages Design and Implementation, ACM Press,
+1994, 121–134.
+
+SAGIV, M., REPS, T., AND HORWITZ, S. 1995. Precise interprocedural dataﬂow analysis with applica-
+tions to constant propagation. In Proceedings of the TAPSOFT’95 Conference (Arhus, Denmark),
+LNCS, Springer-Verlag, 1995, 49–61.
+
+SAIR, S., KAELI, D. K., AND MELEIS, W. 1998. A study of loop unrolling for VLIW-based DSP pro-
+cessors. In Proceedings of the 1998 IEEE Workshop on Signal Processing Systems (SiPS ’98, Oct.
+1998), 519–527.
+
+SONG, Y. AND LIN, Y. 2000. Unroll-and-jam for imperfectly-nested loops in DSP applications. In
+Proceedings of the ACM International Conference on Compilers, Architectures, Synthesis for Em-
+bedded Systems (Nov. 2000).
+
+SU, B., WANG, J., AND ESGUERRA, A. 1999. Source-level loop optimization for DSP code genera-
+tion. In Proceedings of the 1999 IEEE International Conference on Acoustic, Speech and Signal
+Processing (ICASSP ’99, Phoenix, AZ, 1999), 2155–2158.
+
+VAN SWAAIJ, M. F. X. B., FRANSSEN, F. H. M., CATTHOOR, F. V. M., AND DE MAN, H. J. 1992. Automatimg
+high level control ﬂow transformations for DSP memory management. In Proceedings of the
+IEEE Workshop on VLSI Signal Processing, (Napa Valley, CA, Oct. 1992). Also in VLSI Signal
+Processing V, K. Yao, R. Jain, W. Przytula (Eds.), IEEE Press, New York, 397–406.
+
+TIMMER, A., STRIK, M., VAN MEERBERGEN, J., AND JESS, J. 1995. Conﬂict modelling and instruction
+scheduling in code generation for in-house DSP cores. In Proceedings of the 1995 Design Automa-
+tion Conference (1995), 593–598.
+
+ACM Transactions on Embedded Computing Systems, Vol. 2, No. 2, May 2003.
+
+162
+
+†
+
+B. Franke and M. O’Boyle
+
+TEXAS INSTRUMENTS 2001. TMS320C6201B Digital Signal Processor. http://www.ti.com.
+VAN ENGELEN, R. AND GALLIVAN, K. 2001. An efﬁcient algorithm for pointer-to-array access conver-
+sion for compiling and optimizing DSP applications. In Proceedings of the International Workshop
+on Innovative Architecture (IWIA 2001, Maui, 2001).
+
+WANG, J. AND SU, B. 1998. Software pipelining of nested loops for real-time DSP applications, In
+Proceedings of the 1998 IEEE International Conference on Acoustic, Speech and Signal Processing
+(ICASSP ’98, Seattle, WA, 1998).
+
+ZIVOJNOVIC, V., VELARDE, J. M., SCHLAGER, C., AND MEYR, H. 1994. DSPstone: A DSP-oriented bench-
+marking methodology, In Proceedings of Signal Processing Applications & Technology Conference
+(Dallas, TX, 1994).
+
+Received February 2002; accepted May 2002
+
+ACM Transactions on Embedded Computing Systems, Vol. 2, No. 2, May 2003.
+
+

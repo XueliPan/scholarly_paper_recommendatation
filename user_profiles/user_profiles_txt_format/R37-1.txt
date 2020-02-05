@@ -1,0 +1,2398 @@
+Understanding Transactional Memory Performance
+
+Donald E. Porter and Emmett Witchel
+
+The University of Texas at Austin
+{porterde,witchel}@cs.utexas.edu
+
+Abstract—Transactional memory promises to generalize trans-
+actional programming to mainstream languages and data struc-
+tures. The purported beneﬁt of transactions is that they are easier
+to program correctly than ﬁne-grained locking and perform just
+as well. This performance claim is not always borne out because
+an application may violate a common-case assumption of the
+TM designer or because of external system effects. This paper
+carefully studies a range of factors that can adversely inﬂuence
+transactional memory performance.
+
+In order to help programmers assess the suitability of their
+code for transactional memory, this paper introduces a formal
+model of transactional memory as well as a tool, called Syncchar.
+Syncchar can predict the speedup of a conversion from locks to
+transactions within 25% for the STAMP benchmarks. We also use
+the Syncchar tool to diagnose and eliminate a starvation pathology
+in the TxLinux kernel, improving the performance of the Modiﬁed
+Andrew Benchmark by 55% over Linux.
+
+The paper also presents the ﬁrst detailed study of how the per-
+formance of user-level transactional programs (from the STAMP
+benchmarks) are inﬂuenced by factors outside of the transactional
+memory system. The study includes data about the interaction of
+transactional programs with the architecture, memory allocator,
+and compiler. Because many factors inﬂuence the performance of
+transactional programs, getting good performance from transac-
+tions is more difﬁcult than commonly appreciated.
+
+I. INTRODUCTION
+
+Transactional memory [11], [14] is a promising paradigm
+to simplify concurrent programming. Transactions relieve the
+programmer from worry about deadlock, making it easier to
+code correctly. However, most real-life programs need to be
+both correct and efﬁcient, and the introduction of transactions to
+an application can have negative, counterintuitive consequences
+for performance. Based on several years’ experience working
+with transactional memory, this paper analyzes a range of issues
+that lead to performance problems in transactional applications,
+with a focus on helping developers and applications transition
+from using locks to transactions.
+
+Designers of transactional memory systems make imple-
+mentation decisions based on an implicit model of common-
+case application behavior. For instance, TM designs often trade
+faster commits for slower aborts, and as a result applications
+with high-contention transactions can perform much worse than
+with locking. In many cases, application data structures can
+be reorganized to improve transactional performance, but these
+opportunities are not necessarily obvious upon inspection of
+the code. Thus, it is important for developers to have tools that
+help them to diagnose and to correct performance problems.
+
+To help developers characterize and tune the performance
+of transactional programs, this paper develops and validates
+Syncchar, or synchronization characterization, a formal model
+
+of transactional memory performance and a tool based on the
+model. The Syncchar model starts with a lock-based or trans-
+actional parallel application and samples the sets of addresses
+read and written during critical sections. It then builds a model
+of the program’s execution that can predict the performance
+of the application if it used transactions. The model has two
+key metrics, data independence and conﬂict density of the
+critical regions. Data independence measures the likelihood
+that threads will access disjoint data. Conﬂict density measures
+how many threads are likely to be involved in a data conﬂict
+should one occur. Because most large-scale parallel applications
+use locking, a key use for the Syncchar model is identifying
+which applications could beneﬁt from using transactions before
+investing the engineering effort to make such a conversion.
+
+The Syncchar model is approximate, but useful, both for the
+critical regions that it predicts will be performance problems
+and for those that
+it predicts will perform well. Program-
+mers can focus time reorganizing code in critical regions
+that will serialize when using transactions. Working with a
+performance model helps programmers tune transactional per-
+formance, which requires different intuitions from tuning lock-
+based code. For instance, common lock-based programming
+techniques, such as walking a linked list or incrementing a
+shared counter inside a critical region, can reduce transactional
+performance.
+
+This paper also presents a case study of performance tuning
+the TxLinux kernel [29], [31]. TxLinux is a version of the Linux
+kernel converted to use hardware transactional memory. This
+study demonstrates the often counterintuitive nature of tuning
+transactional performance and how Syncchar analysis can help
+focus the tuning effort.
+
+Performance problems for transactional applications can also
+arise from the interaction of the TM system with unrelated
+portions of the system. For instance, compiler optimizations
+that avoid branches on a deeply pipelined processor can dra-
+matically increase the conﬂict rate for a critical region. These
+issues are difﬁcult for the application developer to anticipate
+and to debug. Ultimately, these issues must be resolved with
+better integration of the TM implementation with the rest of the
+system stack, but the Syncchar tool can help developers assess
+whether their code needs tuning or a performance problem is
+attributable to system effects.
+
+This paper is the ﬁrst to present data on how the system
+inﬂuences the performance of user-level transactional programs.
+The paper discusses the effect of various factors on perfor-
+mance, including the input size, architectural features, standard
+libraries and the compiler.
+
+978-1-4244-6022-9/10/$26.00 ©2010 IEEE
+
+97
+
+This paper contributes the following:
+1) A new analytic model that predicts how application per-
+
+formance will scale with transactions.
+
+2) Experimental validation of the analytic model, charac-
+terizing the performance of workloads from the STAMP
+benchmark suite [20] with an average error rate of 25%.
+3) Detailed measurements and case studies of whole-system
+HTM behavior, including architectural effects, the memory
+allocator, and the compiler.
+
+4) A case study of performance tuning the TxLinux kernel,
+in which we improve the performance of the Modiﬁed An-
+drew Benchmark at 8 CPUs by 55% relative to unmodiﬁed
+Linux.
+
+This paper describes the need for a transactional memory
+performance prediction and tuning tool (Section II). The paper
+then presents novel techniques and a tool for investigating
+the potential of transactional memory, through measuring data
+independence and conﬂict density of critical regions protected
+by the same lock. (Section III). Next,
+the paper validates
+the model with a set of microbenchmarks and the STAMP
+benchmark suite (Section IV). The paper then presents detailed
+measurements and case studies of system effects on transac-
+tional memory performance (Section V). Finally, the paper
+applies the methodology and tools to tune the performance
+of the TxLinux kernel [29], [31] (Section VI). Section VII
+describes implementation details of the Syncchar tool, Sec-
+tion VIII presents related work, and Section IX concludes.
+
+II. TUNING TRANSACTIONAL PERFORMANCE IS DIFFICULT
+
+Understanding and tuning transactional performance requires
+different skills and intuitions from tuning lock-based concurrent
+code because the factors that inﬂuence performance are differ-
+ent. Tuning the performance of lock-based programs generally
+involves identifying highly contended locks and breaking them
+down into smaller locks, or restructuring the data to avoid
+synchronization (e.g., per-thread data structures and read-copy
+update [19]). Tuning transactions, on the other hand, requires a
+reduction in conﬂicting memory operations (concurrent trans-
+actions writing the same data). Although there are some known
+techniques for avoiding memory conﬂicts, the process can be
+difﬁcult and counterintuitive.
+
+Many transactional memory implementations also have sub-
+stantial limitations that complicate a conversion from locking
+to transactions. For instance, HTM systems that use cache
+coherence either require that the address set of a transaction
+ﬁt in the L1 cache or fall back on a software-based mutual
+exclusion mechanism. TM systems also have difﬁculty isolating
+and rolling back the effects of system calls inside of a trans-
+action. While many transactional applications can work around
+the limits of a TM implementation in practice, these issues can
+make adoption of transactions more complicated than a rote
+replacement of locks with atomic blocks.
+
+Given these challenges to adopting transactional memory,
+a predictive performance model such as Syncchar can help
+developers assess whether a migration to transactional memory
+is worth the investment. Syncchar is also useful as a standard
+
+proﬁling tool for transactional applications, giving developers
+insight into which code is most likely to become a scalability
+bottleneck.
+
+If performance of a converted system does not meet expecta-
+tions, Syncchar can help assess whether the problem lies within
+the application or the transactional memory implementation.
+As we show in Section V, many parts of the overall computer
+system can affect the performance of a transactional program.
+The transactional memory programming community can also
+beneﬁt from a predictor of performance in developing standard
+benchmarks for transactional memory implementations and
+reasoning about the performance of a particular system.
+
+A. Transaction tuning (cid:54)= lock tuning
+
+A common optimization in lock-based programming is
+caching attributes, such as the number of elements in a data
+structure. Caching attributes saves work when they are needed,
+and updating them introduces no synchronization overhead
+under locking, since the lock protecting the data structure
+is already held when the data structure is updated. With
+transactional memory, however, multiple threads updating the
+same memory location serialize concurrent execution. Cached
+attributes can be particularly prone to becoming a bottleneck
+because of the work wasted on a transaction restart. If updates
+are made late in the critical section and if values are read early
+in others, the work lost on a transaction restart increases further.
+Splitting counters that cannot be eliminated into per-thread
+counters avoids conﬂicts on counter writes, but
+introduces
+conﬂicts on reads, as each CPU’s value must be read to provide
+a correct sum. Per-thread counters thus work well if they are
+updated more frequently than they are read, but are pointless
+otherwise.
+
+Linked lists are commonly used as a generic container
+because they are simple to implement, have a low memory
+overhead, and don’t have problems with resizing. Linked lists,
+however, can be pathologically bad for transactional memory,
+because each thread traverses the exact same pointer path inside
+a critical region. Any pointer update will conﬂict with all
+other critical regions that have walked further down the list,
+despite the fact that concurrent execution of the operations is
+semantically safe.
+
+B. System effects
+
+For instance,
+
+Transactional programs are inﬂuenced by the program input
+size, hardware architecture, operating system, and sometimes
+the memory allocator and the compiler. Each subsystem can
+affect performance, and their interplay can also be signiﬁcant.
+the responsiveness of the operating system
+scheduler can lead to load imbalance or failure to concurrently
+schedule transactional threads. Poor scheduling can cause tra-
+ditional transaction metrics, like restart rate, to improve despite
+worsening execution time. Similarly, limitations of a hardware
+system, such as overﬂowing the cache or taking a TLB miss,
+can cause a transaction to restart and fall back on a slower
+software path. These effects are often difﬁcult to predict by
+code inspection.
+
+98
+
+Despite a seemingly straightforward appearance, tuning the
+memory access patterns of a transactional program can be sub-
+tle and non-intuitive. Even simple rules, like splitting counters
+shared by threads into per-thread counters, can be pointless or
+counterproductive when applied by rote. In a large, complicated
+system, programmers will need tools like Syncchar to identify
+where their tuning efforts are best spent.
+
+III. THE SYNCCHAR MODEL
+
+The Syncchar model formalizes the intuition that transac-
+tional performance is primarily determined by the number of
+conﬂicting transactions, and provides the basis for the Syncchar
+performance tuning tool. This section explains the intuitions
+behind the Syncchar model and provides a rigorous treatment
+of how the model predicts transactional performance based on
+sampling the address sets of dynamic critical regions from a
+parallel execution.
+
+A. Syncchar approach
+
+Assessing the likelihood that dynamic instances of critical
+regions will conﬂict is at the heart of the Syncchar approach.
+The performance scalability of a transactional memory program
+hinges on the number of critical sections that can execute
+concurrently.
+
+Transactional memory systems generally rely on conﬂict
+serializability as their safety condition,
+implemented as an
+abstract form of two-phase locking [30]. We call the set of
+addresses read during an instance of a critical section the read
+set, the set of addresses written the write set, and the union of
+read and write set the address set. For critical sections A and
+B, A conﬂicts with B if: AW ∩ (BR ∪ BW ) (cid:54)= ∅. Informally,
+conﬂict serializability says that the write set of one critical
+region must be disjoint from the other’s address set to guarantee
+safety. Conﬂict serializability is efﬁcient to compute so it is
+used widely in transactional memory systems.
+
+A group of critical region executions are data independent
+if each write set is disjoint from the others’ address sets. If
+critical regions concurrently modify the same data, or have
+data conﬂicts1, the transactional memory system will serialize
+execution of the critical sections. In such cases, transactional
+memory can perform much worse than conservative locking
+due to the overhead required to detect and to resolve conﬂicts.
+Conﬂict density is a measure of how long the serial schedule
+resulting from a conﬂict is likely to be. Assume a conﬂict
+among N threads. In the best case, a single thread might write
+a datum read by N − 1 other threads. This is a low density
+conﬂict that produces a short serialized execution schedule
+(N − 1 readers commit, and then the writer). In the worst case,
+each thread can write a datum written by each of the other
+N − 1 threads, yielding a high density conﬂict that necessitates
+a completely sequential schedule (the threads must run serially,
+one after the next).
+
+Syncchar estimates the data independence and conﬂict den-
+sity of critical regions by sampling their address sets. Syncchar
+
+1We selected the term data conﬂicts over data dependence to avoid confusion
+
+with other meanings.
+
+samples address sets of critical regions that could potentially ex-
+ecute concurrently using transactional memory and determines
+which of them can conﬂict. This process, described in detail
+below, is effectively an implementation of the safety property
+of the TM system. Sampling incorporates the dynamic behavior
+of the application and its potential data conﬂicts.
+
+A similar model was developed by von Praun et al. [36],
+which calculates the dependence density of an application and
+broadly categorizes tasks within a program as low, medium,
+and high concurrency. Dependence density is essentially an
+aggregation of data independence and conﬂict density; our
+experience shows that this decomposition provides valuable
+insight into performance debugging. Syncchar closes the loop
+by making more concrete performance predictions (Section IV),
+and providing insights into performance tuning applications
+(Section VI). Section VIII provides additional comparison
+between these papers.
+
+B. Data independence
+
+Data independence provides a high-level proﬁle of the like-
+lihood that a set of critical regions will conﬂict. The data inde-
+pendence of a lock, In, is formally deﬁned as the mean number
+of threads that will not conﬂict when n threads are concurrently
+executing critical sections protected by the same lock. Data
+independence is a function of the number of threads that can
+execute concurrently, and not a simple mean. Intuitively, one
+expects the probability of conﬂict when only a single thread
+is scheduled to be zero (data independence of 1), and the
+likelihood of conﬂict to increase as the number of threads grows
+(unless all threads access completely disjoint data).
+
+Thus, when Syncchar calculates data independence for n
+CPUs, it begins with a sample of critical regions from up to n
+different threads. Syncchar then compares each address set in
+the sample to all other address sets in the sample, determining
+which threads are involved in a conﬂict Cn and which are not.
+It keeps a running mean of the number of data independent
+threads:
+
+In = n − |Cn|
+
+C. Conﬂict density
+
+The key metric in the Syncchar model is the density of the
+conﬂicts. A set of critical regions with high conﬂict density will
+be prone to conﬂicts that involve many threads and form a long
+serial schedule, whereas low density conﬂicts can be resolved
+more quickly.
+
+If one thinks of conﬂicts as forming a graph, with critical
+regions as nodes and conﬂicts as edges, the density of the
+conﬂict is the number of edges per node. Intuitively, if ev-
+ery transaction conﬂicts with every other, one expects them
+to execute sequentially, which means lower performance for
+transactional memory. On the other hand, if for example, one
+thread writes a memory location read by 31 other threads, all
+readers should complete once the writer completes, resulting in
+a performance gain that is commonly experienced in practice.
+This scenario would have a star topology if represented as a
+graph; removing the most connected node causes all others
+
+99
+
+to become disconnected (and able to proceed concurrently).
+Hence, modeling this phenomenon is crucial to the accuracy of
+predicting performance.
+
+Syncchar calculates the conﬂict density of a sample of
+address sets as follows. For each address set in Cn, we measure
+the number of conﬂicts with other address sets in Cn and divide
+it by (|Cn| − 1). The sum of each of these terms is the density
+(Dn). Formally, this is expressed as
+
+Dn =
+
+(cid:88)
+
+x∈Cn
+
+(cid:80)
+
+y∈{Cn−x} conﬂicts(x, y)
+
+|Cn − x|
+
+where conﬂicts(x, y) evaluates to 1 if address sets x and y
+can conﬂict and 0 otherwise. In the case where all conﬂicting
+address sets conﬂict with all others, the density equals the size
+of the conﬂicts (Dn == |Cn|). In the star topology case, Dn
+should equal 2.
+
+D. Predicting transactional performance
+
+The intuition behind our approach to predicting transactional
+performance is that performance will be limited by the serial
+schedule transactions must form to ensure correctness. In the
+Syncchar model, this is the conﬂict density. In the common
+case, the speedup of n threads concurrently executing a set of
+transactions is expressed as
+
+n
+
+max(Dn,1) .
+
+When used with a lock-based parallel program, Syncchar
+tracks both the acquisition time (acq) for a lock and the length
+of a critical region after the lock is acquired (held), as well as
+unrelated cycles other. According to Amdahl’s law, the overall
+speedup obtained from concurrent execution of a critical section
+is constrained by the amount of time spent in that section.
+Thus, the speedup term above is applied only to the cycles
+spent acquiring or holding a lock, leaving the unrelated cycles
+(other) unaffected by transaction behavior. Formally, then, our
+calculation becomes:
+
+Execution Time =
+
+(acq + held) ∗ max(Dn, 1)
+
++ other
+
+n
+
+E. Limitations
+
+Like any model, Syncchar makes certain simplifying as-
+sumptions that balance complexity against accuracy. Bobba
+et al. [4] provide an analysis of performance pathologies
+for various hardware transactional memory designs. In our
+experience working with an eager/eager HTM implementation,
+the most common deviation from the Syncchar model is that
+HTM can perform substantially worse than locking under high
+contention. This can be attributed to a number of factors,
+including restart costs, suboptimal back-off policy, and bus
+contention. Ideally, when a transaction is restarted to resolve
+a conﬂict, it will retry execution as soon as the winner of
+the conﬂict commits. In an HTM with a high restart cost or a
+high back-off, there may be a period of needless latency after
+the winner commits and before the losing transaction resumes,
+lowering transaction throughput. In the worst case, this can lead
+to a conﬂict with a new transaction. On the other end of the
+spectrum, a back-off policy that retries too quickly can increase
+contention for cache lines and the memory bus, degrading
+
+Fig. 1.
+Performance of locks vs. transactions for a microbenchmark over a
+range of probabilities of conﬂict. The Syncchar line illustrates how the model
+loses prediction precision, but correctly identiﬁes the performance trend at high
+contention due to implementation-speciﬁc effects in the HTM.
+
+system performance. A goal of our model is generality, so we
+have avoided including implementation-speciﬁc parameters in
+our model, as these contention pathologies can vary widely
+across HTM implementations.
+
+Figure 1 shows the execution time of a simple microbench-
+mark at 8 CPUs, where critical regions write to a shared
+variable with a conﬁgurable probability, with the probability
+ranging from 0 to 100. The Tx line crosses the Lock line
+between a probability of 80 and 90. This leads to deviation
+in the accuracy of the Syncchar model beginning at about 60%
+probability of dense conﬂicts. Syncchar correctly identiﬁes that
+transactions will give little to no performance improvement as
+contention increases, but it cannot predict how poorly a given
+HTM will perform.
+
+The Syncchar model might also underestimate performance.
+An application that has a freqently executed critical region
+that is also highly data independent will have excellent TM
+performance, but might experience lock contention. Threads
+using locks mutually exclude even if a critical region is data
+independent. In such a case, a more accurate prediction may
+be realized by dropping the acq cycles and only applying the
+speedup term to the held cycles. Rather than apply heuristic
+weights to the acq cycles, we leave the issue for future work
+and use a more approximate prediction.
+
+IV. MODEL VALIDATION
+
+In this section we validate the Syncchar model by implement-
+ing it as a module for Virtutech Simics [17] and comparing
+the predicted performance with transactions to the measured
+performance on an HTM model. We validate the Syncchar
+model against seven benchmarks from STAMP version 0.9.9,
+listed with input parameters in Table I. All experiments in this
+and the following sections are performed modeling 8, 16, and
+32 1GHz, x86 processors. As Simics supports only a ﬁxed IPC,
+
+100
+
+0 0.5 1 1.5 2 2.5 3 0 10 20 30 40 50 60 70 80 90 100 Lock Tx Syncchar % Conflict Execution Time (s) bayes
+
+genome
+
+intruder
+
+kmeans
+
+ssca2
+
+vacation
+
+yada
+
+Learns a randomly generated bayesian network.
+-v32 -r4096 -n5 -p30 -s1 -i2 -e4
+Reconstructs a larger gene sequence from segments of the gene.
+-g16384 -s48 -n4194304
+Emulates a network intrusion detection system; transactionalizes
+the packet capture and reassembly phases.
+-a10 -l32 -n65216 -s1
+Implements the K-means clustering technique.
+-m40 -n40 -t0.0009 -i
+random-n65536-d32-c16.txt
+Scalable Synthetic Compact Applications 2, kernel 1. Constructs
+a graph data structure using adjacency and auxiliary arrays.
+-s17 -i1.0 -u1.0 -l3 -p3
+Implements a travel reservation system. Transactions protect
+updates to a local database implemented with a red-black tree.
+-n4 -q60 -r1048576 -u90 -t1048576
+Ruppert’s algorithm for Delaunay mesh reﬁnement, similar to
+Kulkarni et al. [13].
+-a20 -i ttimeu10000.2
+
+TABLE I
+
+DESCRIPTION OF THE BENCHMARKS USED IN SECTIONS IV AND V, FROM
+THE STAMP BENCHMARK SUITE [20]. WE INCLUDE OUR CUSTOM INPUT
+
+PARAMETERS FOR REFERENCE, AS WE COMPARE WITH THE DEFAULT
+
+PARAMETERS IN SECTION V.
+
+the simulations used an IPC of 1, which is a reasonable choice
+for a moderate superscalar implementation. Each processor has
+a 32 KB, 4-way set associative private L1 cache with 64 byte
+lines and an access time of one cycle. L2 caches are also
+private with 64 byte lines. Each L2 cache is 4MB, 8-way set
+associative. L2 cache accesses cost 16 cycles, and are kept
+coherent using a transaction-aware MESI snooping protocol.
+Our coherence model is implemented by the Simics txcache
+module [32] . Main memory is a single, shared 1 GB, with
+an access time of 200 cycles. Each CPU has two 4-way set
+associative, 64 entry TLB’s–one for instructions and one for
+data.
+
+All lock-based experiments run on Linux version 2.6.16.1.
+We used the MetaTM hardware transactional memory model
+and TxLinux version 2.6.16.1 for the transactional memory
+experiments [29], [31]. Main memory access latency is pseudo-
+randomly perturbed by 0-4 ns to get accurate performance
+measurements for multi-threaded programs. Multi-threaded
+programs are sensitive to scheduling, so several randomly
+perturbed runs give a more accurate picture of performance,
+as described by Alameldeen and Wood [1]. Measurements
+presented are a mean of 4 simulated executions.
+
+A. Predicting speedup for STAMP
+
+We applied the Syncchar model
+
+to programs from the
+STAMP transactional memory benchmark suite [20]. As we
+will discuss further in Section V-C, we do not use the labyrinth
+benchmark in any experiments due to a memory leak that we
+could not resolve.
+
+Table II shows the predicted and actual execution times of the
+parallel phases of these benchmarks. The measured exeuction
+times are the mean of four runs, and the standard deviations
+are all within 5% of the mean, except for bayes, which has
+a variable number of transactions and standard deviations as
+
+Workload
+
+bayes
+
+8 CPU
+16 CPU
+32 CPU
+8 CPU
+16 CPU
+32 CPU
+8 CPU
+16 CPU
+32 CPU
+8 CPU
+16 CPU
+32 CPU
+8 CPU
+16 CPU
+32 CPU
+8 CPU
+16 CPU
+32 CPU
+8 CPU
+16 CPU
+32 CPU
+
+Tx
+-
+.29
+.20
+1.35
+.79
+.50
+1.06
+1.33
+1.67
+7.72
+4.40
+3.05
+.64
+.40
+.27
+1.39
+.72
+.39
+.38
+.21
+.15
+
+Syncchar % Err
+-
+0
+25
+19
+16
+40
+43
+22
+3
+13
+37
+1
+13
+13
+11
+17
+26
+46
+26
+19
+153
+
+-
+.29
+.15
+1.11
+.94
+.84
+1.52
+1.63
+1.72
+8.69
+5.98
+3.06
+.64
+.36
+.21
+1.16
+.53
+.21
+.39
+.37
+.37
+
+DI
+-
+0.00
+0.21
+5.89
+11.44
+28.40
+2.20
+2.60
+2.68
+5.28
+8.43
+11.93
+7.98
+15.94
+31.94
+5.03
+6.92
+7.70
+4.76
+7.94
+15.44
+
+CD
+-
+3.10
+3.39
+0.01
+0.04
+0.13
+2.72
+4.51
+8.45
+1.98
+2.92
+4.19
+0.00
+0.00
+0.01
+.90
+1.74
+3.18
+2.51
+4.71
+9.43
+
+genome
+
+intruder
+
+kmeans
+
+ssca2
+
+vacation
+
+yada
+
+TABLE II
+
+THE EXECUTION TIME IN SECONDS FOR THE STAMP BENCHMARKS IN
+
+SECONDS (LABELED TX), THE PROJECTED EXECUTION TIME IN SECONDS,
+
+LABELED SYNCCHAR, AND ACCURACY (% ERROR). DI IS THE DATA
+
+INDEPENDENCE VALUE FOR THE BENCHMARK AND CD IS THE CONFLICT
+
+DENSITY. 8 CPU BAYES DATA WAS NOT AVAILABLE AT THE TIME OF
+
+SUBMISSION.
+
+high as 23% of execution time. The geometric mean error in
+our predictions across all benchmarks is 25%. Syncchar tracks
+the scalability trends very closely, both for high-contention
+workloads that have poor scalability, like intruder, and for low-
+contention workloads that have good scalability, like kmeans.
+Syncchar’s precision decreases as the benchmarks become very
+short, particularly for benchmarks that run for .3 seconds or
+less. In the worst cases, Syncchar predicts the scaling trends
+offset by a factor of 40-153%.
+
+Data independence and conﬂict density prove to be in-
+teresting metrics, with widely varying values across STAMP
+applications. Ssca2 is highly data independent, while the high-
+contention intruder is not. Bayes has very light conﬂict density
+while yada’s conﬂicts are quite dense, with an average of nine
+densely conﬂicting threads per transactional conﬂict.
+
+Figure 2 shows the projected speedup of a representative
+sample of benchmarks, broken down into the portion at-
+tributable to data independence and the portion attributable to
+low conﬂict density. The percent of the speedup attributable
+to data independence is the same as the fraction of critical
+regions that do not conﬂict, and the rest is attributable to low
+conﬂict density. The projection in Figure 2 for ssca2, at one
+end of the spectrum, is entirely due to data independence. Like
+many transactional benchmarks, ssca2’s critical regions rarely
+conﬂict, yielding good scalability and a substantial speedup
+over locking. On the other extreme, nearly every critical section
+in bayes is likely to conﬂict at least once, yet the measured
+speedup is still substantial because relatively few threads are
+involved in each conﬂict. Low conﬂict density is the key to
+bayes’ scalability. Similarly, the kmeans benchmark has high
+
+101
+
+Data Independence
+
+kmeans
+
+intruder
+
+Workload
+8
+16
+32
+8
+16
+32
+8
+16
+32
+8
+16
+32
+
+ssca2
+
+yada
+
+kmeans
+
+intruder
+
+Workload
+8
+16
+32
+8
+16
+32
+8
+16
+32
+8
+16
+32
+
+ssca2
+
+yada
+
+10% %Err
+23
+2.71
+2.95
+13
+11
+2.39
+2
+5.37
+1
+8.51
+0
+11.95
+7.98
+0
+0
+15.92
+0
+31.96
+14
+4.08
+5
+8.33
+16.22
+5
+
+10% %Err
+0
+2.71
+2
+4.62
+2
+8.66
+1.91
+4
+2
+2.99
+1
+4.23
+0
+0.00
+0
+0.00
+0
+0.01
+4.08
+63
+0
+4.72
+8.69
+8
+
+25% %Err
+12
+2.47
+2.73
+5
+4
+2.48
+1
+5.34
+0
+8.47
+0
+11.95
+7.98
+0
+0
+15.94
+0
+31.96
+5
+4.52
+5
+7.52
+15.42
+0
+
+25% %Err
+0
+2.73
+2
+4.62
+2
+8.67
+1.93
+3
+1
+2.94
+1
+4.22
+0
+0.00
+0
+0.00
+0
+0.01
+2.71
+8
+8
+5.09
+9.08
+4
+
+Conﬂict Density
+
+100%
+2.20
+2.60
+2.68
+5.28
+8.43
+11.93
+7.98
+15.94
+31.94
+4.76
+7.94
+15.44
+
+100%
+2.72
+4.51
+8.45
+1.98
+2.92
+4.19
+0.00
+0.00
+0.01
+2.51
+4.71
+9.43
+
+SENSITIVITY OF DATA INDEPENDENCE AND CONFLICT DENSITY TO
+
+DIFFERENT SAMPLING RATES (10%, 25% AND 100%).
+
+TABLE III
+
+Syncchar’s sliding window reduces comparisons between criti-
+cal regions that cannot be scheduled concurrently due to some
+other synchronization mechanism, such as a join after a fork,
+without having an exhaustive scheduling model.
+
+Syncchar samples address sets to reduce the number of
+address sets recorded, improving the efﬁciency of the tool. In
+our previous experiments, we used a 100% sampling rate for
+the highest ﬁdelity data. Table III shows the data independence
+and conﬂict density measurements at a sampling rate of 10%,
+25%, and 100%. A representative sample of benchmarks was
+selected; others were omitted for space. At 25%, measurements
+are within 8% of the exhaustive measurement. While there are
+some outliers at 10% sampling rate, the result is within 15%
+of exhaustive measurement for most benchmarks. Syncchar’s
+insensitivity to sampling indicates that the algorithms are prac-
+tical for resource-constrained systems.
+
+V. SYSTEM INFLUENCE ON TRANSACTION PERFORMANCE
+
+In situations where a transactional application ought
+
+to
+perform well and does not, the problem may be poor interaction
+with the full system and the transactional memory implementa-
+tion. This section analyzes situations where the system effects
+transactional performance of user-level programs, using 7 of
+the STAMP benchmark suite as a case study.
+
+A. Input size
+
+Table IV compares the speedup for STAMP benchmarks
+for different input sizes. Because detailed HTM simulation
+infrastructures tend to be slow, the STAMP benchmarks are
+
+102
+
+Fig. 2.
+The projected speedups of selected benchmarks using transactions
+versus locking, decomposed into the portion attributable to data independence
+and conﬂict density.
+
+data independence at moderate CPU counts, but increasingly
+relies on non-dense conﬂicts for its performance improvement
+at higher CPU counts. The kmeans benchmark shows a reason-
+able mix of both data independence and non-dense conﬂicts,
+which we expect to be the case with realistic workloads.
+
+These experiments show that the Syncchar model strikes a
+good balance between accuracy and complexity. While there
+are outliers in the model’s predictions, most are off by 26% or
+less, and all capture the scaling trends of the workload. These
+performance estimates can help the programmer understand a
+transactional program’s performance.
+
+B. Scheduling model and sampling
+
+Syncchar measures data independence and conﬂict density by
+checking for conﬂicts between critical regions that are likely
+to be scheduled concurrently. This Subsection describes how
+Syncchar samples critical regions to detect conﬂicts. The Sync-
+char approach respects the schedule of the original execution,
+but generalizes it signiﬁcantly to simplify the model.
+
+Syncchar records the address sets of critical regions within a
+sliding time window. After Syncchar has seen a certain number
+of critical regions from the same lock, it samples the desired
+number of critical regions and measures data independence
+and conﬂict density as if those critical regions were scheduled
+together. In our experiments, the sliding window consists of 512
+critical regions, a value selected based on experimentation with
+different sizes. In selecting address sets to compare, Syncchar
+is careful to select only one address set per process. After
+calculating data independence and conﬂict density, the recorded
+address sets are discarded.
+
+Limiting the number of address sets that Syncchar can
+consider concurrently captures many likely execution schedules
+with a simple concurrency model and implementation. For
+instance, a newly forked thread cannot execute concurrently
+with critical region executions that occurred before its creation.
+
+81632816328163281632Projected Speedup0246810Workloadintruderkmeansbayesssca2DataIndependenceConflictDensityWorkload
+
+bayes
+
+genome
+
+intruder
+
+kmeans
+
+ssca2
+
+vacation
+
+yada
+
+sim
+big
+sim
+big
+sim
+big
+sim
+big
+sim
+big
+sim
+big
+sim
+big
+
+8 CPU
+3.9
+3.3
+1.3
+7.3
+1.4
+2.4
+5.1
+7.5
+0.9
+2.3
+1.1
+7.0
+2.8
+3.0
+
+16 CPU
+3.9
+3.0
+1.3
+14.5
+1.4
+1.9
+5.0
+13.0
+1.0
+3.8
+1.4
+12.1
+3.5
+4.8
+
+TABLE IV
+
+32 CPU
+3.5
+4.3
+1.1
+26.7
+1.2
+1.5
+5.5
+18.9
+1.2
+5.5
+1.4
+18.9
+3.9
+7.0
+
+THE SPEEDUP FOR THE PARALLEL PHASE OF A SELECTION OF STAMP
+BENCHMARKS RELATIVE TO 1 CPU WITH THE STANDARD SIMULATOR
+
+INPUTS AND BIG INPUTS.
+
+distributed with simulator inputs, which are much smaller.
+Simulator inputs are much smaller than the kinds of inputs
+for which the programs were designed.
+
+As the table makes clear, the simulator inputs are too small
+to show accurate scaling trends. For example, performance
+for genome’s simulator inputs does not scale at all for 32
+CPUs while our larger inputs scale by 26×. Ahmdahl’s law [2]
+explains the problem. Even though the STAMP benchmarks
+only measure performance during the parallel parts of the code,
+the parallel section still includes serial setup. Some of the
+setup is implicit; for example, the OS must schedule all of the
+threads before they all execute. Because the parallel section is
+so short, the performance scaling of the simulator inputs does
+not reﬂect scaling on more realistic inputs. Also, the overhead
+of synchronizing at a barrier towards the end of the benchmark
+grows with higher processor counts.
+
+While benchmark size and startup effects are a known
+problem for simulation [25], they continue to impede accurate
+measurement. We note that researchers can compensate for the
+brevity of the simulator inputs and still accurately calculate the
+gains in performance. Authors generally omit the details of how
+speedup curves are generated, so we could not verify that any
+particular methodology for measuring simulator inputs matches
+the scaling trends on non-simulator inputs. Unless otherwise
+noted, all STAMP data in this paper uses the “Big” inputs,
+listed in Table I.
+
+Table VI shows detailed breakdowns of the simulator inputs
+and our resized inputs. The most important result from the table
+is that common transactional metrics, like restart rate and aver-
+age backoff, generally are a poor indicator of execution time.
+For instance, execution time and restart rate are correlated as
+CPU counts increase for intruder and bayes with the simulator
+inputs, but are inversely correlated for yada and vacation. This
+is appreciated by the transactional memory community, but the
+lack of good performance indicators is a serious problem for
+developers who must performance-tune transactional programs.
+Simple event counters or runtime statistics provide insufﬁcient
+data on which to base performance tuning decisions.
+
+bayes
+
+kmeans
+
+genome
+
+intruder
+
+Workload
+8
+16
+32
+8
+16
+32
+8
+16
+32
+8
+16
+32
+8
+16
+32
+8
+16
+32
+8
+16
+32
+
+vacation
+
+ssca2
+
+yada
+
+TLB in TX
+1,005,978
+1,350,564
+800,294
+44,300,488
+45,963,325
+52,167,445
+9,151,084
+10,800,831
+12,089,317
+94,684
+131,538
+158,377
+4,437,694
+4,435,489
+4,438,800
+55,804,649
+59,479,544
+70,203,295
+412,759
+446,156
+493,853
+
+TX that Miss
+1,301
+979
+752
+1,170,001
+1,169,923
+1,169,967
+785,974
+936,367
+854,040
+74,317
+95,272
+111,672
+1,416,004
+1,415,954
+1,416,070
+1,048,576
+1,048,576
+1,048,576
+39,966
+42,194
+43,563
+
+79.48%
+69.30%
+56.59%
+99.15%
+99.15%
+99.15%
+49.53%
+58.96%
+53.80%
+1.44%
+1.81%
+1.92%
+99.81%
+99.80%
+99.81%
+100.00%
+100.00%
+100.00%
+62.72%
+65.00%
+66.16%
+
+Miss/TX
+612
+908
+594
+37
+38
+44
+5
+6
+8
+0
+0
+0
+3
+3
+3
+53
+56
+66
+7
+7
+8
+
+TOTAL TLB MISSES IN TRANSACTIONS FOR OUR BENCHMARKS AT 8, 16,
+AND 32 CPUS, AND THE NUMBER AND PERCENT OF TRANSACTIONS THAT
+INCUR AT LEAST ONE TLB MISS OVER THE COURSE OF THEIR EXECUTION.
+
+TABLE V
+
+Simply reducing restarts or backoff cycles might not affect
+performance. The actual dynamics are much more complicated.
+For instance, it might be more important to reduce the latency
+of the critical path of the computation than to reduce the
+restarts that occur off the critical path. The complexity of tuning
+transactional performance motivated us to develop the Syncchar
+model.
+
+The table also shows that the idle time for some of the
+benchmarks is high, and noticeably higher for the simulator
+inputs. Load imbalance signiﬁcantly affects the simulator in-
+puts, causing unrealistic amounts of idle time. For instance,
+kmeans with big inputs has only 1% idle time at 32 processors,
+but it has 52% idle time for the simulated inputs. While the
+STAMP benchmarks are designed to minimize system time,
+several of them still spend up to 10% of their execution time
+in the operating system, mostly in memory management and
+page fault handling routines.
+
+B. TLB Misses
+
+We measure TLB miss rates within transactions in Table V.
+TLB misses are very common within transactions. In fact, for
+almost every run of genome, ssca2 and vacation on big inputs,
+over 88% of transactions take at least one TLB miss. The TLB
+miss rates on the simulator inputs are generally lower because
+these inputs touch so little data that they do not establish the
+steady-state TLB miss rate of the application. Only for kmeans
+does the simulator TLB miss rate match the big inputs. It has
+only 3 brief critical regions.
+
+Knowing that TLB misses will be common in transactional
+programs is important for hardware designers. The Sun Rock
+processor [6] is reported to support HTM primitives, but it will
+not tolerate TLB misses during a transaction. Kmeans is a good
+ﬁt for designs like the Sun Rock because it has a low TLB
+
+103
+
+Workload
+
+Big
+
+U/S/I
+
+Sim
+
+U/S/I
+
+bayes
+
+genome
+
+intruder
+
+kmeans
+
+ssca2
+
+vacation
+
+yada
+
+8cpu
+16cpu
+32cpu
+8cpu
+16cpu
+32cpu
+8cpu
+16cpu
+32cpu
+8cpu
+16cpu
+32cpu
+8cpu
+16cpu
+32cpu
+8cpu
+16cpu
+32cpu
+8cpu
+16cpu
+32cpu
+
+total
+.288
+.289
+.223
+1.387
+.722
+.387
+1.063
+1.339
+1.668
+7.716
+4.404
+3.046
+.638
+.390
+.266
+1.637
+.786
+.506
+.347
+.219
+.152
+
+55
+30
+14
+91
+89
+88
+98
+99
+99
+99
+99
+98
+83
+77
+67
+98
+98
+98
+88
+90
+91
+
+9
+4
+2
+1
+1
+1
+1
+0
+0
+0
+0
+0
+7
+5
+4
+1
+1
+1
+10
+7
+5
+
+34
+65
+83
+8
+10
+12
+0
+0
+0
+0
+0
+1
+9
+17
+28
+1
+1
+2
+1
+1
+2
+
+Restart %
+7.85
+12.61
+15.85
+.30
+.00
+.00
+42.51
+47.96
+46.73
+2.01
+10.05
+20.70
+.00
+.00
+.01
+20.62
+37.22
+57.24
+14.00
+18.97
+27.38
+
+Back
+77,310
+96,270
+62,373
+0
+1
+0
+134
+1,038
+1,985
+5
+47
+245
+0
+0
+0
+28
+67
+170
+3,859
+4,645
+5,881
+
+TABLE VI
+
+total
+.016
+.016
+.018
+.013
+.013
+.016
+.016
+.017
+.019
+.012
+.012
+.011
+.026
+.024
+.021
+.012
+.013
+.009
+.029
+.023
+.021
+
+46
+25
+14
+25
+15
+8
+86
+76
+78
+90
+67
+44
+60
+35
+28
+52
+45
+38
+87
+82
+79
+
+3
+4
+2
+12
+9
+10
+0
+0
+0
+0
+1
+3
+6
+7
+6
+0
+1
+1
+2
+1
+0
+
+49
+69
+83
+61
+75
+81
+12
+23
+21
+9
+30
+52
+33
+56
+64
+47
+52
+60
+9
+15
+19
+
+Restart % Back
+877
+4,344
+4,093
+13
+10
+13
+922
+2,500
+8,647
+35
+1,219
+1,706
+0
+0
+8
+57
+741
+1,156
+3,340
+4,408
+7,523
+
+3.66
+6.16
+9.90
+.72
+1.09
+1.70
+53.88
+63.68
+70.46
+6.04
+11.83
+16.24
+.06
+.09
+.20
+14.24
+22.61
+36.62
+15.87
+17.81
+20.17
+
+THE EXECUTION TIME (TOTAL) FOR SELECT STAMP BENCHMARKS USING BIG AND SIMULATED INPUTS, BROKEN DOWN INTO USER, SYSTEM, AND IDLE
+
+TIME (U/S/I), RESTART RATE (RESTART %) , AND MEAN BACKOFF CYCLES (BACK).
+
+miss rate, none of its three critical regions make function calls,
+and only one critical region contains any control ﬂow at all
+(a loop). It is unknown if Azul Systems’ HTM can tolerate
+a TLB miss [5]. Architectures with a software reloaded TLB
+would likely require the TLB load sequence to run outside the
+context of the current transaction. Avoiding an abort of the
+current transaction for a TLB miss on these architectures might
+be challenging.
+
+C. Memory allocation
+
+Performing system calls,
+
+including memory allocation,
+within a transaction can violate isolation. While most memory
+allocators are mostly implemented at user level, they sometimes
+need to make system calls to get more memory from the OS (ei-
+ther mmap or sbrk), and they might make other system calls.
+This problem is well known [37], [39], and there are several
+ways to allow system calls within transactions, including open
+nesting [21], [22] and transactional pause [37], [39].
+
+The STAMP benchmarks allocate memory and are not
+written with any special hooks to deal with allocation. A
+transaction can call the memory allocator, which calls the OS
+for more memory. Such a transaction can restart many times,
+leaking memory if there are no hooks for compensating actions
+on transaction restart. The labyrinth benchmark is missing
+from this paper because it pathologically leaks and cannot
+complete, and we have experienced pathological memory leaks
+in genome.
+
+Surprisingly, memory allocation on a complete Linux en-
+vironment can actually cause deadlock. Recent versions of
+glibc use a blocking lock to protect the memory allocator’s
+data structures. This lock is implemented using the futex()
+system call [7], which can block the current thread until the
+lock is released. When a process releases a futex that has
+
+other threads waiting on it, it must trap into the kernel to
+notify the waiters. In the context of a hardware transaction, a
+transactional process can acquire the lock, a second can block
+on the lock, and then the transaction holding the lock restarts.
+The hardware releases the lock variable, but does not notify the
+kernel of the change and blocked threads can sleep indeﬁnitely,
+effectively deadlocking the application. Many standard system
+libraries are written to be threadsafe and will still use locks,
+condition variables, and other synchronization mechanisms in
+a transactional memory application, potentially causing adverse
+effects.
+
+We discovered this deadlock behavior in the vacation bench-
+mark, which often allocates memory within transactions to
+insert a new node into its red-black tree. We work around
+the problem by conservatively preallocating all the memory a
+transaction might need before beginning a transaction. This ad
+hoc solution will not apply to general-purpose programming,
+especially in the presence of composing transactions with
+standard library routines. Calling standard libraries and system
+calls, such as futex, within a transaction will likely require
+a combination of new standard libraries [35], OS support [28],
+or a TM implementation-speciﬁc solution like making a single
+transaction non-speculative [3], [8], [12].
+
+D. Compiler effects
+
+A ﬁnal challenge for optimizing transactional code is com-
+piler optimizations for deeply pipelined machines. Figure 3
+illustrates a simple conditional statement the programmer would
+expect
+to reduce conﬂicting accesses to a shared variable.
+Yet, the code generated by gcc always reads the value from
+memory and always writes it back. It only uses the condition
+to determine whether to update the register before writing it
+back. The compiler is trying to avoid branching around the
+
+104
+
+if(a < threshold)
+
+shared_variable = new_value;
+
+;; edx holds threshold, 0xc03e6008 holds threshold
+;; eax holds new_value, 0xc03e600c holds shared_variable
+
+cmp
+0xc03e6008,%edx
+cmovge 0xc03e600c,%eax
+mov
+%eax,0xc03e600c
+
+;; compare a and threshold
+;; conditionally load old value
+;; unconditionally store to
+;; shared_variable
+
+Fig. 3. A simple code sequence and the annotated x86 assembly produced
+by gcc.
+
+bonnie++
+
+MAB
+
+Simulates ﬁle system bottleneck activity on Squid and INN
+servers stressing create/stat/unlink. 32 instances of:
+bonnie++ -d /var/local -n 1
+File system benchmark simulating a software development
+workload [23]. Runs one instance per processor of the Modi-
+ﬁed Andrew Benchmark, without the compile phase.
+
+PARALLEL APPLICATIONS USED TO EXERCISE THE CONCURRENCY IN
+
+TABLE VII
+
+LINUX AND TXLINUX.
+
+Lock
+0-19%
+20-39%
+40-59%
+60-79%
+80-99%
+100%
+Avg. Workset Size
+Total Conﬂicts Sampled
+
+DI
+CD
+Asym
+
+j state lock
+420
+2
+0
+0
+0
+0
+13
+111,118
+
+1.03
+14.37
+88%
+
+j list lock
+242
+0
+0
+0
+0
+0
+33
+35,600
+
+1.15
+7.26
+92%
+
+TABLE VIII
+
+DISTRIBUTION OF CONFLICTING ADDRESSES FOR THE JOURNAL LOCKS, AS
+WELL AS OTHER KEY SYNCCHAR METRICS. THE RANGE OF PERCENTAGES
+
+SHOWS THE NUMBER OF WORKSET ADDRESSES INVOLVED IN THAT
+
+PERCENTAGE OF CONFLICTS. SAMPLES ARE TAKEN FROM BONNIE++ AT 16
+
+CPUS. THE AVERAGE WORKSET SIZE IS IN WORDS. DI IS DATA
+INDEPENDENCE, CD IS CONFLICT DENSITY, AND ASYM IS THE
+
+PROBABILITY OF BEING INVOLVED IN AN ASYMMETRIC CONFLICT.
+
+load and store, which makes sense on a superscalar platform.
+On a hardware transactional memory system, however,
+the
+performance lost to a coherence conﬂict is much larger than
+that lost to a mispredicted branch.
+
+For a critical section such as the one above, the Syncchar tool
+identiﬁes it as having no data independence and ﬂags the shared
+variable as a contention hot-spot. Counterintuitive results such
+as these hint to the programmer that the code generated by the
+compiler should be inspected.
+
+VI. SYNCCHAR AS A TUNING TOOL
+
+In addition to predicting the performance of a transactional
+memory system, the Syncchar model can provide clues as to
+which critical sections are likely to have performance problems.
+This section demonstrates the utility of Syncchar for tuning
+transactional performance, using the (Tx)Linux 2.6.16 kernel
+as a case study.
+
+A. Tuning features
+
+Syncchar provides a number of useful metrics for the trans-
+actional memory developer. Data independence and conﬂict
+density give the developer an indication of how much par-
+allelism they can expect from the code. Syncchar reports
+the distribution of conﬂicting addresses in a critical region,
+allowing the developer to identify contention hot-spots.
+
+Syncchar also provides statistics on the workset size as
+illustrated in Table VIII, which can help developers identify
+critical regions that are likely to overﬂow the cache in a
+coherence-based HTM. Finally Syncchar provides traditional
+proﬁling metrics, such as the most frequently executed critical
+region and the most contended critical regions.
+
+1) Asymmetric Conﬂicts: Conﬂicts between transactional
+and non-transactional threads are known as asymmetric con-
+ﬂicts [29] and can introduce performance pathologies in trans-
+actional applications. In resolving asymmetric conﬂicts, the
+
+transaction must always restart because a non-transactional
+thread cannot be rolled back. In many TM implementations,
+if non-transactional accesses occur faster than transactions can
+commit, transactions are starved and the application can hang.
+Performance problems caused by asymmetric conﬂicts are
+difﬁcult
+to diagnose and to resolve. Simple proﬁling can
+indicate in which transaction the program is spending too much
+time, but it cannot ﬁnd the unrelated code that is starving the
+transaction with asymmetric conﬂicts. Even TM researchers
+with good intuition about transactional performance tend to
+scrutinize writes, yet a variable that is only read in a transaction
+can cause problems if it is frequently written outside of a
+transaction.
+
+Syncchar helps developers by indicating critical regions
+and addresses that are prone to asymmetric conﬂicts. This is
+implemented by tracking reads and writes outside of critical
+regions and checking for conﬂicts with critical regions. For each
+critical region, Syncchar reports the percentage of address sets
+that conﬂict with the non-transactional address set, estimating
+the probability of an asymmetric conﬂict. In the next Subsection
+we use Syncchar to diagnose and to correct such a pathology
+in TxLinux.
+
+B. TxLinux case study
+
+Rossbach et al. [31] report comparable performance for lock-
+ing and transactions for the TxLinux kernel. Transactions do
+not help performance because the locks in Linux 2.6 are already
+ﬁne-grained, highly tuned, and because several benchmarks
+spend relatively little time in the kernel. The primary exception
+was the bonnie++ ﬁlesystem benchmark, which shows severely
+pathological behavior under transactions. We reproduced this
+pathology and used simple program counter proﬁling to in-
+dicate that most of the time was being spent in the ext3
+journaling code, protected by the journal_t.j_state and
+journal_t.j_list locks.
+
+105
+
+Workload
+
+bonnie++
+
+MAB
+
+TxLinux
+HANG
+HANG
+HANG
+.68
+.24
+.07
+
+TxLinux-Opt
+1.55
+.98
+.54
+.48
+.13
+.07
+
+Speedup
+-
+-
+-
+1.4
+1.8
+1.0
+
+8
+16
+32
+8
+16
+32
+
+SYSTEM TIME IN SECONDS FOR TXLINUX WORKLOADS UNDER
+
+UNMODIFIED TXLINUX AND OUR OPTIMIZED VERSION OF TXLINUX
+
+(TXLINUX-OPT), AT 8, 16, AND 32 CPUS (LOWER IS BETTER). SPEEDUP IS
+
+TXLINUX-OPT RELATIVE TO THE TXLINUX BASELINE (HIGHER IS
+
+TABLE IX
+
+BETTER).
+
+We then used Syncchar to provide additional insight into the
+problem by sampling these critical regions by running bonnie++
+on unmodiﬁed Linux. Table VIII shows the distribution of
+conﬂicting addresses for these journal
+locks. These critical
+regions tend to be short—13 and 33 words in the working
+set, respectively. They have relatively high conﬂict density,
+indicating that there is temporal locality in the data accessed
+within these critical regions, but no one “hotspot” address. This
+matched our initial experience in auditing the journal code,
+as we found no immediately obvious datum causing the high
+transaction restarts.
+
+The red ﬂag Syncchar raised for these critical regions was
+that they had a 92% probability of an asymmetric conﬂict. Upon
+further review, we found an assertion in the code that a bit in
+the buffer_head.b_state ﬁeld is set. This bit is used as a
+spinlock and always set before entering the critical regions that
+were converted to transactions. Moreover, other bit ﬁelds in the
+same byte are used by non-transactional tasks such as journal
+writeback. Interestingly, these bits are not modiﬁed inside a
+transaction, so the intuitive approach of looking for conﬂicting
+writes inside a transaction is not enough. Developers need tools
+to help ﬁnd these sorts of bugs in a large code base.
+
+We addressed the problem by converting the bit spinlock
+to a cooperative transactional spinlock (cxspinlock) [31]. A
+cxspinlock uses transactions optimistically, but can fall back
+on locking to mutually exclude I/O. Cxspinlock acquisition
+is arbitrated by the HTM contention manager, so locks and
+transactions can fairly contend for a critical region. By using
+cxspinlocks and separating this bit into its own word (or cache
+line, depending on the HTM conﬂict granularity), we were able
+to eliminate the asymmetric conﬂicts that were starving the
+transaction.
+
+C. Experimental results
+
+To evaluate these optimizations, measurements of 8, 16, and
+32 CPU systems were taken as described in Section IV. Because
+TxLinux simply idles when left undisturbed, we need a set
+of parallel applications to exercise the concurrency within the
+TxLinux subsystems, such as the ﬁle system and memory allo-
+cator. We used the full suite of 6 benchmarks from the TxLinux
+paper [31] and veriﬁed that our optimizations did not introduce
+any performance regressions. For the sake of space, we only
+report the two benchmarks with improved performance, listed
+
+Fig. 4. Speedup of unmodiﬁed TxLinux and our optimized version of TxLinux
+(TxLinux-Opt) over unmodiﬁed Linux for the MAB benchmark at 8, 16, and
+32 CPUs (larger is better).
+
+in Table VII. All other benchmarks performed identically to
+unmodiﬁed TxLinux.
+
+Table IX presents the time spent in the kernel for each
+of these benchmarks on both unmodiﬁed TxLinux and our
+optimized version, respectively. Kernel time is presented be-
+cause our tuning efforts are for the kernel itself and cannot be
+expected to improve the non-kernel portions of the execution
+time. Further, this approach eliminates noise introduced by load
+imbalance in the workloads.
+
+We reproduced the same pathological behavior on the bonnie
+benchmarks under TxLinux. After over a month of simulating
+bonnie on TxLinux (compared with 1–3 days on average
+for bonnie on unmodiﬁed Linux), the benchmarks had not
+terminated, so we list the baseline TxLinux performance as
+hung.
+
+Our optimization allows bonnie to complete, and also im-
+proves the performance of MAB. For other workloads, includ-
+ing MAB at 32 CPUs, the journal locks did not affect execution
+time substantially, and the performance remains ﬂat. At this
+CPU count the performance bottleneck shifts from the journal
+spinlocks to other critical regions in the kernel. This demon-
+strates that our optimizations do not introduce regressions or
+other performance anomalies for other workloads.
+
+The bit spinlock optimization also improves the performance
+of TxLinux relative to unmodiﬁed Linux at 8 and 16 processors,
+as shown in Figure 4. Tuning TxLinux 2.6 with programmer
+intuition and simple proﬁling has yielded marginal (< 10%)
+improvement over Linux, but Syncchar led us to the ﬁx for the
+bonnie++ pathology and sped up MAB by over 50%.
+
+This case study indicates that tuning the performance of
+transactional memory applications can be tricky and nonintu-
+itive, as the cause for a given critical region dominating execu-
+tion time can be in an entirely different part of the application.
+Programmers facing this challenge will beneﬁt from tools that
+help them understand their system with quantitative rigor.
+
+106
+
+CPUs81632Speedup0.511.5LinuxTxLinuxTxLinux+optVII. IMPLEMENTATION DETAILS
+
+This section describes key implementation details and fea-
+tures of the Syncchar tool, which can be used to performance
+tune applications as complex as the TxLinux kernel [31]
+(Section VI).
+
+The Syncchar prototype is a module for the Simics full-
+system, execution-driven simulator [17] that generates output
+that is post-processed. By implementing Syncchar in the ma-
+chine simulator, it is able to measure user-level code and the
+operating system. Nearly all instrumentation is performed using
+simulator breakpoints, which are performance transparent and
+minimally affect the execution behavior of the program being
+tested.
+
+The requirements of the Syncchar model are modest enough
+that it could be implemented for user-level applications using
+a binary instrumentation tool such as Pin [16], or in a virtual
+machine monitor for kernel instrumentation on a live machine.
+When tracking the address set of a critical region in lock-
+based code, Syncchar ignores reads and writes to lock variables,
+as locks would be removed in a transactional version of the
+application. Similarly, because stack addresses are generally
+private, Syncchar ﬁlters stack addresses to avoid conﬂicts due
+to reuse of the same stack address in different activation frames.
+Syncchar needs to know about dynamically allocated lock
+variables. If an object containing a lock is freed and reallocated,
+it is treated as a new lock. In our current implementation, this
+information is communicated to Syncchar through annotations
+to the lock initialization routines.
+
+Many locking implementations, including spin locks, do not
+ensure fairness and are more susceptible to load imbalance in
+parallel programs than transactional memory, which can have
+sophisticated contention management policies [33]. Syncchar
+accounts for this effect in its predictions by discarding idle
+cycles at the end of a benchmark when there is gross load
+imbalance; in practice, one might use predictions with and
+without these cycles to establish a range for the performance
+prediction.
+
+Finally, some spinlocks in the Linux kernel protect against
+concurrent attempts to execute I/O operations, but do not
+actually conﬂict on non-I/O memory addresses. When run on
+the Linux kernel, Syncchar detects I/O operations, and marks
+those critical regions as performing I/O. This annotation ensures
+that these critical regions will not be incorrectly reported as
+non-conﬂicting.
+
+VIII. RELATED WORK
+
+There is very little published about performance tuning
+transactional programs. However,
+there is a large body of
+work about tools used to debug and to performance tune lock-
+based concurrent programs [9], [38]. These tools are similar
+to Syncchar in that they use a runtime system to track locking
+and data access patterns, but are different in their analysis goals.
+The collected information is used to identify possible data race
+conditions rather than data independence and conﬂict density.
+In previous work [27], we introduce the deﬁnition of data
+independent critical sections and a tool for measuring data
+
+independence of critical regions. This paper substantially mod-
+iﬁes the data independence metric to be more practical (both in
+measurement and utility), introduces the new metric of conﬂict
+density, and provides empirical evaluation of its application to
+prediction and tuning.
+
+Von Praun et al. [36] provide a deﬁnition of dependence
+density that is similar to the aggregation of data independence
+and conﬂict density under Syncchar. Von Praun focuses on
+programs that apply similar operations to large data sets and
+provides a coarse classiﬁcation of the workloads. They do not
+use the results of their model to predict speedups, and do not
+report any experience using the result of their model to tune
+the measured programs. Syncchar closes the loop by generating
+and validating performance predictions from its model. Further,
+decomposing data independence and conﬂict density provides
+more insight into tuning the behavior of real-world applications
+with irregular parallelism, such as the Linux kernel.
+
+Heindl and Pokam [10] present a framework for analytical
+performance modeling of STM implementations. The focus of
+the work is on assessing the performance impact of certain STM
+design decisions, such as lazy versus eager conﬂict detection or
+version management. To this end, they make certain simplifying
+assumptions about the general behavior of workloads, such as
+all transactions are the same length and all data are equally
+likely to cause conﬂicts (i.e., no contention “hotspots”). In
+contrast, the Syncchar model is designed to help TM users un-
+derstand if and how their particular workload deviates from the
+common-case assumptions of the TM designer. For instance,
+many workloads have data that create contention hotspots,
+which may be tuned to improve performance.
+
+Several papers [24], [30], [34] discuss transaction conﬂict
+behavior in the context of improving HTM implementations,
+but to the best of our knowledge none of these papers provides
+a formal model of transactional memory performance and no
+prior work closes the loop by validating such a model against
+measured performance.
+
+When memory performance was an important issue in the
+early 90’s, programmers needed tools like memspy [18] to rea-
+son about performance problems related to memory behavior.
+Now that parallel architectures are unavoidable, programmers
+will need tools to assist in tuning the performance of opti-
+mistically synchronized systems. Lev and Moir discuss the
+necessity for and challenges of debugging tools for transac-
+tional memory systems [15], and Zyulkyarov et al. introduce
+debugging extensions for atomic blocks in C# and the Windows
+Debugger [40]. This paper is distinguished by addressing per-
+formance, whereas their work addresses correctness problems.
+Perfumo et al. introduce a Haskell runtime with transactional
+memory instrumentation support for performance proﬁling [26].
+This work is complementary to the Syncchar model, which
+provides limits that are not tied to speciﬁc schedules.
+
+IX. CONCLUSION
+
+This paper introduces Syncchar, a novel method and tool
+for reasoning about the performance of transactional memory.
+We have validated Syncchar’s performance predictions and
+
+107
+
+demonstrated its usefulness in guiding performance tuning on
+the TxLinux kernel. This paper also presents a detailed char-
+acterization of how the whole system, including architecture,
+libraries, and compiler, can affect the performance of transac-
+tional applications, often in a way that befuddles performance
+tuning. We see Syncchar as one in an array of proﬁling and
+debugging tools that must be developed to help application
+developers leverage transactional memory more effectively.
+
+X. ACKNOWLEDGEMENTS
+
+We would like to thank the anonymous reviewers and Jeff
+Napper for helpful comments on earlier versions of this paper.
+We thank Owen Hofmann for help developing the Syncchar
+tool. We also thank Virtutech AB for the Simics academic
+license program. This research is supported by NSF CISE Re-
+search Infrastructure Grant EIA-0303609, NSF Career Award
+0644205, and the DARPA computer science study group.
+
+REFERENCES
+
+[1] A. Alameldeen and D. Wood. Variability in architectural simulations of
+
+multi-threaded workloads. In HPCA, 2003.
+
+[2] G. Amdahl. Validity of the single processor approach to achieving large-
+
+scale computing capabilities. In AFIPS, 1967.
+
+[3] C. Blundell, J. Devietti, E. Lewis, and M. M. K. Martin. Making the fast
+case common and the uncommon case simple in unbounded transactional
+memory. In ISCA, 2007.
+
+[4] J. Bobba, K. E. Moore, H. Volos, L. Yen, M. D. Hill, M. M. Swift, and
+D. A. Wood. Performance pathologies in hardware transactional memory.
+ISCA, 2007.
+
+[5] C. Click. http://blogs.azulsystems.com/cliff.
+[6] D. Dice, Y. Lev, M. Moir, and D. Nussbaum. Early experiences with
+a commercial hardware transactional memory implementation. ASPLOS,
+2009.
+
+[7] H. Franke, R. Russel, and M. Kirkwood. Fuss, futexes and furwocks:
+In Proceedings of the Ottawa Linux
+
+Fast userlevel locking in Linux.
+Symposium, 2002.
+
+[8] L. Hammond, V. Wong, M. Chen, B. D. Carlstrom, J. D. Davis,
+B. Hertzberg, M. K. Prabhu, H. Wijaya, C. Kozyrakis, and K. Olukotun.
+In ISCA, page 102.
+Transactional memory coherence and consistency.
+IEEE Computer Society, Jun 2004.
+
+[9] J. Harrow. Runtime checking of multithreaded applications with visual
+
+threads. In SPIN, pages 331–342, 2000.
+
+[10] A. Heindl and G. Pokam. An analytic framework for performance
+modeling of software transactional memory. Comput. Netw., 53(8):1202–
+1214, 2009.
+
+[11] M. Herlihy and J. E. Moss. Transactional memory: Architectural support
+
+for lock-free data structures. In ISCA, May 1993.
+
+[12] O. Hofmann, C. Rossbach, and E. Witchel. Maximum beneﬁt from a
+
+minimal HTM. In ASPLOS, 2009.
+
+[13] M. Kulkarni, K. Pingali, B. Walter, G. Ramanarayanan, K. Bala, and L. P.
+
+Chew. Optimistic parallelism requires abstractions. In PLDI, 2007.
+
+[14] J. R. Larus and R. Rajwar. Transactional Memory. Morgan & Claypool,
+
+[15] Y. Lev and M. Moir. Debugging with transactional memory.
+
+In
+
+2006.
+
+TRANSACT, 2006.
+
+[16] C. Luk, R. Cohn, R. Muth, H. Patil, A. Klauser, G. Lowney, S. Wallace,
+V. J. Reddi, and K. Hazelwood. Pin: Building customized program
+analysis tools with dynamic instrumentation. In PLDI, 2005.
+
+[17] P. Magnusson, M. Christianson, J. Eskilson, D. Forsgren, G. Hallberg,
+J. Hogberg, F. Larsson, A. Moestedt, and B. Werner. Simics: A full
+system simulation platform. In IEEE Computer vol.35 no.2, Feb 2002.
+
+[18] M. Martonosi, A. Gupta, and T. A. Anderson. Memspy: Analyzing
+
+memory system bottlenecks in programs. In SIGMETRICS, 1992.
+
+[19] P. E. McKenney. Exploiting Deferred Destruction: An Analysis of Read-
+Copy Update Techniques in Operating System Kernels. PhD thesis,
+Oregon Health and Science University, 2004.
+
+[20] C. C. Minh, J. Chung, C. Kozyrakis, and K. Olukotun. STAMP: Stanford
+
+transactional applications for multi-processing. In IISWC, 2008.
+
+[21] M. J. Moravan, J. Bobba, K. E. Moore, L. Yen, M. D. Hill, B. Liblit,
+M. M. Swift, and D. A. Wood. Supporting nested transactional memory
+in LogTM. In ASPLOS-XII. 2006.
+
+[22] J. E. B. Moss. Nested Transactions: An Approach to Reliable Distributed
+
+Computing. PhD thesis, Massachusetts Institute of Technology, 1981.
+
+[23] J. K. Ousterhout. Why aren’t operating systems getting faster as fast as
+
+hardware? In USENIX Summer, 1990.
+
+[24] S. M. Pant and G. T. Byrd. Limited early value communication to improve
+
+performance of transactional memory. In ICS, 2009.
+
+[25] E. Perelman, G. Hamerly, M. V. Biesbrouck, T. Sherwood, and B. Calder.
+Using SimPoint for accurate and efﬁcient simulation. In SIGMETRICS,
+2003.
+
+[26] C. Perfumo, N. Sonmez, A. Cristal, O. Unsal, M. Valero, and T. Harris.
+
+Dissecting transactional executions in Haskell. In TRANSACT, 2007.
+
+[27] D. Porter, O. Hofmann, and E. Witchel.
+concurrency warranted? In HotOS, 2007.
+
+Is the optimism in optimistic
+
+[28] D. E. Porter, O. S. Hofmann, C. J. Rossbach, A. Benn, and E. Witchel.
+
+Operating system transactions. In SOSP, 2009.
+
+[29] H. Ramadan, C. Rossbach, D. Porter, O. Hofmann, A. Bhandari, and
+E. Witchel. MetaTM/TxLinux: Transactional memory for an operating
+system. In ISCA, 2007.
+
+[30] H. E. Ramadan, C. J. Rossbach, and E. Witchel. Dependence-aware
+
+transactions for increased concurrency. In MICRO, 2008.
+
+[31] C. Rossbach, O. Hofmann, D. Porter, H. Ramadan, A. Bhandari, and
+E. Witchel. TxLinux: Using and managing transactional memory in an
+operating system. In SOSP, 2007.
+
+[32] C. J. Rossbach. Hardware Transactional Memory: A Systems Perspective.
+
+PhD thesis, The University of Texas at Austin, 2009.
+
+[33] W. N. Scherer III and M. L. Scott. Advanced contention management for
+
+dynamic software transactional memory. In PODC, 2005.
+
+[34] A. Shriraman and S. Dwarkadas. Refereeing conﬂicts in hardware
+
+transactional memory. In ICS, 2009.
+
+[35] H. Volos, A. J. Tack, N. Goyal, M. M. Swift, and A. Welc. xCalls: Safe
+
+I/O in memory transactions. In EuroSys, 2009.
+
+[36] C. von Praun, R. Bordawekar, and C. Cascaval. Modeling optimistic
+
+concurrency using quantitative dependence analysis. In PPoPP, 2008.
+
+[37] L. Yen, J. Bobba, M. Marty, K. E. Moore, H. Volos, M. D. Hill, M. M.
+Swift, and D. A. Wood. LogTM-SE: Decoupling hardware transactional
+memory from caches. In HPC. Feb 2007.
+
+[38] Y. Yu, T. Rodeheffer, and W. Chen. Racetrack: Efﬁcient detection of data
+
+race conditions via adaptive tracking. In SOSP, 2005.
+
+[39] C. Zilles and L. Baugh. Extending hardware transactional memory to
+support non-busy waiting and non-transactional actions. In TRANSACT,
+2006.
+
+[40] F. Zyulkyarov, T. Harris, O. S. Unsal, A. Cristal, and M. Valero.
+Debugging programs that use atomic blocks and transactional memory.
+PPoPP, 2010.
+
+108
+
+

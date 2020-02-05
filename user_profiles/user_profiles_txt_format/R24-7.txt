@@ -1,0 +1,1966 @@
+All-Frequency Rendering of Dynamic, Spatially-Varying Reﬂectance
+
+Jiaping Wang∗
+
+Peiran Ren† ∗
+
+Minmin Gong∗
+
+John Snyder‡
+
+Baining Guo∗ †
+
+∗ Microsoft Research Asia
+
+† Tsinghua University
+
+‡ Microsoft Research
+
+Figure 1: Real-time rendering results of our system. (a) Plastic teapot with spatially-varying Cook-Torrance model. (b) Iron dragon with spatially-varying
+Ward model. (c) Brushed metal dish and balls with spatially-varying Ashikhmin-Shirley model. (d) Red satin cloth and greeting card with measured SVBRDFs.
+
+Abstract
+We describe a technique for real-time rendering of dynamic,
+spatially-varying BRDFs in static scenes with all-frequency shad-
+ows from environmental and point lights. The 6D SVBRDF is rep-
+resented with a general microfacet model and spherical lobes ﬁt to
+its 4D spatially-varying normal distribution function (SVNDF). A
+sum of spherical Gaussians (SGs) provides an accurate approxima-
+tion with a small number of lobes. Parametric BRDFs are ﬁt on-
+the-ﬂy using simple analytic expressions; measured BRDFs are ﬁt
+as a preprocess using nonlinear optimization. Our BRDF represen-
+tation is compact, allows detailed textures, is closed under products
+and rotations, and supports reﬂectance of arbitrarily high specular-
+ity. At run-time, SGs representing the NDF are warped to align the
+half-angle vector to the lighting direction and multiplied by the mi-
+crofacet shadowing and Fresnel factors. This yields the relevant 2D
+view slice on-the-ﬂy at each pixel, still represented in the SG basis.
+We account for macro-scale shadowing using a new, nonlinear vis-
+ibility representation based on spherical signed distance functions
+(SSDFs). SSDFs allow per-pixel interpolation of high-frequency
+visibility without ghosting and can be multiplied by the BRDF and
+lighting efﬁciently on the GPU.
+
+CR Categories: I.3.7 [Three-Dimensional Graphics and Realism]:
+Color, shading, shadowing and texture
+
+1 Introduction
+Real-world reﬂectance varies across object surfaces. To preserve
+visual realism, detailed spatial and angular reﬂectance variation
+must be considered along with natural lighting and shadowing.
+Such reﬂectance is represented by the 6D spatially varying bidi-
+
+∗email:{jiapw,mgong,johnsny,bainguo}@microsoft.com
+
+ACM Reference Format
+Wang, J., Ren, P., Gong, M., Snyder, J., Guo, B. 2009. All-Frequency Rendering of Dynamic, Spatially-
+Varying Reﬂ ectance. ACM Trans. Graph. 28, 5, Article 133 (December 2009), 10 pages. 
+DOI = 10.1145/1618452.1618479 http://doi.acm.org/10.1145/1618452.1618479.
+
+Copyright Notice
+Permission to make digital or hard copies of part or all of this work for personal or classroom use is granted 
+without fee provided that copies are not made or distributed for proﬁ t or direct commercial advantage 
+and that copies show this notice on the ﬁ rst page or initial screen of a display along with the full citation. 
+Copyrights for components of this work owned by others than ACM must be honored. Abstracting with 
+credit is permitted. To copy otherwise, to republish, to post on servers, to redistribute to lists, or to use any 
+component of this work in other works requires prior speciﬁ c permission and/or a fee. Permissions may be 
+requested from Publications Dept., ACM, Inc., 2 Penn Plaza, Suite 701, New York, NY 10121-0701, fax +1 
+(212) 869-0481, or permissions@acm.org.
+© 2009 ACM 0730-0301/2009/05-ART133 $10.00 DOI 10.1145/1618452.1618479 
+http://doi.acm.org/10.1145/1618452.1618479
+
+rectional reﬂectance distribution function (SVBRDF). Reﬂectance
+also varies with time, for physical reasons such as wetting/drying,
+or to support interactive design and editing. Our aim is real-time
+rendering of direct effects from environmental lighting incident on
+detailed and dynamic SVBRDFs. To make this practical, we restrict
+ourselves to static geometry and precomputed visibility.
+
+Precomputed Radiance Transfer (PRT) [Sloan et al. 2002; Ng
+et al. 2003; Ng et al. 2004] achieves real-time rendering with natu-
+ral lighting and shadowing by representing the geometry’s spatially-
+varying response to parameterized lighting. Handling detailed, dy-
+namic SVBRDFs with all-frequency lighting has so far eluded the
+approach. This is because the precomputed data is huge; the more
+so when considering complex lighting and reﬂectance, sharp shad-
+ows, and glossy surfaces. To obtain reasonable data sizes and per-
+formance, some previous methods limit the directional variation of
+lighting, visibility and reﬂectance, by using bases such as spher-
+ical harmonics (SH). They thus ignore sharp shadows and highly
+specular surfaces. Other methods combine reﬂectance and visibil-
+ity within the precomputed light transport and sample it at a sparse
+(typically per-vertex) set of surface points. This precludes BRDFs
+that are dynamic or have signiﬁcant spatial variation. We solve the
+problem by decoupling reﬂectance from visibility in the light trans-
+port and using new, nonlinear representations for each.
+
+Ignoring inter-reﬂection between objects, PRT rendering be-
+
+comes:
+
+R(o) =
+
+L(i)V (i)ρo(i) max(0, i ⋅ n) di.
+
+(1)
+
+𝕊2
+
+∫
+
+Unit vector n denotes the surface normal, i the (input) lighting di-
+rection, and o the (output) view direction. L and V denote the light-
+ing and visibility spherical functions, and ρ the 4D BRDF function.
+𝕊2 denotes the unit sphere in ℝ3.
+
+A representation for reﬂectance ρ should satisfy several proper-
+ties. It should ﬁt arbitrary, including highly specular, BRDFs using
+a small number of parameters. It should permit fast extraction of
+the 2D view slice, ρo, from the 4D BRDF. It should then allow fast
+integrated products of this slice with the lighting and visibility to
+calculate the shading. Finally, the representation should permit fast
+and accurate ﬁtting to existing BRDF models.
+
+We base our representation on the microfacet model, as the prod-
+uct of analytic Fresnel and self-shadowing factors with a normal
+distribution function (NDF). This reduces a 6D SVBRDF to a 4D
+SVNDF [Wang et al. 2008]. We further approximate the NDF as
+a mixture (sum) of spherical Gaussians (SGs), symmetric lobes
+
+ACM Transactions on Graphics, Vol. 28, No. 5, Article 133, Publication date: December 2009.around different axes. For parametric SVBRDFs, we derive the
+approximation analytically and on-the-ﬂy at each pixel. For mea-
+sured SVBRDFs, we do the ﬁtting as a preprocess. At run-time, for
+every pixel, we warp the NDF to obtain the needed view-dependent
+BRDF slice, using a simple lobe reﬂection and scaling operation.
+
+For visibility V , we use a per-vertex spherical signed distance
+function (SSDF) which encodes the angular distance to the closest
+visibility boundary at each direction. SSDFs allow ghost-free, per-
+pixel interpolation and fast integrated products with SG lobes. We
+use PCA to further compress this data, and decompress it on the ﬂy
+on the GPU. We then compute the integrated product of four factors
+at each pixel: lighting, visibility, BRDF slice, and clamped cosine,
+where the last two are represented using SG mixtures. Lighting
+is represented as a ﬁltered cubemap pyramid for an environmental
+source or a spherical Gaussian for a point source.
+
+Our main contribution is to introduce a new reﬂectance repre-
+sentation for PRT: one that is structured, specialized to reﬂectance,
+and based on the microfacet model. This representation has many
+advantages over generic bases such as SH or wavelets. It supports
+reﬂectance of arbitrary specularity, and approximates both paramet-
+ric and measured BRDF models well using just a few lobes. It can
+be derived on-the-ﬂy from parametric models, allowing direct tex-
+ture mapping of the model’s parameters. It is closed under rotations
+and vector products [Tsai et al. 2008]. It allows fast extraction of
+the BRDF view slice using a simple spherical warp of each SG lobe,
+and provides fast inner/vector products with visibility and lighting.
+We further introduce the SSDF representation to provide per-pixel
+interpolation of high-frequency precomputed visibility. Our system
+is the ﬁrst to demonstrate real-time, all-frequency PRT rendering
+with dynamic and detailed SVBRDFs, as shown in Figure 1.
+
+2 Previous Work
+
+PRT and Factorization Precomputed Radiance Transfer (PRT)
+[Sloan et al. 2002] combines visibility, surface reﬂectance, and
+inter-reﬂection as a whole light transport operator for efﬁciently
+relighting a static scene. The original method used spherical har-
+monics (SH) as a basis for lighting and precomputed transfer, and
+so supports only low-frequency (soft) shading effects. Substituting
+other bases, such as Haar wavelets over cube maps [Ng et al. 2003],
+allows “all-frequency” effects, including sharp shadows and spec-
+ular reﬂections. Unfortunately, precomputing an object’s spatially-
+varying response to all-frequency light requires huge data storage.
+To address this problem, previous work has applied view-light
+(in-out) BRDF factorization [Wang et al. 2004; Liu et al. 2004;
+Wang et al. 2006; Tsai and Shih 2006]. The idea is to separate re-
+ﬂectance into a sum of factor pairs where one depends only on the
+view direction and the other only on the light direction. The lighting
+reﬂectance factor is then pre-multiplied by static visibility, which is
+also view-independent. This method works well for relatively dif-
+fuse BRDFs but requires impractically many terms to approximate
+specular surfaces [Mahajan et al. 2008]. It also mixes visibility and
+reﬂectance in the precomputed transfer, and so is limited to static,
+per-object, homogeneous reﬂectance.
+
+PRT with Spherical Lobes Other methods use spherical lobes in
+PRT, as does ours. [Green et al. 2006] approximates the combined
+light transport due to reﬂectance and visibility as a sum of Gaussian
+lobes. The representation is unsuitable for detailed visibility func-
+tions, and produces only very soft shadows. Mixing reﬂectance and
+visibility in the precomputation means that surface reﬂectance must
+be static.
+
+[Tsai and Shih 2006] use a scattered mixture of spherical radial
+basis functions (SRBFs) to represent environmental lighting. The
+method is based on BRDF factorization and represents the prod-
+uct of the light-dependent BRDF factor with visibility using ﬁxed,
+rather than optimized, SRBF lobe axes. As with other BRDF fac-
+
+torization approaches in PRT, results are limited to homogeneous,
+static reﬂectance that is not highly specular.
+
+[Green et al. 2007] decomposes reﬂectance and visibility and
+uses a mixture of Gaussian lobes for reﬂectance. A separate SG
+mixture is ﬁt to each BRDF slice at a sampling of elevation an-
+gles. The representation is unsuitable for anisotropic BRDFs and
+requires costly precomputation and heavyweight storage even for
+simple isotropic ones: 45 lobes compared to our one or two. The
+visibility basis uses SH, limiting the technique to soft shadows.
+
+Though we use similar basis functions, our use of SG mixtures
+differs from previous work. We apply the representation to surface
+reﬂectance only (rather than mixing reﬂectance and visibility), and
+do the ﬁtting to the normal distribution function using the micro-
+facet model. The result is much more compact than previous meth-
+ods. For parametric BRDF models, we can evaluate reﬂectance di-
+rectly from the BRDF model’s parameters, on-the-ﬂy rather than in
+a costly precomputation that transforms the entire 4D BRDF sam-
+ple matrix into a generic basis such as SH or wavelets. We also ex-
+ploit special properties of the SG basis for the ﬁrst time, including
+fast spherical rotation/warping and products. This allows us to sup-
+port fully dynamic and per-pixel varying BRDFs with all-frequency
+shadows in real time.
+
+PRT with Spatially-Varying Reﬂectance Several PRT methods
+support spatially varying reﬂectance. [Sloan et al. 2003] decouples
+macro-scale from micro-scale transfer, and supports spatially vary-
+ing BTFs for the micro-scale using radiance transfer textures repre-
+sented in terms of spherical harmonics. To support spatial variation
+on deformable geometry, [Sloan et al. 2005] uses the zonal har-
+monic basis (a sum of broad lobes which are subsets of the spher-
+ical harmonic basis but deﬁned around an arbitrary center) to rep-
+resent micro-scale PRT. Both methods are based on low-order SH
+and capture only soft shading effects.
+
+[Ng et al. 2004] uses wavelet triple products to separate visibil-
+ity and reﬂectance and allow all-frequency, interactive rendering. In
+theory, such separation should permit dynamic and spatially vary-
+ing reﬂectance. Unfortunately, the wavelet basis used does not sup-
+port fast spherical rotation and in fact requires a heavyweight 6D
+representation that pre-rotates the BRDF. Dynamic and spatially
+varying reﬂectance is not practical.
+
+BRDF Editing Interactive BRDF editing systems have approxi-
+mated parametric BRDFs in static scenes using lower-dimensional
+functions (1D for isotropic and 2D for anisotropic BRDFs). [Ben-
+Artzi et al. 2006] represents the 1D function with a wavelet ba-
+sis and precomputes light transport relative to each basis compo-
+nent. Dynamic BRDFs are enabled based on a 1D wavelet pro-
+jection.
+[Ben-Artzi et al. 2008] extends the approach to include
+inter-reﬂection. Precomputation and memory costs limit these ap-
+proaches to ﬁxed views. Another technique extends factorization
+to represent a linear space of precomputed reﬂectance [Sun et al.
+2007]. Lack of compactness in the BRDF representation restricts
+all three of these techniques to use constant rather than spatially
+varying reﬂectance over each object.
+
+Other Methods An extension of light cuts [Walter et al. 2005;
+Walter et al. 2006], called visibility cuts [Cheslack-Postava et al.
+2008], renders per-pixel shaded surfaces with dynamic BRDFs.
+Their technique is interactive but does not attain real-time perfor-
+mance (less than 10fps). Highly specular surfaces are problematic
+because importance sampling is driven by lighting rather than re-
+ﬂectance. Visibility cuts are sampled per-vertex, leading to ghost-
+ing artifacts if the mesh is tessellated coarsely and poor perfor-
+mance if it is tessellated densely. In fact, our SSDF is an example
+of a nonlinear visibility representation sought by [Cheslack-Postava
+et al. 2008] in their conclusion.
+
+[Kˇriv´anek and Colbert 2008] importance sample analytic BRDFs
+
+133:2       •       J. Wang et al.ACM Transactions on Graphics, Vol. 28, No. 5, Article 133, Publication date: December 2009.on the GPU. As with much other previous work, visibility is repre-
+sented with low-order SH which cannot capture all-frequency shad-
+ows. Only simple, parametric reﬂectance models are demonstrated.
+Complex and measured models must be precomputed and tabu-
+lated, limiting them to static, homogeneous (untextured) surfaces.
+Our microfacet-based representation supports on-the-ﬂy evaluation
+of a very general class of parametric models, and compact approx-
+imation of measured BRDFs, allowing reﬂectance to be textured
+over the surface (via an SVBRDF).
+
+[Xu et al. 2008] propose a visibility representation similar to our
+SSDF, but based on parametric domain distance instead of geodesic
+(spherical) distance. The representation is used as a replacement
+for summed area tables, to quickly compute average visibility over
+a square in the parameter domain. We exploit the idea for a new
+purpose: to provide a ghost-free, dense interpolation of a visibility
+function from a sparse set of spatial samples.
+
+3 Spherical Gaussians
+
+We represent reﬂectance and clamped cosine factors from Equation
+(1) as spherical Gaussians (SGs). SGs are a type of spherical ra-
+dial basis function (SRBF), a family of spherical functions or lobes
+which are symmetric around a speciﬁed lobe axis. In addition to
+SGs, introduced in [Tsai and Shih 2006], several types of SRBFs
+have been studied in graphics, including the von Mises-Fisher dis-
+tribution [Han et al. 2007], the Abel-Poisson kernel [Tsai and Shih
+2006], zonal harmonics [Sloan et al. 2005], and high-order mono-
+mials [Arvo et al. 1994]. SGs have a number of important properties
+that make them particularly useful for rendering.
+
+A spherical Gaussian has the form
+
+G(v; p,λ, µ) = µeλ(v⋅p−1)
+
+(2)
+
+where p ∈ 𝕊2 is the lobe axis, λ ∈ (0, +∞) is the lobe sharpness,
+and µ ∈ ℝ is the lobe amplitude (µ ∈ ℝ3 for RGB color). The
+direction v ∈ 𝕊2 is the spherical parameter of the resulting function.
+SGs are compactly ε-supported. This means that the closure of
+the region in which G(v) attains values larger than a threshold ε
+covers less than the entire sphere. The area of this region, denoted
+fa, is a function of lobe sharpness and becomes arbitrarily small as
+λ → ∞:
+
+fa(λ) =
+
+dv = −2π
+
+λ > − lnε.
+
+(3)
+
+∫G(v; z+,λ,1)≥ε
+
+lnε
+λ
+
+,
+
+Constraining λ > − lnε also ensures that the lobe’s thresholded
+support lies within a hemisphere. We will use this property later
+in lobe ﬁtting and warping. Speciﬁcally, we use ε = 0.1 to deﬁne
+fa. This value does not cause cropping of lobes in any computation,
+but only changes the deﬁnition of the area function.
+
+Since an SG is symmetric around its center, its spherical rotation
+is given simply by a spherical rotation of p, while preserving the
+values of the other two lobe parameters. Products of SGs also have
+a simple form. In the following, let two arbitrary SGs be given by
+Gi(v) = G(v; pi,λi, µi) for i = 1, 2.
+
+The inner product, or integral of two spherical functions yielding
+
+a scalar, is derived in [Tsai and Shih 2006] for SGs and given by
+
+G1 ⋅ G2 =
+
+G1(v) G2(v) dv =
+
+𝕊2
+
+∫
+
+4πµ1 µ2
+eλ1+λ2
+
+sinh(dm)
+
+dm
+
+where dm = ∥λ1p1 +λ2p2∥.
+
+The vector product, or direction-wise multiplication of two
+spherical functions yielding a product spherical function, is closed
+in the SG basis. In other words, the vector product of two SGs is
+
+(6)
+
+(7)
+
+n
+∑
+i=1
+
+n
+∑
+i=1
+
+represented exactly as another SG. The product SG is given by
+
+(G1 ⊗ G2) (v) = G1(v) G2(v)
+
+pm
+∥pm∥
+
+= G
+
+v;
+
+(
+
+, λm ∥pm∥, µ1 µ2 eλm(∥pm∥−1)
+
+(5)
+
+)
+
+where pm = (λ1 p1 +λ2 p2)/(λ1 +λ2) and λm = λ1 +λ2. A similar
+result is derived in [Tsai et al. 2008, Eqn. 10], but ignoring proper
+normalization. Our derivation appears in the appendix.
+
+By summing SGs around various lobes, called a mixture model
+of scattered SGs, or more simply an SG mixture, we can represent
+an arbitrary smooth spherical function to any degree of accuracy.
+Mathematically, our model is given by
+
+F ∗(v) =
+
+G(v; pi,λi, µi).
+
+An SG mixture is closed under rotations. A rotated version of an
+
+SG mixture F ∗(i) is computed by rotating its lobe centers via
+
+ℜ F ∗(v) =
+
+G(v, ℜ pi, λi, µi)
+
+where ℜ denotes the rotation matrix.
+
+The SG mixture basis is not orthogonal. An inner or vector prod-
+uct of two, n-term SG mixtures must consider all pairs of SG lobes
+and so has complexity O(n2). We avoid the difﬁculty by using
+SG mixtures only for sparse spherical functions requiring small n.
+Complex spherical functions such as visibility and environmental
+lighting incident on specular surfaces are represented using a dif-
+ferent representation, as we will see.
+
+4 Reﬂectance Representation using SGs
+We decompose the BRDF ρ(o, i) at a surface point into a diffuse
+component kd and a specular component ksρs:
+
+ρo(i) = ρ(o, i) = kd + ks ρs(o, i).
+
+(8)
+
+These two components of shading are calculated separately. The
+following describes how the specular part is represented and how
+the BRDF slice for one viewing direction o is evaluated.
+
+4.1 Parametric BRDFs
+
+We focus on BRDF models based on microfacet theory [Torrance
+and Sparrow 1967], which includes a large variety of commonly-
+used reﬂectance types. The specular lobe ρs in microfacet theory
+can be formalized as
+
+ρs(o, i) = Mo(i) D(h)
+
+h =
+
+(9)
+
+o + i
+∥o + i∥
+
+,
+
+which expresses reﬂectance in terms of the normal distribution
+function (NDF), D(h), and the remaining factor, Mo(i), combin-
+ing microfacet shadowing and Fresnel reﬂection. These latter fac-
+tors are very smooth [Ashikmin et al. 2000; Ngan et al. 2005], and
+so can be compactly approximated, while the NDF often contains
+high-frequency information. We model the NDF D(h) using a sin-
+gle SG lobe for isotropic models or multiple lobes for anisotropic
+models.
+
+For example,
+
+the Cook-Torrance model [Cook and Torrance
+
+(4)
+
+1981] is represented in terms of a roughness parameter m:
+
+ρs(o, i) =
+
+FCT(o, i) SCT(o, i)
+
+π(n ⋅ i) (n ⋅ o)
+
+e−(θ/m)2
+
+,
+
+(10)
+
+Mo(i) =
+
+FCT(o, i) SCT(o, i)
+
+π(n ⋅ i) (n ⋅ o)
+
+,
+
+D(h) = e−(arccos(h⋅n)/m)2
+
+.
+
+(11)
+
+All-Frequency Rendering of Dynamic, Spatially-Varying Reflectance       •       133:3ACM Transactions on Graphics, Vol. 28, No. 5, Article 133, Publication date: December 2009.Figure 2: Fitting SG mixtures to parametric BRDF models (unshadowed
+rendering). The three left columns show the Cook-Torrance model (m =
+0.045): (a) ground truth, (b) single-lobe SG model, (c) 256-term BRDF
+factorization. The right column shows the Ashikhmin-Shirley model (nu =
+75,nv = 1200): (d) ground truth, (e) 7-lobe SG model, (f) 256-term BRDF
+factorization.
+
+Figure 3: BRDF ﬁtting, violet acrylic example from [Matusik et al. 2003].
+Our method (3 SG lobes) is compact and more accurate than ﬁtting para-
+metric models like Ashikhmin-Shirley in (c).
+
+The functions FCT and SCT denote the Fresnel and shadowing func-
+tions, respectively, and have an analytic form. We approximate the
+NDF with a single SG lobe via
+
+D(h) = e−(arccos(h⋅n)/m)2
+
+≈ G(h; n, 2/m2, 1).
+
+(12)
+
+This approximation matches the original model quite well; a de-
+tailed error analysis is provided in the supplemental material. Other
+frequently-used parametric BRDF models such as (isotropic) Blinn-
+Phong [Blinn 1977], isotropic and anisotropic Ward [Ward 1992],
+and (anisotropic) Ashikhmin-Shirley [Ashikhmin and Shirley
+2000] can also be represented using (9). Analytic approximations
+for these models using SG ﬁts to the NDF, similar to (12), are given
+in the supplement.
+
+Spatial variation is encoded simply by texturing over the sur-
+face the parameters ks, kd from (8) as well as the speciﬁc BRDF
+model parameters, such as m for Cook-Torrance. This is a compact
+representation that allows high-frequency spatial variation. Surface
+reﬂectance at each pixel is determined on-the-ﬂy in rendering with-
+out any precomputation or ﬁtting, which allows arbitrary temporal
+and spatial changes to reﬂectance in runtime.
+
+Figure 2 shows parametric BRDF models represented and ren-
+dered with our method. The SG mixture model achieves better ren-
+dering quality than does BRDF factorization even with 256 terms.
+Such a large number of terms produces an extremely heavyweight
+representation that prohibits spatial variation or interactive perfor-
+mance. To put this number in perspective, previously published
+PRT factorization methods have used many fewer terms: 4 in [Wang
+et al. 2004], 10 in [Liu et al. 2004], and 16 in [Tsai and Shih 2006].
+
+4.2 Measured BRDFs
+
+We represent measured BRDFs with the general microfacet model
+using a tabulated NDF D and shadowing factor S at each surface
+
+Figure 4: SVBRDF ﬁtting on a measured example from [Lawrence et al.
+2006]. Two light/view settings are shown: (a,c) original, (b,d) our approxi-
+mation with 2 SG lobes per pixel.
+
+point. The representation is similar to [Wang et al. 2008] except
+that we then ﬁt the NDF with a small number of SG lobes. The
+overall model is given by:
+
+(13)
+
+(14)
+
+ρs(o, i) =
+
+F(o, i)S(o)S(i)
+π(i ⋅ n)(o ⋅ n)
+
+D(h).
+
+The Fresnel factor F is given by [Cook and Torrance 1981]:
+
+F(o, i) =
+
+(g − c)2
+2(g + c)2
+
+1 +
+
+(
+
+c(g + c) − 1
+
+c(g − c) + 1
+(
+)
+
+)
+
+2
+
+2
+
+(
+
+)
+
+√
+
+η2 + c2 − 1, c = ∣i ⋅ h∣, and η denotes the relative in-
+where g =
+dex of refraction. As in [Wang et al. 2008], we constrain the shad-
+owing factor to be isotropic. The resulting 1D shadowing function
+at each surface point is packed into 90D vectors and compressed
+to 8D using PCA. The compressed vector and the relative index
+of refraction can be stored in textures for rendering. We currently
+use a constant index of refraction η = 1.33. Figures 3 and 4 show
+results of our microfacet-based SG mixture representation on real
+measured BRDFs and SVBRDFs. More ﬁtting results are included
+in the supplement.
+
+For isotropic BRDFs, we ﬁt the NDF D(h) in (13) with SG mix-
+tures having 1 or 2 lobes around the canonical axis p = z+ as a pre-
+process. The ﬁtting is done by Levenberg-Marquardt optimization
+[Nocedal and Wright 1999]. When SG mixtures have more than
+one lobe, the lobes are sorted in increasing order of sharpness for
+texture interpolation.
+
+For anisotropic BRDFs, more lobes are typically required and
+are ﬁt using a variable axis rather than the ﬁxed z+. We ﬁx the num-
+ber of lobes in the SG approximation for all surface points and then
+compute an independent nonlinear optimization to ﬁt each point’s
+NDF using the L-BFGS-B solver [Zhu et al. 1997] as in [Tsai and
+Shih 2006]. The resulting parameters of the SG mixtures are en-
+coded with multiple textures for rendering. Independent optimiza-
+tion produces unaligned lobes at adjacent texels whose axes may
+be far apart and thus unsuitable for interpolation. In this case, we
+avoid texture ﬁltering and instead apply nearest-neighbor texture
+sampling and spatial supersampling.
+
+After ﬁtting the NDF, the resulting SG parameters are stored as a
+texture map. The representation requires 4 ﬂoats for each lobe in the
+isotropic case (3 for RGB lobe amplitude and 1 for lobe sharpness).
+An additional 3 ﬂoats are needed in the anisotropic case to encode
+the lobe direction.
+
+4.3 Obtaining the View Slice using a Spherical Warp
+
+Given a view direction o, we require the corresponding 2D BRDF
+slice ρs(i; o) to integrate with visibility and lighting. We obtain
+it by a vector product of the NDF’s SG approximation, D∗(h) =
+∑n
+
+h; pD
+
+i ,λD
+
+i , µD
+i
+
+i=1 G
+
+, with the remaining factor Mo(i):
+ρs(i; o) = Mo(i) ⊗ D∗(h).
+)
+
+(15)
+
+(
+
+To compute this, we ﬁrst express the NDF in terms of the lighting
+vector i instead of the half-way vector h:
+
+W ∗(i) =
+
+G
+
+i; pW
+
+i ,λW
+
+i , µW
+i
+
+≈ D∗(h).
+
+(16)
+
+n
+∑
+i=1
+
+(
+
+)
+
+133:4       •       J. Wang et al.ACM Transactions on Graphics, Vol. 28, No. 5, Article 133, Publication date: December 2009.This involves a spherical warp on D∗ via the transformation
+
+i = ψ(h) = 2(o ⋅ h)h − o.
+
+(17)
+
+We can approximate this warp as a sum of simple, per-lobe warps
+on D∗. Each warped lobe has ε-support area in Equation (3) equal
+to its original unwarped area times the differential area of the warp
+at the lobe center, pD
+i . The warped lobe’s amplitude is preserved.
+The formula is given by
+
+i = ψ(pD
+pW
+
+i ) = 2(o ⋅ pD
+
+i )pD
+
+i − o,
+
+i = f −1
+λW
+
+a
+
+fa(λD
+
+i ) ⋅ τ(pD
+i )
+
+=
+
+λD
+i
+τ(pD
+i )
+
+,
+
+i = µD
+µW
+i .
+
+(
+
+(18)
+
+(19)
+
+(20)
+
+)
+
+(cid:13)
+(cid:13)
+(cid:13)
+
+Differential area of this warp, τ(h), is the determinant of the Jaco-
+bian of the warp function ψ and given by
+
+τ(h) =
+
+=
+
+di
+dh
+
+∂ψ(h)
+
+∂φ
+
+∂θ × ∂ψ(h)
+∂θ × ∂h
+∂h
+
+∂φ
+
+(cid:13)
+(cid:13)
+(cid:13)
+
+(cid:13)
+(cid:13)
+(cid:13)
+
+= 4 ∣h ⋅ o∣
+
+(21)
+
+(cid:13)
+(cid:13)
+(cid:13)
+
+where h(θ,φ) = (sinθcosφ, sinθsinφ, cosθ). Other types of per-
+lobe warps can be computed similarly by replacing the transform ψ
+and its distortion factor τ.
+
+Finally, we observe that the factor Mo(i) is smooth [Ngan et al.
+2005]. Our approximation assumes Mo is constant across the sup-
+port of each SG in the warped NDF W ∗, so that the lobe amplitude
+is simply multiplied by the value of Mo evaluated at the lobe center,
+yielding the following simple formula:
+
+n
+∑
+i=1
+
+(
+
+s (i; o) = Mo(i) ⊗W ∗(i) ≈
+ρ∗
+
+G
+
+i; pW
+
+i ,λW
+
+i , Mo(pW
+
+i )µW
+i
+
+.
+
+(22)
+
+)
+
+Our fast method for spherical warping yields a BRDF slice rep-
+resented as an SG mixture. Since we approximate each warped lobe
+as isotropic, our method incurs error especially at oblique viewing
+directions where the warp has large anisotropic distortion. Figures 3
+and 4 include error from the fast spherical warp, as well as error
+from ﬁtting our representation. The visual difference is small. Er-
+ror from spherical warping is further analyzed in the supplement.
+Future work could reduce this error by ﬁtting multiple-lobe SGs to
+the warped result, or using anisotropic basis functions.
+
+5 Visibility Representation using SSDFs
+We represent spatially-varying visibility with a nonlinear represen-
+tation called a spherical signed distance function (SSDF). An SSDF
+is stored at each mesh vertex and is interpolated per-pixel over trian-
+gles. The beneﬁt of this representation is that it provides ghost-free
+interpolation as shown in Figure 5. Visibility edges (row 3), re-
+constructed with bilinear interpolation on SSDFs (row 2), are sharp
+yet still make smooth transitions. Direct interpolation of the binary
+function (row 1) yields double images.
+
+As is usual in PRT methods, the mesh tessellation must ade-
+quately sample this visibility signal. For example, representing
+a ﬂoor as a pair of triangles with only four SSDFs at its vertices
+will not permit detailed shadows cast by objects resting on it. Un-
+like previous PRT work, the tessellation can ignore variation in re-
+ﬂectance, which is handled by texture mapping SG mixtures. The
+SSDF representation permits spatially-varying visibility to be rep-
+resented at a relatively sparse set of surface vertices.
+
+5.1 Spherical Signed Distance for Visibility
+
+Visibility, Vx(i), is a spatially-varying binary spherical function in-
+dicating whether the direction i to a distant light source is occluded
+or not, at each surface point x. To make the notation clearer, we
+
+Figure 5: Ghost-free visibility interpolation using nonlinear SSDFs. Two
+visibility functions (top row, a1 and e1) are linearly interpolated with blend-
+ing weights 0.25 in (b), 0.5 in (c) and 0.75 in (d), resulting in ghosting
+artifacts. SSDFs corresponding to (a1) and (e1) are shown in (a2) and (e2),
+while (b2), (c2), and (d2) are the linearly blended SSDFs. Reconstruction
+from interpolated SSDFs, shown in (b3), (c3), and (d3), yields smooth tran-
+sitions in orientation while preserving edge sharpness.
+
+will drop the x subscript. We map binary visibility to an SSDF,
+V d(i). The function’s sign encodes whether the direction i is oc-
+cluded (negative) or not (positive), and its value encodes angular
+distance, θd, to the nearest direction t on the shadow boundary. An
+example is shown in Figure 6a.
+
+Mathematically, the SSDF is given by
+
+V d (i) =
+
++ min
+V (t)=0
+− min
+V (t)=1
+
+⎧
+⎨
+
+arccos(t ⋅ i),
+
+if V (i) = 1;
+
+arccos(t ⋅ i),
+
+if V (i) = 0.
+
+(23)
+
+⎩
+
+When multiplying an SSDF by an SG around a lobe center p, eval-
+uating the SSDF V d (p) essentially reconstructs a hemispherical
+blocker based on the closest occluder to p (compare a and b in Fig-
+ure 6). For narrow SG lobes, this provides a good approximation
+to visibility in the neighborhood of p, For broader lobes, detailed
+knowledge of the visibility function is unnecessary, so the approxi-
+mation is reasonable in that case as well.
+
+5.2 Precomputing and Compressing SSDFs
+
+As a preprocess, we convert the binary visibility function to an
+SSDF using equation (23) at each vertex. We sample only the
+upper normal hemisphere and reparameterize in a square image
+[Shirley and Chiu 1997]. To avoid aliasing, we downsample an
+initial 512 × 512 image to 128 × 128.
+
+We then compress the spatially-varying SSDF using PCA:
+
+V d
+x (i) ≈
+
+𝕍 j(i) wV
+x, j
+
+NV
+∑
+j=1
+
+(24)
+
+where NV denotes the number of PCA terms and 𝕍 j is the j-th
+eigenvector. The PCA coefﬁcients wV
+x, j are stored as vertex at-
+tributes and interpolated to each pixel during rasterization. The
+eigenvectors are encoded in multiple textures and fetched by bi-
+linear ﬁltering. Our current implementation uses NV = 48. More
+sophisticated compression techniques, such as local PCA or tensor
+compression, could replace this simple approach.
+
+5.3 Integrating Products with Visibility
+
+We are given an SG lobe with center p and wish to compute prod-
+ucts between this lobe and an SSDF. This is done by reconstruct-
+ing a hemispherical visibility function and integrating the lobe over
+the intersection of its hemispherical support (around the lobe axis
+p) with the visibility hemisphere (whose boundary passes through
+t nearest to p). The absolute direction t relative to p is irrele-
+vant since SGs are isotropic; only the angle between them matters:
+θd = V d (p).
+
+All-Frequency Rendering of Dynamic, Spatially-Varying Reflectance       •       133:5ACM Transactions on Graphics, Vol. 28, No. 5, Article 133, Publication date: December 2009.Figure 6: Center-dependent visibility reconstruction with an SSDF. Two
+cases are shown: on the left, signed distance is positive (lobe axis p is in
+visible region), while on the right it is negative (lobe axis is occluded). (a)
+Original visibility function (top view). t is the nearest visibility boundary to
+the lobe center p. (b) Reconstructed visibility function around p. The vis-
+ible region is a hemisphere whose boundary intersects t. (c) Reconstructed
+visible region (purple) in the local coordinate frame (top view). (d) Recon-
+structed visible region (side-view). z+ points to the lobe center and y+ points
+to the cross product of t and p.
+
+Let the reconstructed visibility function be denoted V ′(i). For
+convenience, we represent it in the local frame of the SG lobe as
+shown in Figure 6cd. This coordinate frame orients p along z+ and
+t × p along y+. In this coordinate system, the visibility domain is
+the purple region and deﬁned as:
+
+(25)
+
+(26)
+
+(28)
+
+(29)
+
+(30)
+
+where δ is the elevation angle of i when projected into the xz plane:
+
+V ′(i) =
+
+1, δ(i) ≥ π
+0,
+otherwise
+
+2 −θd
+
+{
+
+π
+2
+
+δ(i) =
+
+− arctan
+
+i ⋅ x+
+i ⋅ z+
+
+.
+
+)
+
+(
+
+To compute inner products, we parameterize the interior of the
+
+visible region via
+
+i(ξ,δ) =
+
+sinξ sinδ, cosξ, sinξ cosδ
+
+.
+
+(27)
+
+Parameter ξ ∈ [0,π] represents the angle made by i with y+ while
+δ ∈ [0,π] represents the angle around y+. The inner product is then
+given by
+
+(
+
+)
+
+G(i; p,λ, µ) ⋅V (i) ≈ G(i; p,λ, µ) ⋅V ′(i)
+
+π
+
+π
+
+= µ
+
+G
+
+i; z+,λ, 1
+
+sinξdξdδ
+
+0
+δ0 ∫
+∫
+
+(
+= µ fh(θd,λ).
+
+)
+
+where δ0 = π
+2 − θd. We precompute the 2D scalar function
+fh(θd,λ) and approximate it using a simple model consisting of a
+sigmoid composed with a polynomial, as described in the appendix.
+The vector product is approximated by making its amplitude
+yield the same integrated value as the original lobe and preserving
+its center. This yields the formula
+
+G(i; p,λ, µ) ⊗V (i) ≈ G
+
+i; p,λ,
+
+(31)
+
+fh(θd,λ)
+fh( π
+2 ,λ)
+
+µ
+
+)
+
+(
+
+where fh( π
+
+2 ,λ) =
+
+𝕊2 G(i; z+,λ, 1) dv = (2π/λ)(1 − e−λ).
+
+∫
+
+Figure 7 compares our SSDF representation and method for
+computing products with ray tracing. For narrow SGs (a), our ap-
+proximation yields a small error and little visual difference to the
+ground truth. Broader SGs (c) produce a very soft shadow making
+the small shift that occurs essentially imperceptible. Refer to the
+supplement for a more detailed error analysis.
+
+Figure 7: SSDF product accuracy. A good approximation is produced for
+different values of lobe sharpness, λ. The ﬁgure is rendered with a single-
+lobe ﬁt to the Cook-Torrance BRDF.
+
+6 Lighting Representation
+Local Point Lights can be dynamically added and animated in
+our system and are approximated with a single-lobe SG model.
+Such a light source yields a spatially varying radiance ﬁeld which
+we compute per pixel. A point light source located at 3D position l
+with radius r and intensity s yields a radiance ﬁeld at surface loca-
+tion x that we approximate by
+
+L∗
+x(i) = G
+
+i;
+
+(
+
+l − x
+∥l − x∥
+
+, f −1
+
+a
+
+2πr2
+
+s
+
+∥l − x∥2
+
+∥l − x∥2
+
+,
+
+)
+
+(
+
+(32)
+
+.
+
+)
+
+The radius parameter actually models a spherical light source: in-
+creasing r increases the softness of shadow boundaries.
+
+For inﬁnitely-distant lighting from direction l, the SG approxi-
+
+mation is given by
+
+L∗(i) = G
+
+i; l, f −1
+
+a (2πr2), s
+
+.
+
+(33)
+
+(
+
+)
+
+Distant Environmental Lighting is represented by the spherical
+radiance function L(i). We use two different representations for L
+depending on whether the lighting is applied to the diffuse or spec-
+ular surface component. For the diffuse component, we ﬁt the en-
+vironmental radiance map with an SG mixture L∗(i) as in [Tsai and
+Shih 2006]. Preserving just the brightest areas is sufﬁcient for dif-
+fuse rendering and requires only a few lobes (< 10). Of course, this
+ignores details in the environment which are revealed in specular
+reﬂections.
+
+For the specular component, we preconvolve environmental ra-
+diance with SG kernels of varying lobe sharpness to permit fast run-
+time evaluation of inner products. The idea is similar to preﬁltered
+environment maps [Kautz et al. 2000; McAllister et al. 2002] used
+for unshadowed rendering, and applied to low-frequency shadowed
+rendering in [Green et al. 2006], but instead based on our SG kernel.
+The inner product of lighting with an arbitrary SG is given by
+
+G(i; p,λ, µ) ⋅ L(i) = µ
+
+G(i; p,λ, 1) L(v) di
+
+𝕊2
+
+∫
+
+= µΓL(p,λ).
+
+(34)
+
+(35)
+
+The 3D function ΓL is precomputed and tabulated in terms of λ
+and p. The result is represented as an image pyramid (MIPMAP),
+indexed by λ, over cubemaps each representing a spherical function
+indexed by p.
+
+7 Run-Time Rendering
+Per-vertex mesh information needed by the renderer includes po-
+sition, texture coordinates, local coordinate frame, and PCA coef-
+ﬁcients wV
+x, j for the SSDF from equation (24). These quantities
+are interpolated across mesh triangles and used by the pixel shader.
+Textures store the BRDF parameters or, for non-parametric BRDFs,
+the tabulated SG lobes, D∗, and PCA-compressed shadow factor, ˆS.
+
+133:6       •       J. Wang et al.ACM Transactions on Graphics, Vol. 28, No. 5, Article 133, Publication date: December 2009.We separate the rendering equation into a view-independent
+diffuse component, Rd, and view-dependent specular component,
+Rs(o), by plugging equation (8) into equation (1) to obtain:
+
+R(o) = kd Rd + ks Rs(o),
+
+Rd =
+
+L(i)V (i) max(0, i ⋅ n) di,
+
+Rs(o) =
+
+L(i)ρs(o, i)V (i) max(0, i ⋅ n) di.
+
+(36)
+
+(37)
+
+(38)
+
+𝕊2
+
+∫
+
+𝕊2
+
+∫
+
+The two components are evaluated, summed, and tone-mapped in a
+single shading pass.
+
+The diffuse component is calculated as
+
+Rd = (C∗(i; nx) ⊗ L∗(i)) ⋅V d
+
+x (i)
+
+(39)
+
+where C∗(i; nx) is an SG mixture approximation of the clamped
+cosine, max(0, i ⋅ nx). We ﬁt it as a single-lobe SG:
+
+C∗(i; nx) = G(i; nx,λc, µc), λc = 2.133, µc = 1.170,
+
+(40)
+
+where nx is the per-pixel interpolated surface normal. Error of this
+single lobe ﬁt is analyzed in the supplement. We represent visibil-
+ity V d
+x as an SSDF in the local coordinate frame of the vertex and
+decode its PCA representation as explained in Section 5.2. The SG
+mixture for the lighting is rotated to the local frame before comput-
+ing the vector product with the clamped cosine. Finally, we apply
+equation (30) to compute the inner product of this result with vis-
+ibility. We approximate fh using the simple formula described in
+the appendix.
+
+The specular component is calculated as
+
+)
+
+(41)
+
+x (i)
+
+⋅ L(i).
+
+Rs(o) =
+
+s,x(i; o) ⊗V d
+
+C∗(i; nx) ⊗ρ∗
+(
+The BRDF slice ρ∗
+s is deﬁned in the local coordinate system, as
+is the clamped cosine and visibility factors. The vector product of
+these three is then rotated to the world coordinate system and an
+inner product with environmental radiance computed via equation
+(35). By preﬁltering the environment map, this inner product re-
+duces to a simple “MIPMAP of cubemaps” texture fetch for each
+SG lobe in the vector product.
+
+We determine the SG mixture for the 2D BRDF slice ρ∗
+
+s,x on-the-
+ﬂy by a spherical warp of D∗
+x(h) according to equation (22). Mx,o(i)
+has an analytic form that is evaluated in a pixel shader. The NDF
+D∗
+x(h) is represented as a single-lobe SG for isotropic, parametric
+BRDFs, a two-lobe SG for isotropic, non-parametric models, and
+4-8 lobes for anisotropic models. For parametric models, D∗ is
+computed per-pixel as an analytic function of the BRDF parameters
+for the current rasterization fragment. For non-parametric models,
+it is indexed from a texture.
+
+Local Light Sources are represented as a single-lobe SG using
+equation (32) for point lights or (33) for directional lights. Products
+are computed differently than for environmental lighting. In this
+case, we rotate the simple lighting to the local coordinate system of
+the surface rather than rotating the reﬂectance and visibility to the
+world coordinate system. The rendering equations, (39) and (41),
+are modiﬁed to become:
+
+x(i) ⊗C∗(i; z+)) ⋅V d
+Rd = (L∗
+L∗
+x(i) ⊗C∗(i; z+) ⊗ρ∗
+
+Rs(o) =
+
+x (i)
+
+s,x(i; o)
+
+⋅V d
+
+x (i)
+
+(42)
+
+(43)
+
+This avoids a vector product with visibility.
+
+(
+
+)
+
+Point light sources should be located outside the object’s con-
+vex hull since precomputed visibility represents occlusion to distant
+lighting only.
+
+Figure 8: Per-vertex vs. per-pixel shading.
+
+x (i) is replaced by its rotated version ℜx C∗
+
+Normal and Tangent Maps simulating surface meso-structure
+are easily integrated. We generalize both by a quaternion map q(x),
+which describes a rotation matrix ℜx deﬁned in the local coordinate
+frame at each surface point x. For diffuse rendering, the clamped
+cosine C∗
+x (i) in equations
+(39) and (42). Rotation of an SG mixture is computed via equation
+(7). For specular rendering, the vector product C∗
+s,x(i; o) is
+replaced by its rotated version ℜx
+in equations
+(41) and (43). The viewing direction o for the rotated BRDF slice
+must also be changed to o′ = ℜx o. Since the clamped cosine and
+BRDF slice are determined on the ﬂy anyway, this approach allows
+run-time changes to the mapped normals and/or tangents.
+
+s,x(i; o′)
+
+x (i) ⊗ ρ∗
+
+x (i) ⊗ ρ∗
+
+C∗
+
+(
+
+)
+
+8 Experimental Results and Discussion
+We implemented our rendering algorithm on a PC with an Intel
+CoreTM2 Duo 3.2G CPU, 4GB memory, and an nVidia Geforce
+8800Ultra graphics card. We used the GPU rasterizer to sample the
+visibility function at each vertex and then convert it to an SSDF as
+described in Section 5.2. The PCA coefﬁcients of the compressed
+SSDFs are stored as vertex attributes and interpolated during ras-
+terization. Distant environmental and local point light sources are
+both rendered in a single pass of a pixel shader.
+
+Table 7 lists the precomputation and run-time performance statis-
+tics for all our examples. Detailed textures for parametric BRDFs
+(ﬁrst three rows) are speciﬁed directly in terms of the model pa-
+rameters, require only a few MB of memory, and need no precom-
+putation. SG mixture ﬁts to measured BRDFs must be precom-
+puted, requiring 2 hours for the “greeting card” example [Lawrence
+et al. 2006] and 5 hours for the red satin and green velvet examples
+[Wang et al. 2008] in Figure 12d-h.
+
+Decoupling textured reﬂectance from visibility and using our
+SSDF visibility representation allows sparse geometry tessellations
+(see the “Vert.” column in the table). This reduces precomputa-
+tion time and memory, and also increases run-time performance.
+Without complicated optimizations such as view-dependent culling
+or lazy updating, we achieve real-time frame rates in the range 40-
+150fps while handling dynamic viewing, lighting, and reﬂectance
+and evaluating the shading per-pixel.
+
+Figure 8 compares per-vertex and per-pixel rendering results.
+Our result in the (c) column remains consistent even for quite sparse
+tessellation densities. The per-vertex shading result, in the (b) col-
+umn, yields signiﬁcant blurring and triangulation artifacts even with
+a fairly dense tessellation. These are especially visible in high-
+frequency shadows and highlights, as shown in the blue boxed inset.
+Figure 9 isolates error between the SSDF representation itself
+and its compression. PCA-based compression in (d,e) produces a
+
+All-Frequency Rendering of Dynamic, Spatially-Varying Reflectance       •       133:7ACM Transactions on Graphics, Vol. 28, No. 5, Article 133, Publication date: December 2009.Scene
+
+BRDF Type
+
+Texture Res. BRDF Size # Vert. # E.L. SSDF Samp.
+
+SSDF Comp.
+
+SSDF Size Env. FPS Pt. FPS
+
+Teapot: Fig.1a, Fig.11ab
+
+Cook-Torrance, (iso, 1 SG)
+
+1024×1024
+
+7.2MB
+
+20 min.
+
+30D (25 min.)
+
+2MB
+
+Dragon: Fig.1b, Fig.11cd
+
+Ward (iso, 1 SG)
+
+512×512
+
+1.8MB
+
+50 min.
+
+30D (35 min.)
+
+4.4MB
+
+Dish+Balls: Fig.1c, Fig.12abc Ashikhmin-Shirley (aniso, 7 SGs)
+
+512×1024
+
+4.1MB
+
+28.5k
+
+45 min.
+
+20D ( 30 min.)
+
+2.3MB
+
+Dish+Cloth: Fig.1d, Fig.12efg
+
+20k
+
+25 min.
+
+10D (20 min.)
+
+0.8MB
+
+measured card (iso, 2 SGs)
+measured satin (aniso, 5 SGs)
+measured velvet (aniso, 2 SGs)
+
+512×512
+850×850
+850×850
+
+4.2MB
+22.4MB
+9.4MB
+
+17k
+
+37k
+
+8
+
+8
+
+6
+
+6
+
+171
+
+165
+
+55
+
+48
+168
+
+250
+
+231
+
+30
+
+35
+145
+
+Table 1: Experimental performance. “# E.L.” is the number of SG lobes ﬁt to environmental light for rendering the diffuse component. “SSDF Samp.” is
+the total time for sampling the visibility function at each vertex, converting to an SSDF, and down-sampling. “SSDF Comp.” lists the reduced dimension and
+the total computation time (in parentheses) for SSDF compression using PCA. The rightmost two columns show rendering performance with environmental
+lighting, “Env. FPS”, and two point light sources, “Pt. FPS”.
+
+to anisotropic reﬂection. User-speciﬁed local tangent rotation via
+interactive painting is also demonstrated in (b,c).
+
+Figure 12d-h shows measured and tabulated SVBRDFs from real
+materials. The cloth is red satin (e,f,g) and velvet (d,h); ﬁne features
+in the needlework and anisotropic reﬂectance are well-preserved.
+The greeting card is isotropic with spatially varying specularity, and
+changes its appearance realistically as the viewing/lighting condi-
+tions are animated. We also support real-time editing of SVBRDFs
+as shown in (f,g). In this example, we adjusted the shininess by
+changing the sharpness parameter of the ﬁtted lobes to simulate a
+wetting effect within the painted region. Refer to the video and
+supplement for further results.
+
+9 Conclusion
+Illumination effects from highly specular, spatially varying, and dy-
+namic materials under natural lighting add realism to synthetic im-
+agery but have so far been too expensive for real-time rendering.
+We introduce two new, nonlinear representations to solve this prob-
+lem: SG mixtures for microfacet-based reﬂectance and SSDFs for
+visibility. Fitting a small number of SG lobes to the microfacet NDF
+represents both parametric and measured BRDFs, including highly
+specular ones, compactly and accurately. It also allows fast rota-
+tion, warping, and products that speed up rendering. Compressed
+SSDFs compactly represent spatially-varying visibility and provide
+ghost-free, per-pixel interpolation from a sparse, per-vertex set of
+samples.
+
+Our approach is subject to a number of limitations. Precomputed
+visibility restricts us to static scenes. However, our method can be
+combined with shadow ﬁelds [Zhou et al. 2005], local deformation
+[Sloan et al. 2005], or skinned shadowing proxies [Ren et al. 2006]
+to handle dynamic geometry. We consider only direct shadow-
+ing effects; inter-reﬂection (both specular and diffuse) is ignored.
+Since SGs are isotropic, our model requires many lobes to repre-
+sent highly anisotropic BRDFs. Independent ﬁtting of multi-lobe
+SG models for measured anisotropic reﬂectance requires nearest-
+neighbor ﬁltering of the encoded texture. We are interested in ad-
+dressing these drawbacks in future work, as well as investigating
+more sophisticated methods for compressing SSDFs.
+
+References
+ARVO, J., TORRANCE, K., AND SMITS, B. 1994. A framework
+In
+
+for the analysis of error in global illumination algorithms.
+Proceedings of SIGGRAPH 1994, ACM, 75–84.
+
+ASHIKHMIN, M., AND SHIRLEY, P. 2000. An anisotropic Phong
+
+BRDF model. Journal of Graphics Tools 5, 2, 25–32.
+
+ASHIKMIN, M., PREMO ˇZE, S., AND SHIRLEY, P.
+
+2000. A
+In Proceedings of SIG-
+
+microfacet-based BRDF generator.
+GRAPH 2000, ACM, 65–74.
+
+BEN-ARTZI, A., OVERBECK, R., AND RAMAMOORTHI, R. 2006.
+Real-time BRDF editing in complex lighting. ACM Transactions
+on Graphics 25, 3, 945–954.
+
+Figure 9: PCA compression of SSDFs.
+
+Figure 10: Results with local point and distant environmental lights.
+
+reasonable result even with a small number of terms. Without com-
+pression, our result (b) matches the ray-traced ground truth with
+minimal visual difference.
+
+Figure 10 shows rendering results illuminated with both nearby
+point light sources and distant environmental light. Our rendering
+algorithm supports dynamic local light sources; no additional pre-
+computation is needed. Note the colored shadows and reﬂections,
+and high-frequency shadow edges.
+
+Figure 11 shows results for isotropic parametric BRDF models.
+Realistic reﬂectance is generated as well as detailed spatial vari-
+ation in the engraved mark on the teapot and rust pattern on the
+dragon. Bump maps can be adjusted at runtime as shown in (b).
+BRDF parameters can also be changed on the ﬂy as shown in (d).
+Notice the all-frequency shadows on the ﬂoor (a,c) and on the neck
+and mouth of the dragon (c,d). Refer to the video for animations of
+bump maps and rust.
+
+Figure 12abc shows results for anisotropic parametric BRDF
+models. Fan-shaped highlights are convincingly captured from the
+circular brush marks on the metal platter. Shadows in both dif-
+fuse and specular reﬂection are also reproduced. Note especially
+the deformed shadow of the white ball on the platter in (c), due
+
+133:8       •       J. Wang et al.ACM Transactions on Graphics, Vol. 28, No. 5, Article 133, Publication date: December 2009.Figure 11: Rendering results with isotropic BRDF models. (a/b) Metal teapot using Cook-Torrance, without/with bump map. (c/d) Iron dragon using Ward,
+new/rusted.
+
+Figure 12: Rendering results with anisotropic BRDF models. (a) Dishes and balls using Ashikhmin-Shirley model. (b,c) Painted tangent rotation. (d-h)
+Measured cloth (5-lobe SG) and greeting card (2-lobe SG). (f,g) Painted SG warp suggesting wet paint.
+
+BEN-ARTZI, A., EGAN, K., RAMAMOORTHI, R., AND DURAND,
+F. 2008. A precomputed polynomial representation for interac-
+tive BRDF editing with global illumination. ACM Transactions
+on Graphics 27, 2, 13:1–13:13.
+
+KAUTZ, J., V ´AZQUEZ, P.-P., HEIDRICH, W., AND SEIDEL, H.-
+P. 2000. Uniﬁed approach to preﬁltered environment maps. In
+Proceedings of the Eurographics Workshop on Rendering Tech-
+niques 2000, Springer-Verlag, London, UK, 185–196.
+
+BLINN, J. F. 1977. Models of light reﬂection for computer syn-
+thesized pictures. In Computer Graphics (Proceedings of SIG-
+GRAPH 77), ACM, vol. 11, 192–198.
+
+K ˇRIV ´ANEK, J., AND COLBERT, M. 2008. Real-time shading with
+ﬁltered importance sampling. Computer Graphics Forum (Proc.
+of Eurographics Symposium on Rendering) 27, 4.
+
+CHESLACK-POSTAVA, E., WANG, R., AKERLUND, O., AND
+PELLACINI, F. 2008. Fast, realistic lighting and material de-
+sign using nonlinear cut approximation. ACM Transactions on
+Graphics 27, 5, 128:1–128:10.
+
+COOK, R. L., AND TORRANCE, K. E. 1981. A reﬂectance model
+for computer graphics. In Computer Graphics (Proceedings of
+SIGGRAPH 81), ACM, vol. 1, 307–316.
+
+GREEN, P., KAUTZ, J., MATUSIK, W., AND DURAND, F. 2006.
+View-dependent precomputed light transport using nonlinear
+gaussian function approximations. In I3D ’06: Proceedings of
+the 2006 Symposium on Interactive 3D Graphics and Games,
+ACM, 7–14.
+
+GREEN, P., KAUTZ, J., AND DURAND, F. 2007. Efﬁcient re-
+ﬂectance and visibility approximations for environment map ren-
+dering. Computer Graphics Forum (Proc. EUROGRAPHICS)
+26, 3, 495–502.
+
+HAN, C., SUN, B., RAMAMOORTHI, R., AND GRINSPUN, E.
+2007. Frequency domain normal map ﬁltering. ACM Trans-
+actions on Graphics 26, 3, 28:1–28:11.
+
+LAWRENCE, J., BEN-ARTZI, A., DECORO, C., MATUSIK, W.,
+PFISTER, H., RAMAMOORTHI, R., AND RUSINKIEWICZ, S.
+2006. Inverse shade trees for non-parametric material represen-
+tation and editing. ACM Transactions on Graphics 25, 3, 735–
+745.
+
+LIU, X., SLOAN, P. P., SHUM, H. Y., AND SNYDER, J. 2004.
+All-frequency precomputed radiance transfer for glossy objects.
+In Proceedings of the Eurographics Symposium on Rendering,
+Eurographics Association, 337–344.
+
+MAHAJAN, D., TSENG, Y.-T., AND RAMAMOORTHI, R. 2008.
+An analysis of the in-out BRDF factorization for view-dependent
+relighting. In Eurographics Symposium on Rendering, vol. 27.
+
+MATUSIK, W., PFISTER, H., BRAND, M., AND MCMILLAN, L.
+2003. A data-driven reﬂectance model. ACM Transactions on
+Graphics 22, 3, 759–769.
+
+MCALLISTER, D. K., LASTRA, A., AND HEIDRICH, W. 2002.
+Efﬁcient rendering of spatial bi-directional reﬂectance distribu-
+In HWWS ’02: Proceedings of the ACM SIG-
+tion functions.
+GRAPH/EUROGRAPHICS Conference on Graphics Hardware,
+Eurographics Association, Aire-la-Ville, Switzerland, 79–88.
+
+All-Frequency Rendering of Dynamic, Spatially-Varying Reflectance       •       133:9ACM Transactions on Graphics, Vol. 28, No. 5, Article 133, Publication date: December 2009.NG, R., RAMAMOORTHI, R., AND HANRAHAN, P. 2003. All-
+frequency shadows using non-linear wavelet lighting approxima-
+tion. ACM Transactions on Graphics 22, 3, 376–381.
+
+NG, R., RAMAMOORTHI, R., AND HANRAHAN, P. 2004. Triple
+product wavelet integrals for all-frequency relighting. ACM
+Transactions on Graphics 23, 3, 477–487.
+
+NGAN, A., DURAND, F., AND MATUSIK, W. 2005. Experimental
+analysis of BRDF models. In Rendering Techniques 2005: 16th
+Eurographics Workshop on Rendering, 117–126.
+
+NOCEDAL, J., AND WRIGHT, S. J. 1999. Numerical optimization.
+
+Springer Series in Operations Research, Springer-Verlag.
+
+REN, Z., WANG, R., SNYDER, J., ZHOU, K., LIU, X., SUN, B.,
+SLOAN, P.-P., BAO, H., PENG, Q., AND GUO, B. 2006. Real-
+time soft shadows in dynamic scenes using spherical harmonic
+exponentiation. ACM Transactions on Graphics 25, 3, 977–986.
+
+SHIRLEY, P., AND CHIU, K. 1997. A low distortion map between
+
+disk and square. J. Graph. Tools 2, 3, 45–52.
+
+SLOAN, P.-P., KAUTZ, J., AND SNYDER, J. 2002. Precom-
+puted radiance transfer for real-time rendering in dynamic, low-
+frequency lighting environments. In Proceedings of SIGGRAPH
+2002, ACM, 527–536.
+
+SLOAN, P.-P., LIU, X., SHUM, H.-Y., AND SNYDER, J. 2003.
+Bi-scale radiance transfer. ACM Transactions on Graphics 22, 3
+(July), 370–375.
+
+SLOAN, P.-P., LUNA, B., AND SNYDER, J. 2005. Local, de-
+formable precomputed radiance transfer. ACM Transactions on
+Graphics 24, 3, 1216–1224.
+
+SUN, X., ZHOU, K., CHEN, Y., LIN, S., SHI, J., AND GUO,
+Interactive relighting with dynamic BRDFs. ACM
+
+B. 2007.
+Transactions on Graphics 26, 3, 27:1–27:10.
+
+TORRANCE, K. E., AND SPARROW, E. M. 1967. Theory for off-
+specular reﬂection from roughened surfaces. In Journal of the
+Oprical Society of America, vol. 57.
+
+TSAI, Y.-T., AND SHIH, Z.-C. 2006. All-frequency precomputed
+radiance transfer using spherical radial basis functions and clus-
+tered tensor approximation. ACM Transactions on Graphics 25,
+3, 967–976.
+
+TSAI, Y.-T., CHANG, C.-C., JIANG, Q.-Z., AND WENG, S.-C.
+2008. Importance sampling of products from illumination and
+BRDF using spherical radial basis functions. Vis. Comput. 24, 7,
+817–826.
+
+WALTER, B., FERNANDEZ, S., ARBREE, A., BALA, K.,
+DONIKIAN, M., AND GREENBERG, D. P. 2005. Lightcuts: a
+scalable approach to illumination. ACM Transactions on Graph-
+ics 24, 3, 1098–1107.
+
+WALTER, B., ARBREE, A., BALA, K., AND GREENBERG, D. P.
+2006. Multidimensional lightcuts. ACM Transactions on Graph-
+ics 25, 3, 1081–1088.
+
+WANG, R., TRAN, J., AND LUEBKE, D. 2004. All-frequency
+relighting of non-diffuse objects using separable BRDF approx-
+In Rendering Techniques, Eurographics Association,
+imation.
+345–354.
+
+WANG, J., ZHAO, S., TONG, X., SNYDER, J., AND GUO, B.
+2008. Modeling anisotropic surface reﬂectance with example-
+based microfacet synthesis. ACM Transactions on Graphics 27,
+3, 41:1–41:9.
+
+WARD, G. J. 1992. Measuring and modeling anisotropic reﬂection.
+In Computer Graphics (Proceedings of ACM SIGGRAPH 92),
+ACM, vol. 26, 265–272.
+
+XU, K., JIA, Y.-T., FU, H., HU, S., AND TAI, C.-L. 2008. Spher-
+ical piecewise constant basis functions for all-frequency precom-
+puted radiance transfer. IEEE Transactions on Visualization and
+Computer Graphics 14, 2, 454–467.
+
+ZHOU, K., HU, Y., LIN, S., GUO, B., AND SHUM, H.-Y. 2005.
+Precomputed shadow ﬁelds for dynamic scenes. ACM Transac-
+tions on Graphics 24, 3, 1196–1201.
+
+ZHU, C., BYRD, R. H., LU, P., AND NOCEDAL, J. 1997. Al-
+gorithm 778: L-BFGS-B: Fortran subroutines for large-scale
+bound-constrained optimization. ACM Transactions on Math-
+ematical Software 23, 4, 550–560.
+
+Appendix
+
+Vector Product of Spherical Gaussians in Eq. (5)
+
+The vector product of a pair of SG lobes is given by
+
+G(v; p1,λ1,µ1) G(v; p2,λ2,µ2)
+
+= µ1 µ2 exp ((v ⋅ p1 − 1)λ1 + (v ⋅ p2 − 1)λ2)
+
+= µ1 µ2 exp (v ⋅ (λ1p1 +λ2p2) − (λ1 +λ2))
+
+= µ1 µ2 exp
+
+v ⋅
+
+− 1
+
+(λ1 +λ2)
+
+.
+
+λ1p1 +λ2p2
+
+λ1 +λ2
+
+)
+Letting pm = (λ1p1 +λ2p2)/(λ1 +λ2) and λm = λ1 +λ2, then
+
+((
+
+)
+
+G(v; p1,λ1,µ1) G(v; p2,λ2,µ2) = µ1 µ2 e(v⋅pm−1)λm .
+
+(44)
+
+Equation (44) is almost an SG except that the vector pm is not normalized:
+
+G(v; p1,λ1,µ1) G(v; p2,λ2,µ2)
+
+= µ1 µ2 exp
+
+λm∥pm∥ −λm
+
+((
+
+)
+
+)
+
+v ⋅
+
+v ⋅
+
+pm
+∥pm∥
+pm
+∥pm∥
+
+= µ1 µ2 exp
+
+pm
+∥pm∥
+
+= G
+
+v;
+
+(
+
+− 1
+
+λm∥pm∥
+
+exp
+
+λm∥pm∥ −λm
+
+((
+
+)
+, λm∥pm∥, µ1 µ2 e(∥pm∥−1)λm
+
+)
+
+(
+.
+
+)
+
+(45)
+
+)
+
+Analytic Approximation for fh in Eq. (30)
+
+We deﬁne the normalized function
+
+ˆfh(θd ,λ) =
+
+fh(θd ,λ)
+fh( π
+2 ,λ)
+
+,
+
+(46)
+
+(47)
+
+where fh( π
+function σ of the following form:
+
+2 ,λ) = 2π
+
+λ (1 −e−λ). We then approximate ˆfh(θd ,λ) ∈ (0, 1) as a sigmoid
+
+ˆfh(θd ,λ) ≈ σ(θd , kλ) =
+
+a
+
+1 + kλeθd
+
+1 − a
+
+.
+
++
+
+2
+
+Since the unscaled (a=1) sigmoid function never reaches 0 or 1, we scale it slightly by
+setting a = 1.05. Then we represent kλ as a low-order polynomial in λ:
+
+kλ ≈ fk(λ) = 0.204λ3 − 0.892λ2 + 2.995λ + 0.067.
+
+(48)
+
+These coefﬁcients were derived using a least-squares ﬁt to a densely sampled tabulation
+of ˆfh. The ﬁnal form of our approximation is
+
+fh(θd ,λ) ≈ χ
+
+θd , fk (λ)
+
+fh
+
+,λ
+
+.
+
+(49)
+
+The integrated squared ﬁtting error is
+
+π
+2
+
+(
+
+)
+
+)
+
+2
+
+))
+
+(
+
+(
+
+WANG, R., TRAN, J., AND LUEBKE, D. 2006. All-frequency
+relighting of glossy objects. ACM Transactions on Graphics 25,
+2, 293–318.
+
+105
+
++ π
+2
+− π
+∫
+
+1
+2 ∫
+
+(
+
+ˆfh(θd ,λ) − χ
+
+θd ; fk(λ)
+
+dλdθd = 5.5 × 10−4.
+
+133:10       •       J. Wang et al.ACM Transactions on Graphics, Vol. 28, No. 5, Article 133, Publication date: December 2009.

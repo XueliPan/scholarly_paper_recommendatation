@@ -1,0 +1,1639 @@
+Type Inference and Type Checking for Queries on
+
+Execution Traces ∗
+
+Daniel Deutch
+
+Tova Milo
+
+Tel Aviv University
+{danielde,milo}@post.tau.ac.il
+
+ABSTRACT
+This paper studies, for the ﬁrst time, the management of type infor-
+mation for an important class of semi-structured data: nested DAGs
+(Directed Acyclic Graphs) that describe execution traces of busi-
+ness processes (BPs for short). Speciﬁcally, we consider here type
+inference and type checking for queries over BP execution traces.
+The queries that we consider select portions of the traces that are
+of interest to the user; the types describe the possible shape of the
+execution traces in the input/output of the query.
+
+We formally deﬁne and characterize here three common classes
+of BP execution traces and their respective notions of type inference
+and type checking. We study the complexity of the two problems
+for query languages of varying expressive power and present efﬁ-
+cient type inference/checking algorithms whenever possible. Our
+analysis offers a nearly complete picture of which combinations
+of trace classes and query features lead to PTIME algorithms and
+which to NP-complete or undecidable problems.
+
+1.
+
+INTRODUCTION
+
+Schema and type information has proved to be extremely useful
+for the management of semi-structured data, in general, and XML,
+in particular. Knowledge (even partial) about the typical structure
+of data items allows e.g. for intuitive query formulation, optimized
+query processing, and minimization of run time errors [20, 4].
+
+This paper studies, for the ﬁrst time, the management of type
+information for an important class of semi-structured data: nested
+DAGs (Directed Acyclic Graphs) that describe execution traces of
+business processes (BPs for short). We consider here type infer-
+ence and type checking for queries over such BP execution traces.
+The queries select portions of the traces that are of interest to the
+user. The types that we consider describe the possible shape of the
+execution traces in the input/output of the query.
+
+In this context, we study two problems, as follows. In the type
+inference problem we are given some BP, and a query over its pos-
+sible execution traces, and want to infer a type describing the shape
+of the sub-traces selected by the query. In the type checking prob-
+
+∗The research has been partially supported by the European Project
+MANCOOSI and the Israel Science Foundation.
+
+Permission to make digital or hard copies of portions of this work for 
+personal or classroom use is granted without fee provided that copies 
+Permission to copy without fee all or part of this material is granted provided
+are  not  made  or  distributed  for  profit  or  commercial  advantage  and 
+that the copies are not made or distributed for direct commercial advantage,
+that  copies  bear  this  notice  and  the  full  citation  on  the  first  page. 
+the VLDB copyright notice and the title of the publication and its date appear,
+Copyright for components of this work owned by others than VLDB 
+and notice is given that copying is by permission of the Very Large Data
+Endowment must be honored. 
+Base Endowment. To copy otherwise, or to republish, to post on servers
+Abstracting with credit is permitted. To copy otherwise, to republish, 
+or to redistribute to lists, requires a fee and/or special permission from the
+to  post  on  servers  or  to  redistribute  to  lists  requires  prior  specific 
+publisher, ACM.
+permission  and/or  a  fee.  Request  permission  to  republish  from: 
+VLDB ‘08, August 24-30, 2008, Auckland, New Zealand
+Publications  Dept.,  ACM,  Inc.  Fax  +1  (212)  869-0481  or 
+Copyright 2008 VLDB Endowment, ACM 000-0-00000-000-0/00/00.
+permissions@acm.org. 
+ 
+PVLDB '08, August 23-28, 2008, Auckland, New Zealand 
+Copyright 2008 VLDB Endowment, ACM 978-1-60558-305-1/08/08 
+
+lem we are also given an output type and want to verify that the
+shapes of all selected sub-traces conform to it. We study here the
+two problems for type speciﬁcations and query languages of vary-
+ing expressivity.
+
+Before presenting our results, let us brieﬂy consider the practical
+origin of the problems and its inﬂuence on the particular families
+of graphs, types, and queries studied here.
+
+Business Processes. A BP consists of some business activ-
+ities undertaken by one or more organizations in pursuit of some
+particular goal. BPs operate in a cross-organization, distributed
+environment, and the software implementing them is fairly com-
+plex. Standards facilitate the design, development and deployment
+of such software. In particular, the recent BPEL standard (Business
+Process Execution Language[5]) allows to describe the full opera-
+tional logic and execution ﬂow of BPs. A BPEL speciﬁcation de-
+scribes a process as a nested DAG consisting of activities (nodes),
+and links (edges) between them, that detail the execution order of
+the activities. Activities may be either atomic, or compound. In the
+latter case their internal structure is also detailed as a DAG, leading
+to the nested structure. BPEL speciﬁcations are compiled into exe-
+cutable code that implements the described BP and runs on a BPEL
+application server [23].
+
+Execution Traces. An instance of a BPEL speciﬁcation is an
+actual running process that follows the logic described in the spec-
+iﬁcation. BP Management Systems allow to trace instance execu-
+tions. For each activity issued, its activation and completion events
+are reported. For a compound activity, the events corresponding
+to its internal ﬂow are reported between its activation and com-
+pletion events. An execution trace can be abstractly viewed as a
+(nested) DAG that contains nodes representing the activation and
+completion events of activities, and edges that describe their ﬂow.
+The nesting of DAGs in the trace follows naturally from the nest-
+ing of the speciﬁcation. Traces may vary in the amount of infor-
+mation that they record on the run.
+In general, one can distin-
+guish three families of execution traces, with increasing ﬂexibil-
+ity: (i) naive traces which provide a complete record of the activa-
+tion/completion events of all activities (ii) semi-naive traces where
+the activation/completion events are all recorded, but possibly with
+only partial information about their origin activity, and (iii) selec-
+tive traces where only a selected subset of the events is recorded.
+
+Queries and types. Execution traces are extremely valuable for
+companies. Their analysis allows to optimize business processes,
+reduce operational costs, and ultimately increase competitiveness.
+We next illustrate the notion of types, and intuitively explain its
+merits for the purposes of query optimization and error detection.
+
+352
+
+Type information, i.e., knowledge about the possible structure
+of the queried (sub-)traces, is valuable for query optimization [3].
+Its role is analogous to that of XML schema for XML query opti-
+mization: it allows to eliminate redundant computations and sim-
+plify query evaluation. For example, consider a simple query that
+searches for EX-traces containing two activities, A and B. A traces
+type might tell us that all traces contain an A, and then an optimized
+query evaluation, checking only for the existence of B, is possible.
+Similarly, if the type tells us that no trace contains an A, we can
+immediately infer that the query is inconsistent (in the sense that
+its output is surely empty) and halt.
+
+Since the traces repository is typically very large, the analysis
+is often done in two steps: The repository is ﬁrst queried to select
+portions of the traces that are of particular interest. Then, these
+serve as input for a ﬁner analysis that further queries and mines
+the sub-traces to derive critical business information [25]. Type in-
+formation is readily available, as the BPEL speciﬁcation, for the
+original traces, and can be used to optimize the ﬁrst-step queries.
+However, it is not available for the intermediary sub-traces selected
+by queries, and fed as input to the second-stage query. One of the
+main goals of this paper is to develop efﬁcient algorithms for de-
+riving this type information, thereby felicitating the optimization
+of both stages of the querying process. At another level, when the
+analysis tool expects data of particular type, we would like to ver-
+ify that the sub-traces selected by the queries are guaranteed to con-
+form to the required type. Such type checking is the second problem
+studied here.
+
+Both type inference and type checking are well studied prob-
+lems for XML and tree-shaped graphs. We found that the particular
+nested-DAG shape of BP execution traces, and their corresponding
+type speciﬁcations, pose new challenges that require the develop-
+ment of novel type inference/checking techniques. For instance,
+while for XML, type checking is in general easier than type infer-
+ence, we found that for nested DAGs type checking can be harder.
+(For a detailed comparison to XML type inference and checking
+see Section 6).
+
+Our results. As mentioned above, we model an execution trace
+of a BP instance as a nested DAG. A type here consists of a BP
+speciﬁcation (modeled abstractly as a rewriting system) accompa-
+nied by a description of the sort of tracing (naive, semi-naive, or se-
+lective) employed for the BP. The query language that we consider
+selects sub-traces of interest using execution patterns. Execution
+patterns are an adaptation of the tree- and graph-patterns offered by
+existing query languages for XML and graph-shaped data. We ﬁrst
+consider simple positive queries without joins. We show that the
+less detailed (and thus less restrictive) the execution traces are, the
+more efﬁcient type inference can be: it can be done in time poly-
+nomial in the size of the input type (with the exponent determined
+by the size of the query) for selective trace types, but may require
+time exponential in the size of input type (even for small queries)
+with semi-naive trace types, and may not be possible at all if all
+trace types are naive. Type checking, on the other hand, becomes
+more difﬁcult as the expressivity of the involved types is extended:
+It is decidable, although expensive, for (semi-)naive trace types but
+undecidable for selective trace types.
+
+Next, we consider more powerful queries that include patterns
+with joins (on node and path variables), projection and negation.
+While the above mentioned complexity results hold for most of
+these extensions, type inference is no longer possible for queries
+with joins on path variables. In contrast, type checking is shown to
+be still possible (for the same class of traces as before).
+
+Our analysis offers a nearly complete picture of combinations
+
+of trace types and query features and their corresponding problems
+complexity. We provide efﬁcient type inference and type checking
+algorithms whenever possible, and identify the cause of the dif-
+ﬁculty when not. Our results have two main important practical
+implications, the ﬁrst positive and the second negative.
+
+1. As far as type inference is concerned, our results signal the
+class of selective trace types as an “ideal” type system for
+BP traces, allowing both ﬂexible description of the BP traces
+as well as efﬁcient type inference. We thus believe it to be a
+ﬁrm basis for further study of type-based query optimization
+for BP management systems.
+
+2. On the other hand, we show that static type checking is not
+possible for selective trace types, and even for more limited
+trace types only EXPTIME algorithms are available. Con-
+sequently, we believe that run-time checks are likely to be a
+more useful in practice.
+
+Remark. We conclude with a remark regarding our choice of
+query language and data model. Already in 2002, the importance of
+query languages for BPs had been recognized by BPMI (the Busi-
+ness Process Management Initiative)[6]. Yet, unlike the case of
+XML and tree-shaped data, no draft standard has been published
+since. The data model and query language that we consider here
+were introduced in [2, 3]. They are argued to be more intuitive for
+BP developers than other query formalisms such as temporal log-
+ics and process algebras, as they are based on the same graph-based
+view of processes used by commercial vendors for the speciﬁcation
+of BPs [3]. While we state our results in terms of this particular
+model, they are naturally applicable to (fragments of) other query
+formalisms sharing similar expressive power. A detailed compari-
+son to related data models and query languages (including temporal
+logics [18], MSO, equational sets [9], etc.) can be found in [10].
+In the Related Work section (Section 6) we further compare known
+results on these models to our results, highlighting our relative con-
+tribution.
+
+The paper is organized as follows. Section 2 introduces the def-
+initions for a simpliﬁed version of our model and query language.
+In Sections 3 and 4 we formally deﬁne and analyze Type Inference
+and Type Checking for this simpliﬁed setting. In Section 5 we ex-
+tend the study to the full-ﬂedged model. Related work is considered
+in Section 6. We conclude in Section 7.
+
+2. PRELIMINARIES
+
+To simplify the presentation we ﬁrst consider a basic data model
+and query language, and then enrich them to obtain the full-ﬂedged
+model.
+
+2.1 Execution traces
+
+As mentioned earlier, the execution trace of a BP instance can
+be viewed as a nested DAG, containing node-pairs that represent
+the activation and completion of activities, and edges that represent
+causal relationships. We assume the existence of two domains, N
+of nodes and A of activity names, and two distinguished symbols
+act, com, denoting, resp., activity activation and completion. We
+ﬁrst deﬁne the auxiliary notion of activation-completion labeled
+DAGs, and then use it to deﬁne execution traces.
+
+DEFINITION 2.1. An activities DAG is a tuple (N, E, λ) in which
+
+N ⊂ N is a ﬁnite set of nodes, E is a set of directed edges with
+endpoints in N , λ : N → A is a labeling function, labeling each
+node by an activity name. The graph is required to be acyclic.
+
+353
+
+An activation-completion (act-comp) DAG g is obtained from an
+activities DAG by replacing each node n labelled by some label
+a by a pair of nodes, n(cid:48), n(cid:48)(cid:48), labelled (resp.) by (a, act) and
+(a, com). All of the incoming edges of n are directed to n(cid:48) and
+all of the outgoing edges of n now outgo n(cid:48)(cid:48). A single edge con-
+nects n(cid:48) to n(cid:48)(cid:48).
+
+We assume that g has a single start node without incoming
+edges, and a single end node without outgoing edges, denoted by
+start(g) and end(g), resp.
+
+EXAMPLE 2.2. To illustrate, let us consider the act-comp DAG
+(d2) in Figure 2.
+It contains four activities (Search, Hotel,
+Flight and Print), each represented by a pair of nodes.
+In
+each pair, the node with darker (lighter) background denotes the
+activity’s activation (completion).
+
+DEFINITION 2.3. The set EX of execution traces (abbr. EX-
+
+traces) is the smallest set of graphs satisfying the following.
+
+1. [single activity] If g is an act-comp DAG consisting of a sin-
+
+gle activity pair, then g ∈ EX .
+
+2. [nested trace] If g1 is in EX , (n1, n2) is an activity pair of g1
+s.t. n1 (resp. n2) has a single outgoing (incoming) edge, and
+g2 is some act-comp DAG, then the graph g consisting of g1,
+g2, and two new edges (n1, start(g2)) and (end(g2), n2),
+is in EX .
+
+The new edges added in Item 2 above are called zoom-in edges. All
+other edges are called ﬂow edges.
+
+In the sequel, a subgraph g2, connected as in Item 2 of Deﬁnition
+2.3, by zoom-in edges, to an activity pair (n1, n2), along with the
+zoom-in edges, is called a direct internal trace of the activity. The
+subgraph consisting of the direct internal trace of an activity, as
+well as the direct internal traces of its activities, and of their internal
+activities, etc., is called a (full) internal trace.
+
+EXAMPLE 2.4. Some example EX-traces are depicted in Fig-
+ure 1. Let us focus ﬁrst on EX-traces (a).
+It details a possible
+executions of a travel agency activity Trip for reserving trips.
+Zoom-in edges are marked as dashed arrows, and following them
+reveals the internal trace of the corresponding compound activi-
+ties. For each such compound activity, one zoom-in edge originates
+at its activation node and points at the start node of another
+(possibly nested) act-comp DAG g, and another outgoes the end
+node of g, pointing to the activity completion node. For example,
+zooming into Trip reveals that a Search was performed, after
+which the corresponding hotel and ﬂight were reserved (in paral-
+lel), by the Hotel and Flight activities, resp., and a conﬁrma-
+tion was printed. Zooming into both reservation activities reveals
+some credit limit check, namely Credit1. The EX-trace in Figure
+1(b) is another possible EX-trace of the travel agency. Here we see
+that the user was looking for a luxury trip, invoking the Luxury
+activity. The internal ﬂow here is similar to that of a regular trip
+reservation, except that luxury hotels and ﬂights are reserved (via
+the LuxHotel and LuxFlight activities) and another type of
+credit check, Credit2, (possibly for higher credit limit check), is
+performed.
+
+2.2 Types
+
+To deﬁne EX-trace types, we use an intuitive model of BP spec-
+iﬁcations as rewriting systems, an abstraction of the BPEL stan-
+dard [5]. A type consists of a BP speciﬁcation accompanied by a
+
+354
+
+Figure 1: Execution traces.
+
+description of the sort of tracing (naive, semi-naive, or selective)
+employed for the BP.
+
+Among the activity names in A we distinguish two disjoint sub-
+sets A = Aatomic∪Acompound, representing atomic and compound
+activities, resp. A BP speciﬁcation is a collection of activation-
+completion DAGs, along with a mapping of compound activity
+names to their implementations.
+
+DEFINITION 2.5. A BP speciﬁcation s is a triple (S, s0, τ ), where
+
+S is a ﬁnite set of act-comp DAGs , s0 ∈ S is a distinguished
+DAG consisting of a single activity pair, called the root, and τ :
+Acompound → 2S is a function, called the implementation func-
+tion, mapping compound activity names in S to sets of DAGs in
+S.
+
+A compound activity may be mapped, through the implementa-
+tion function, to a set of DAGs. They represent alternative possible
+implementations for the activity (one of which will be chosen at
+run time as the actual implementation).
+
+EXAMPLE 2.6. To continue with our travel agency example,
+its BP speciﬁcation s consists of the act-comp DAGs in Figure
+2. The compound activities here are Trip, Luxury, Hotel,
+Flight, LuxHotel and LuxFlight. d1 is the root of the BP,
+and the implementations of the compound activities are the fol-
+lowing :τ (Trip) = {d2, d3}, τ (Luxury) = {d4}, τ (Hotel) =
+τ (Flight) = {d5}, τ (LuxHotel) = τ (LuxFlight) = {d6} .
+
+The intuitive interpretation of this speciﬁcation is as follows.
+When a user starts searching for a trip, she may choose between
+a regular trip (leading to d2), or a luxury trip (leading to d3, that
+in turn leads to d4). Then, she searches and reserves (luxury) ﬂights
+and (luxury) hotels, as described above.
+
+We consider three kinds of traces. The ﬁrst, called naive EX-
+trace, provides a complete record of the activation/completion events
+of all BP activities and the internal ﬂow of all compound activities.
+Given a BP speciﬁcation s, the set of possible naive EX-traces of s
+consists of all EX-traces obtained from the root activity of s by at-
+taching, recursively, to each compound activity one of its possible
+implementations. We call this an expansion.
+
+DEFINITION 2.7. [Naive EX-traces] Given a BP speciﬁcation
+s = (S, s0, τ ), an act-comp DAG g, and an activity pair (n1, n2)
+of g labeled by some compound activity name a and having no
+internal trace, we say that g → g(cid:48) (w.r.t. τ ) if g(cid:48) is obtained from
+g by attaching to the pair some implementation ga ∈ τ (a) through
+two new zoom-in edges (n1, start(ga)) and (end(ga), n2).
+
+If p → p1 → p2 . . . → pk, we say that pk is an expansion of
+p. pk is called a full expansion if it cannot be expanded further.
+The set of possible naive EX-traces deﬁned by a BP speciﬁcation s,
+denoted N aive(s), consists of all the full expansions of its root s0.
+
+Intuitively, Naive EX-traces of a process contain the full infor-
+mation regarding the process execution. For example, the two EX-
+traces in Figure 1(a) and (b) are naive EX-traces of the travel agency
+BP depicted in Figure 2. They contain a full record of both com-
+pound and atomic activities that participated in the execution, as
+well as the ﬂow and zoom-in edges connecting them. In general,
+N aive(s) may be inﬁnite, in the case of recursive activity imple-
+mentations.
+
+While naive EX-traces detail the execution ﬂow fully, there are
+cases, however, where only partial information about the activities
+is recorded. For example, our travel agency may wish not to dis-
+close the fact that the billing system that is invoked in the case of
+a luxury reservation is different than the one invoked in case of a
+regular reservation.
+
+In terms of the examples above, rather than labeling the EX-
+trace activity nodes by the exact activity names Credit1 and
+Credit2, we would like to label them by a generic Credit la-
+bel. This is captured by the following deﬁnition of semi-naive EX-
+traces.
+
+DEFINITION 2.8. [Semi-naive EX-traces] Given a BP speci-
+ﬁcation s and a renaming function π from activity names in s to
+activity names in A, the set of semi-naive EX-traces deﬁned by s
+and π, denoted semiN aive(s, π), consists of all the EX-traces e
+obtained from the naive EX-traces e(cid:48) ∈ N aive(s) by replacing
+each label a in e(cid:48) by π(a).
+
+EXAMPLE 2.9. To continue with our running example, Figures
+1 (c) and (d) are semi-naive EX-traces of our travel agency BP, for a
+renaming function π s.t. π(Credit1) = π(Credit2) = Credit,
+and where π is the identity function for all other activities. These
+two semi-naive EX-traces are obtained resp.
+from the naive EX-
+traces in Figure 1 (a) and (b). We can see in the trace that some
+credit checks were issued, but not which ones.
+
+For readers familiar with XML schemas, semi-naive EX-traces
+can be viewed as the BP analog of XML trees deﬁned by DTDs
+with specialization [24]. In both cases the nodes’ labels give only
+partial information about the origin of the node (the corresponding
+BP activity, for EX-traces, or the DTD type, for XML trees).
+
+355
+
+Figure 2: Business Process (1)
+
+In some cases, an even more selective tracing is desired, where
+the occurrence of some activities is not recorded at all. For in-
+stance, if some activities are completely conﬁdential we may want
+to avoid including any memory of them in the trace. Similarly,
+some activities (e.g. standard input integrity checks) may simply
+be non- interesting for the business analysts and may be omitted to
+avoid overloading the logs with redundant information. To model
+these type of traces, we introduce the notion selective EX-traces.
+
+DEFINITION 2.10. [Selective EX-traces] Given a BP speciﬁ-
+cation s, a set A of activity names in s, satisfying condition (*)
+below, and a renaming function π from activity names in s to activ-
+ity names in A, the set of selective EX-traces deﬁned by s, A and
+π, denoted Selective(s, A, π), consists of all EX-traces e obtained
+from the naive EX-traces of s by deleting all activity pairs with la-
+bels in A 1 and then replacing each label a of the remaining nodes
+by π(a).
+Condition (*): A does not include the root activity of s, and for
+each activation-completion graph g in s, the graph g(cid:48) obtained
+from g by removing the atomic activity pairs with names in A is
+itself an activation-completion graph (as in Deﬁnition 2.1), or is
+empty.
+
+EXAMPLE 2.11. For instance, if our travel agency also wishes
+to keep as a secret the fact that reservations of different types are
+treated differently, then not only the credit checks need to be re-
+labeled, but also the LuxHotel and the LuxFlight, and the
+record of the Luxury activity should be omitted altogether. Here
+A = {Luxury}, and π(Credit1) = π(Credit2) = Credit ,
+π(LuxHotel) = Hotel, and π(LuxFlight) = Flight.
+
+Figure 1(e) shows the selective EX-trace obtained from the naive
+EX-traces in Figure 1(b). Note that the same graph (up to node
+isomorphism) is also the selective EX-trace obtained from the naive
+EX-traces in Figure 1(a). Thus, given such a selective trace, there
+is not way to tell from which naive EX-trace (of regular or luxury
+trip reservation) it originated.
+
+The intuition behind condition (*) in Deﬁnition 2.10 is that from
+a practical point of view, it is reasonable to assume that the graph
+obtained after each loss of information still bears the shape of a
+trace, otherwise the loss is easily observable. For instance, remov-
+ing also the Search activity-pair will result in a graph where two
+zoom-in edges going out of Trip, pointing at two different nodes.
+This contradicts the deﬁnition of an EX-trace. Condition (*) as-
+sures that this does not happen (proof omitted). The technical im-
+plication of this constraint will be discussed in the sequel.
+
+1When an atomic activity pair (n1, n2) is deleted, the edges incom-
+ing n1 are now connected to the nodes previously pointed by n2.
+For compound activities the incoming(outgoing) edges of n1 (n2)
+are now being connected to the start/end nodes of the implementa-
+tion sub-graph.
+
+in Selective(s, A, π) are precisely those of L. (Here again, s’s
+speciﬁcation resembles L’s grammar). In contrast, for every BP s,
+its (semi-)naive EX-traces that contain only the root activity and
+atomic activities have a shape which is speciﬁed by the direct im-
+plementation of the root activity, hence are of bounded length and
+cannot capture all context free (or inﬁnite) languages.
+
+selective ⊂ 2EX . One might consider each set of EX-traces in
+Selective as a language of graphs. Through this perspective,
+we can compare our model to common models of graph languages
+that appear in the literature. A common model, named Recursive
+State Machines (RSM) [1], naturally extends Finite State Machines
+(FSM) (bearing entry and exit states), by allowing some states to
+be call states, invoking other FSMs. A call is simulated by re-
+placing the call state by its implementation. A graph obtained by
+a sequence of these replacements is called an unfolding of the orig-
+inal RSM. The simplest form of RSM is Single Entry Single Exit
+RSM (SERSM), where each FSM has unique start and exit nodes.
+We can show that Selective captures the same sets of EX-traces
+as SERSMs.
+
+PROPOSITION 2.13. A set E of EX-traces is the set of full un-
+
+foldings of an SERSM iff it belongs to Selective.
+
+Proof:(Sketch) The inclusion in SERSM follows from condition
+(*). For the other direction we show that SERSMs which generate
+EX-traces have an equivalent normal form (like the Greibach Nor-
+mal Form in context-free string grammars[26]) where all FSMs are
+activation-completion DAGs.
+
+(cid:163)
+It is known that SERSMs do not capture all graph languages [1].
+The strict inclusion of Selective in 2EX follows. This concludes
+the proof of Proposition 2.12
+
+(cid:163)
+We sum up this subsection with a comment on the analogy be-
+tween the EX-trace types, of the various sorts, and string gram-
+mars. While the selective trace types form the analog to a Con-
+text Free Language, semi-naive trace types are the analog to the
+restricted form of parenthesis languages[16] (as we keep track of
+the activation and completions events, analogous to parenthesis),
+and naive trace types are the analog of the further restricted brack-
+eted languages[14] (that also keep track of the parenthesis ‘origin’).
+This analogy holds in respect to some characteristics of the trace
+types, as we shall see below.
+
+2.3 Queries
+
+We now consider queries. As mentioned in the Introduction,
+the query language that we use was originally introduced in [2, 3].
+Queries are deﬁned using execution patterns (abbr. EX-patterns).
+EX-patterns generalize EX-traces similarly to the way tree patterns
+generalize XML trees. EX-patterns are EX-traces where activity
+names are either speciﬁed, or left open using a special ANY sym-
+bol. Edges in a pattern are either regular, interpreted over edges, or
+transitive, interpreted over paths. Similarly, activity pairs may be
+regular or transitive, for searching only in their direct internal trace
+or zooming-in transitively inside it. As we will see, this zoom-in
+navigation axis, particular to nested DAGs, introduces special chal-
+lenges w.r.t. type inference and checking.
+
+DEFINITION 2.14. An execution pattern, abbr. EX-pattern, is a
+pair p = (ˆe, T ) where ˆe is an EX-trace whose nodes are labelled
+by labels from A ∪ {ANY}, and T is a distinguished set of activity
+pairs and edges in ˆe, called transitive activities and edges, resp.
+
+Figure 3: Execution Trace
+
+Each BP speciﬁcation s, (renaming function π, and activities set
+A) deﬁnes a (possibly inﬁnite) set of EX-traces E = N aive(s)
+(resp. E = semiN aive(s, π), and E = Selective(s, A, π)). Let
+Naive (resp. semiNaive and Selective) denote the class
+of sets of EX-traces that obtained under naive (resp. semi-naive,
+selective) tracing of some BP speciﬁcation (a renaming function π,
+and an activities set A). More formally, Naive= {E | ∃s s.t. E =
+N aive(s)}, semiNaive= {E | ∃s, π, s.t. E = semiN aive(s, π)},
+Selective= {E | ∃s, π, A, s.t. E = Selective(s, A, π)}. We
+can show that there is a strict inclusion relationship between the
+classes, and that they do not capture all the possible sets of EX-
+traces.
+
+PROPOSITION 2.12. Naive ⊂ semiNaive ⊂ Selective ⊂ 2EX .
+
+Proof:The inclusion follows naturally from the deﬁnitions. We
+prove next its strictness, using examples which highlight some of
+the key properties of the various trace classes. These properties will
+be useful in the sequel.
+
+Naive ⊂ semiNaive. Consider the BP speciﬁcation s depicted
+in Figure 5 (ignore, for now, the text next to the nodes). The de-
+picted BP includes Trip as its root activity, whose implementa-
+tion is a sequence of two compound activities labeled Hotel1 and
+Hotel2. The implementation of Hotel1 (resp. Hotel2) con-
+tains the single atomic activity, Credit1 (Credit2). Now, con-
+sider a renaming function π that maps both Hotel1 and Hotel2
+to a single activity name, Hotel, and is the identity function for the
+remaining activity names. Here, the set of semi-naive traces E =
+semiN aive(s, π) of s contains the single EX-trace e, depicted
+in Figure 3. The EX-trace e contains two Hotel-labeled activi-
+ties, with the implementation of the ﬁrst (second) being Credit1
+(Credit2).
+
+It is easy to see, however, that no BP speciﬁcation s(cid:48) can have e
+as its single naive EX-trace! This is because for e to be in N aive(s(cid:48)),
+Hotel must have at least two alternative implementations in s(cid:48),
+one containing Credit1 and the other containing Credit2. But
+if this is the case, N aive(s(cid:48)) also contains three additional EX-
+traces: one where both Hotel occurrences have Credit1 as in-
+ternal traces, one where they both have Credit2, and one where
+the ﬁrst has Credit2 and the second Credit1.
+
+semiNaive ⊂ selective. Consider the class of BPs where the
+implementation graphs of all compound activities are chains. For
+each such BP, consider the selective traces obtained by deleting all
+compound activities and keeping the names of the atomic and root
+activities unchanged. The resulting EX-traces consist of a root ac-
+tivity whose direct internal trace is a sequence of atomic activities.
+Viewing the sequence of activity names on the chain as a word, and
+the set of words represented by the selective traces of a given BP as
+a language, it is easy to see that for each BP s, Selective(s, A, π)
+deﬁnes a context free language. (Its context free grammar follows
+naturally from the BP speciﬁcation). Conversely, for every context
+free language L we can deﬁne a BP s (and A, π) s.t.
+the words
+
+356
+
+Figure 4: A query and its results
+
+To evaluate a query, the EX-pattern is matched against a given
+
+EX-trace. A match is represented by an embedding.
+
+DEFINITION 2.15. Let p = (ˆe, T ) be an EX-pattern and let e
+be an EX-trace. An embedding of p into e is a homomorphism ψ
+from the nodes and edges in p to nodes, edges and paths in e s.t.
+
+1. [nodes] activity pairs in p are mapped to activity pairs in e.
+Node labels are preserved; however, a node labeled by ANY
+can be mapped to nodes with any activity name.
+
+2. [edges] each (transitive) edge from node m to node n in p
+is mapped to an edge (path) from ψ(m) to ψ(n) in e. If the
+edge [m, n] belongs to a direct internal trace of a transitive
+activity, the edge (edges on the path) from ψ(m) to ψ(n) can
+be of any type (ﬂow, or zoom-in) and otherwise must have the
+same type as [n, m].
+
+The result deﬁned by ψ is the image of p under ψ. For each activity
+pair in the image, the edge connecting its activation and completion
+nodes is also included.
+
+For an EX-pattern p and an EX-trace e, the result of p when
+applied to e, denoted p(e), consists of the results of all possible
+embeddings of p into e. Finally, given a set E of EX-traces, we will
+also use p(E) to denote the set of all possible outputs of p when
+applied on EX-traces in E, namely p(E) =
+
+(cid:83)
+
+e∈E p(e).
+
+It is easy to prove that p(e) (resp. p(E)) is a set of EX-traces.
+.
+An example EX-pattern is depicted in Fig. 4 (a). It zooms-in
+transitively into Trip, searching for a Credit activity. Double-
+bounded nodes (resp. double-lined edges) denote transitive nodes
+(edges). Observe that apart from the transitive nodes and edges,
+EX-patterns and EX-traces look similar, making the formulation of
+queries rather intuitive. Let us now evaluate the query over the EX-
+trace in Figure 1(e). Two embedding are possible here, yielding the
+results in Figure 4 (b) and (c). In the ﬁrst embedding, the pattern
+transitive edge outgoing (incoming) the Trip activity is matched
+to the EX-pattern path passing through the Flight activity. In the
+second embedding it is matched to the path traversing the Hotel
+activity. It is important to note that the same query, with a non-
+transitive Trip activity, would yield here an empty result, as it
+would search for Credit activities in the direct internal trace of
+Trip (while in the given EX-trace it appears only deeper in the
+zoom-in hierarchy). Finally, observe that since an embedding is a
+homomorphisms, multiple query nodes may be mapped to the same
+EX-trace nodes and edges (or paths).
+
+3. TYPE INFERENCE
+
+The type inference problem that we study is deﬁned next. Three
+variants of the problem correspond to the three families of trace
+types, as follows.
+
+Figure 5: Business Process (2)
+
+We are given an EX-pattern p and a set of naive (resp. semi-
+naive, selective) EX-traces deﬁned by some BP s (a renaming func-
+tion π and activities set A), and would like to ﬁnd a BP spec-
+iﬁcation s(cid:48) (and π(cid:48), A(cid:48)) s.t. N aive(s(cid:48)) = p(N aive(s)) (resp.
+semiN aive(s(cid:48), π(cid:48)) = p(semiN aive(s, π)), Selective(s(cid:48), A(cid:48), π(cid:48)) =
+p(Selective(s, A, π))) 2.
+
+We ﬁrst show that type inference may not be possible if only
+
+naive trace types are considered. Namely,
+
+THEOREM 3.1. There exist a BP speciﬁcation s and an EX-
+pattern p s.t. there is no BP speciﬁcation s(cid:48) where N aive(s(cid:48)) =
+p(N aive(s)).
+
+Proof:The proof follows lines similar to that of (the ﬁrst part in the
+proof of) Proposition 2.12. Consider the BP speciﬁcation s whose
+act-comp DAGs are depicted in Figure 6 (ignoring for now the text
+near the nodes).
+(d1) is the root of the BP. The implementation
+(d2) of the root activity Trip contains two consecutive compound
+Hotel activities, and where Hotel has two possible implementa-
+tions (d3) and (d4), one containing the activity Credit1 and the
+second containing the activity Credit2. N aive(s) here contains
+four EX-traces, e1 where both Hotels have Credit1 as inter-
+nal trace, e2 where they both have Credit2, and e3 (e4) where
+the ﬁrst (second) Hotel has Credit1 and the second (ﬁrst) has
+Credit2. Now consider the query p in Figure 7 (again ignoring
+the text near the nodes), which requires an occurrence of Credit1
+and Credit2. Here p(N aive(s)) contains only e3, and as ex-
+plained in the proof of Proposition 2.12, no BP speciﬁcation s(cid:48) can
+have e3 as its single naive EX-trace.
+
+(cid:163)
+In contrast, the greater expressive power of semi-naive trace types
+allows to capture more EX-trace sets and enables type inference.
+We show next that type inference is possible with semi-naive trace
+types, but may be costly.
+
+THEOREM 3.2. For every EX-pattern p, BP s and renaming
+function π, there exist s(cid:48) and π(cid:48) such that semiN aive(s(cid:48), π(cid:48)) =
+p(semiN aive(s, π)). s(cid:48) and π(cid:48) can be computed in time exponen-
+tial in the size of s and p.
+
+Note that since every naive trace type is also semi-naive type
+(with π being the identity function), the theorem also implies that
+type inference is possible for input representing naive traces, with
+the output type captured by semi-naive representation.
+
+Proof:(Sketch) The BP s(cid:48) = (S(cid:48), s(cid:48)
+
+0, τ (cid:48)) constructed by the type
+inference algorithm is intuitively the “intersection” of the original
+BP s = (S, s0, τ ) with the pattern p. We next explain how this s(cid:48)
+is constructed, then illustrate with an example.
+
+Let us ﬁrst consider patterns that do not contain transitive nodes
+an edges. For every two activity pairs ns ∈ s and np ∈ p where np
+2For EX-trace equality we use graph isomorphism up to node iden-
+tiﬁers. Equality of sets of EX-traces is deﬁned w.r.t this equality
+relation
+
+357
+
+Before we consider the complexity of the algorithm, let us see
+
+an example that will demonstrate its operation.
+
+EXAMPLE 3.3. Consider again the EX-pattern p and BP s from
+the Proof of Theorem 3.1 (the pattern given in Fig. 7, and the BP
+of Figure 6) with π being the identity mapping. The annotations
+next to the query and BP activity pairs represent their ids. The BP
+s(cid:48) constructed by the algorithm is depicted in Figure 5. Its activity
+names are of the form [qi, sj, a], where qi (sj) is the identiﬁer of
+a query (pattern) activity node (ignore now the labels appearing
+within the nodes). The implementation of [q2, s2, Hotel] is d3 and
+the implementation of [q3, s3, Hotel]) is d4. The renaming func-
+tion π(cid:48) maps [qi, sj, a] to a. Note that this s(cid:48) has a single semi-
+naive EX-trace, of the shape depicted in Figure 3, which is indeed
+the only answer of the query p when applied on the (semi-)naive
+traces of s.
+
+We next explain how this s(cid:48) is constructed by the algorithm. The
+construction of s(cid:48) begins by matching the query root q1 to the spec-
+iﬁcation root s1, and forming a new activity name [q1, s1, T rip].
+Then, the implementation of q1 is matched against the implementa-
+tion of s1, thus embedding q2 (resp. q3) in s2 (resp. q3), forming a
+new activity name [q2, s2, Hotel] ([q3, s3, Hotel]). This is a main
+point of the algorithm: a unique activity name Hotel that labeled
+two pattern nodes (s2 and s3), yielded two distinct activity names
+in s(cid:48). Consequently, each of these two activities names can now
+have distinct implementations that comply to the (different) condi-
+tions that the query imposes on their structure. Indeed, we proceed
+by embedding the implementation of q2 in the possible implemen-
+tations of Hotel. There exists two such possible implementations,
+one of which contains Credit1 and the other contains Credit2.
+In the latter, there is no embedding of the implementation of q2;
+In the former, there exists an embedding, yielding a node labeled
+[q4, s4, Credit1]. Similarly, we construct the only implementation
+of [q3, s3, Hotel], containing [q5, s5, Credit2].
+
+The time complexity of the algorithm depends on the number
+of possible sub-patterns that should be considered (exponential in
+the size of the EX-pattern p) and the number of possible embed-
+dings of these sub-patterns into the activation-completion DAGs in
+s. Note that while, for each sub-pattern, the number of possible
+embeddings for nodes is polynomial in the size of the DAGs (with
+the exponent determined by the size of the sub-pattern), the number
+of possible embeddings of transitive edges may be exponential in
+the size of the DAGs in s: transitive edges are mapped to paths and
+the number of paths in a DAG may be large. The following Propo-
+sition shows that the exponential blowup is unavoidable, even for
+very small queries and naive input traces.
+
+PROPOSITION 3.4. There exists an inﬁnite set S of BPs of in-
+creasing sizes, and an EX-pattern p (with only six nodes), s.t. for
+each BP s ∈ S, every s(cid:48) s.t. semiN aive(s(cid:48), π(cid:48)) = p(N aive(s))
+for some π(cid:48) is of size Ω(2|s|).
+
+Proof:The BPs in the class S have a root activity whose imple-
+mentation has the following form. The start and end activities of
+the implementation are labeled a. The ﬂow starts with the ﬁrst a,
+then splits into two activities b and c, then merges again into an-
+other a activity, splits again into b and c, and so forth. The k-th BP
+in S contains k repetitions of this form. The EX-pattern p consists
+of a root activity pair whose internal trace contains a start and end
+activity pairs both labeled a, and a single transitive edge between
+them. Each EX-trace in p(N aive(s)) has a root activity with inter-
+nal trace that is one of the individual paths from the start to the end
+activity. There is an exponential number of such paths. Thus, each
+
+Figure 6: Business Process (3)
+
+Figure 7: EX-pattern
+
+is labeled either by the same (compound) activity name as ns, or by
+ANY, we use a new activity name [np, ns, a], where a = π(λ(ns)),
+to represent the “intersection” of pairs. The renaming function π(cid:48)
+maps [np, ns, a] to a. Note that a node np (resp. ns) of the pattern
+p (BP s) may appear in several such new activities [np, ni
+s, a] (resp.
+[ni
+
+p, ns, a]).
+For compound (non-transitive) activities, the implementation τ (cid:48)
+of [np, ns, a] consists of all DAGs that represent possible embed-
+dings of the direct internal trace of np in p into the possible direct
+implementations of ns in s. The nodes in the resulting graph (for
+each of the possible embeddings) are labeled by triplets, as above,
+recording for every activity pair in p to which activity pair in s it
+was mapped in the given embedding. If no embedding was found,
+[np, ns, a] is marked as failure. The embeddings may be found us-
+ing conventional algorithms for subgraph homomorphism, whose
+complexity is discussed below.
+
+For efﬁciency, rather than constructing all the triplet activities
+names and their implementations, the algorithm operates in a top
+down manner. It starts by matching the pattern outer most activity
+with the BP root, building the corresponding [np, ns, a] activity.
+Then it compute its implementations, and the implementations of
+the activities appearing in them, and so on.
+
+As a ﬁnal step, we perform ”garbage collection”. We recursively
+mark as failure, activities for which all possible implementations
+contain failure activities, and then remove from s(cid:48) all DAGs that
+contain failure such activities.
+
+When the query pattern contains transitive edges, we also deﬁne
+new activity name for every transitive edge ep ∈ p and activity
+ns ∈ s. When the pattern sub-graphs are embedded into the BP, the
+transitive edges ep ∈ p (that connect two pattern nodes) are mapped
+to all possible paths in in the BP (connecting the two corresponding
+BP nodes). In the output graph, a BP node ns (with label a) that
+appear on such path is labeled by the triplet [ep, ns, a].
+
+Finally, when the pattern p contains transitive activities, the al-
+gorithm becomes somewhat more complex. Recall that transitive
+activities allow to navigate (transitively) inside the compound ac-
+tivities of the EX-trace, and query their internal ﬂow at any depth
+of nesting. Speciﬁcally, part of the direct internal trace of np can
+be matched with the direct implementation of ns, while other parts
+may be matched at deeper levels of the implementation. To account
+for that, the algorithm considers all possible splits of the (internal
+traces of activities in the) pattern into sub-patterns, and the embed-
+dings of those into the DAGs in s.
+
+(cid:163)
+
+358
+
+speciﬁcation generating all of these semi-naive traces must contain
+each path as an explicit implementation of the root, and hence its
+size must be Ω(2|s|).
+
+(cid:163)
+We have seen above that selective trace types are more ﬂexi-
+ble and expressive than (semi-)naive trace types. It turns out that
+adding such expressivity to the output type also allows for a more
+compact representation of the possible query results, hence a more
+efﬁcient type inference algorithm.
+
+THEOREM 3.5. For every EX-pattern p, BP s, and a renam-
+ing function π, there exist s(cid:48),A(cid:48), π(cid:48) s.t. Selective(s(cid:48), A(cid:48), π(cid:48)) =
+p(semiN aive(s, π)). s(cid:48), A(cid:48), π(cid:48) can be computed in time polyno-
+mial in the size of s (with the exponent determined by p).
+
+Moreover, the added expressibility allows an efﬁcient algorithm
+even when the input type has stronger expressibility, i.e. represents
+selective traces as well.
+
+THEOREM 3.6. For every EX-pattern p, BP s, set of activities
+A and renaming function π, there exist s(cid:48),A(cid:48) and π(cid:48) such that
+Selective(s(cid:48), A(cid:48), π(cid:48)) = p(Selective(s, A, π)). s(cid:48),A(cid:48) and π(cid:48) can
+be computed in time polynomial in the size of s (with the exponent
+determined by p).
+
+Note that since every semi-naive trace type is also a selective one
+(with A = ∅), the proof of Theorem 3.6 also proves Theorem 3.5.
+Proof:(Sketch) The improved type inference algorithm is based
+on the following observation. Consider the treatment of transitive
+edges in the previous type inference algorithm, that was described
+in the proof of Theorem 3.2. In that algorithm, each embedding of
+the sub-patterns of p into the BP s is treated individually and con-
+tributes one graph to s(cid:48). For a transitive edge, this means that each
+of the paths between the nodes matched to its endpoints is treated
+separately, hence the exponential blowup. To avoid this, we use the
+added expressive power of selective traces. We view the sequence
+of activity names in each path as a word, and the set of words ob-
+tained from all paths between two nodes as a language L. It is easy
+to deﬁne, for each pair of nodes, a regular grammar describing L.
+We then use a similar construction to the one presented in the proof
+of Proposition 2.12 (when showing that semiNaive ⊂ selective)
+to deﬁne a BP s(cid:48)(cid:48), along with A(cid:48)(cid:48) and π(cid:48)(cid:48), s.t. the words generated
+in Selective(s(cid:48)(cid:48), A(cid:48)(cid:48), π(cid:48)(cid:48)) are precisely those of L. s(cid:48)(cid:48) is then in-
+corporated as part of s(cid:48).
+
+Aside from the above, the type inference algorithm follows lines
+similar to that of semi-naive traces. The resulting algorithm is poly-
+nomial in the size of s, with the exponent determined by p.
+
+(cid:163)
+A ﬁrst obvious reason for not being able to provide an algorithm
+of PTIME combined (data and query) complexity is the need to em-
+bed the pattern sub-graphs in the DAGs of s. This entails checking
+for subgraph homomorphism, known to be an NP-complete prob-
+lem. Interestingly, we can expose an additional type of hardness
+that comes from the nested shape of the BPs and the use of tran-
+sitive activities in the EX-patterns to navigate (transitively) inside
+compound activities and query their internal ﬂow. To explain this,
+we deﬁne a decision problem, M AT CH?(p, s, A, π), as the prob-
+lem of deciding, given a pattern p, a BP s, a set of activity names
+A, and an activities renaming function π, whether some embedding
+of p in a trace of s exists, i.e. whether p(Selective(s, A, π)) = ∅.
+We can show the following.
+
+PROPOSITION 3.7. Given an EX-pattern p, a BP s, a set of ac-
+tivities A and a renaming function π, M AT CH?(p, s, A, π) is
+NP-hard in the size of p even if the following condition holds.
+
+• In the direct internal traces of all the activities in p, and in
+all the act-comp DAGs of s, all nodes besides the end node
+have a single parent.
+
+The problem is NP-hard even if only naive trace types are consid-
+ered (i.e. A is empty and π is the identity function).
+
+Note that for DAGs with the restricted shape enforced by the
+condition, sub-graph homomorphism can be solved in PTIME (e.g.
+using algorithms from [15]). Indeed, the hardness here comes from
+the need to consider, when treating transitive pattern activities, all
+the possible splits of the EX-pattern (see the algorithm in the proof
+of Theorem 3.2). The proof, omitted here, is by reduction from
+the problem of testing if a 3NF formula is satisﬁable, known to be
+NP-complete as well.
+
+To complete the picture we can show that
+
+PROPOSITION 3.8. Given an EX-pattern p, a BP s, a set of ac-
+tivities A and a renaming function π, M AT CH?(p, s, A, π) is in
+NP (combined complexity).
+
+Proof:(Sketch) The NP algorithm is based on the observation
+that if p(Selective(s, A, π)) is not empty then there exists at least
+one EX-trace e of s, obtained from the root activity by a polynomial
+number of expansion steps, s.t. p(e(cid:48)) is not empty, where e(cid:48) is the
+selective EX-trace obtained from e by removing the activities in A
+and applying the renaming function π. Though, for space reasons,
+we do not give here a proof of this, the correctness stems from a
+“pumping” lemma, analogous to the one existing for context free
+string grammars [26].
+
+Once this holds, the NP algorithm is simple - for each transitive
+compound activity in the pattern, guess an expansion sequence for
+the corresponding activity in the system. Then guess a mapping
+from the query pattern to (the obtained expansions of) the activities
+and verify that it satisﬁes the embedding requirements.
+(cid:163)
+
+This also implies that testing for the emptiness of p(semiN aive(s, π))
+
+and p(N aive(s)) is in NP.
+
+4. TYPE CHECKING
+
+The problem of Type Checking is to verify that the query result
+conforms to a given type. Formally, given a target BP speciﬁca-
+tion s(cid:48), (a renaming function π(cid:48) and a activities set A(cid:48)), we want to
+check if p(N aive(s)) ⊆ N aive(s(cid:48)) (or, resp., p(semiN aive(s, π))
+⊆ semiN aive(s(cid:48), π(cid:48)), p(Selective(s, A, π)) ⊆ Selective(s(cid:48), A, π(cid:48))).
+
+Observe that for a class X of trace types where inclusion is de-
+cidable (i.e. one can decide for each two BPs s1, s2 if X(s1) ⊆
+X(s2)), the ability to perform type inference implies that type check-
+ing is also possible. We will see however that this is just a sufﬁcient
+condition and in some cases type checking is possible when type
+inference is not.
+
+First, we show undecidability for selective trace types.
+
+THEOREM 4.1. Given an EX-pattern p and source and target
+BP speciﬁcations, renaming functions and activity sets s, π, A and
+s(cid:48), π(cid:48), A(cid:48), the problem of testing whether p(Selective(s, π, A)) ⊆
+Selective(s(cid:48),π(cid:48),A(cid:48)) is undecidable.
+
+Proof:The proof is by reduction from the problem of testing
+containment of context free (string) languages, known to be un-
+decidable. Given two context free languages L, L(cid:48), we construct,
+as in the proof of Proposition 2.12, s, A, π and s(cid:48), A(cid:48), π(cid:48) such that
+Selective(s, π, A) and Selective(s(cid:48), π(cid:48), A(cid:48)) capture, resp., L and
+L(cid:48). The EX-pattern p consists of a root activity whose implemen-
+tation contains two activity pairs connected by a transitive edge.
+
+359
+
+When applied to the EX-traces in Selective(s, A, π) it retrieves all
+the paths (words) from the start to the end node of the root’s internal
+trace, (hence all the words in L). Hence p(Selective(s, A, π)) =
+Selective(s, A, π) and p(Selective(s, A, π))⊆ Selective(s(cid:48), π(cid:48), A(cid:48))
+iff L ⊆ L(cid:48).
+
+(cid:163)
+In contrast, type checking is decidable for naive and semi-naive
+trace types. To prove this, we start by deﬁning an auxiliary class of
+semi-naive trace types called deterministic. Then we suggest a type
+checking algorithm for such trace types, and ﬁnally we show that
+we can translate every BP s and renaming function π to equivalent
+s(cid:48) and π(cid:48) w.r.t. which the set of semi-naive EX-traces is determin-
+istic. Note that our proof technique is inspired by [19] that consid-
+ers inclusion of parenthesis string languages. However, the case is
+more complex here as our proof must additionally account for the
+graph structure which is more complex than a string structure, as
+well as for the activities renaming function.
+
+To deﬁne deterministic trace types we use the notion of nodes
+origin. Let s be some BP speciﬁcation and π a renaming function
+for the activities in s. Consider an EX-trace e ∈ N aive(s) and
+its image, after activities renaming, Π(e) ∈ semiN aive(s, π).
+Clearly, there is at least one isomorphism from e to Π(e) mapping
+activity pairs labelled a to activity pairs labelled π(a). A node no
+in e that is mapped through such isomorphism to a node n in Π(e)
+is called n’s origin. Note that in general, a node may have more
+than one possible origin, as (a) Π is not one-to-one and (b) even for
+a speciﬁc pair of traces e and Π(e), there may be several different
+isomorphisms between them.
+
+DEFINITION 4.2. For a BP speciﬁcation s and activities re-
+naming function π, the set of semi-naive traces semiN aive(s, π)
+is called deterministic (w.r.t. s, π) if for every node n in it, its pos-
+sible origins in N aive(s) all have the same activity name.
+
+We can now show the following.
+
+THEOREM 4.3. Given an EX-pattern p, a BP speciﬁcation s
+(with renaming function π), and a target BP speciﬁcation s(cid:48) (with
+renaming function π(cid:48) s.t. semiN aive(s(cid:48), π(cid:48)) is deterministic),
+the problem of testing if p(N aive(s)) ⊆ N aive(s(cid:48)) (respectively,
+p(semiN aive(s, π)) ⊆ semiN aive(s(cid:48), π(cid:48))) is decidable, and can
+be solved in EXPTIME.
+
+Proof:Note that naive trace types can be viewed as semi-naive
+trace types where π is the identity function and that such semi-
+naive traces are naturally deterministic. So it sufﬁces to prove the
+theorem for semi-naive trace types.
+
+The intuition behind the proof is as follows. We saw above that
+
+for every s, π and p we can derive s(cid:48)(cid:48) and π(cid:48)(cid:48) s.t. semiN aive(s(cid:48)(cid:48), π(cid:48)(cid:48)) =
+p(semiN aive(s, π)). To prove the theorem we will construct, for
+every s(cid:48)(cid:48), π(cid:48)(cid:48) and s(cid:48), π(cid:48) where semiN aive(s(cid:48), π(cid:48)) is determinis-
+tic, an s(cid:48)(cid:48)(cid:48) and π(cid:48)(cid:48)(cid:48) such that semiN aive(s(cid:48)(cid:48)(cid:48), π(cid:48)(cid:48)(cid:48)) is empty iff
+semiN aive(s(cid:48)(cid:48), π(cid:48)(cid:48)) − semiN aive(s(cid:48), π(cid:48)) is empty. Note that
+semiN aive(s(cid:48)(cid:48), π(cid:48)(cid:48)) −semiN aive(s(cid:48), π(cid:48)) = semiN aive(s(cid:48)(cid:48), π(cid:48)(cid:48))
+(cid:84)
+
+semiN aive(s(cid:48), π(cid:48)), where semiN aive(s(cid:48), π(cid:48)) is the comple-
+ment of semiN aive(s(cid:48), π(cid:48)), i.e. it contains all EX-traces that are
+not included in semiN aive(s(cid:48), π(cid:48)). Also note that, in fact, it suf-
+ﬁces to consider a restricted portion of semiN aive(s(cid:48), π(cid:48)) that in-
+cludes only the traces of the complement in which the size of each
+direct internal trace is bounded by the size of the largest direct pos-
+sible internal trace in EX-traces of s(cid:48)(cid:48). In other word, we can bound
+their size by some number k - the size of the largest act-comp graph
+in s(cid:48)(cid:48). This holds because other traces of the complement cannot be
+isomorphic to some EX-trace of s(cid:48)(cid:48): in traces of s(cid:48)(cid:48), each activity
+has a direct implementation chosen out of the act-comp graphs of
+s, thus its size is bounded by k.
+
+The rest of the proof is dedicated to showing that semi-naive
+trace types are closed under intersection and (for deterministic semi-
+naive trace types) also under the above restricted form of comple-
+ment, and that these may be effectively computed. We start by
+showing closure under intersection, then move to closure under (re-
+stricted) complement.
+
+PROPOSITION 4.4. For every pair of BPs s, s(cid:48), we can compute
+
+a BP s(cid:48)(cid:48) s.t. N aive(s(cid:48)(cid:48)) = N aive(s) ∩ N aive(s(cid:48)).
+
+Similarly, for every s, π and s(cid:48), π(cid:48) there exists s(cid:48)(cid:48), π(cid:48)(cid:48) such that
+semiN aive(s(cid:48)(cid:48), π(cid:48)(cid:48)) = semiN aive(s, π) ∩ semiN aive(s(cid:48), π(cid:48)).
+
+Proof:Let us ﬁrst consider naive traces. Let s = (S, s0, τ ), s(cid:48) =
+(S(cid:48), s(cid:48)
+is constructed as follows.
+
+0, τ (cid:48)) be two BP speciﬁcations. The required s(cid:48)(cid:48) = (S(cid:48)(cid:48), s(cid:48)(cid:48)
+
+0 , τ (cid:48)(cid:48))
+
+The set of its activity names is the intersection of the activ-
+ity names sets of s(cid:48), s(cid:48)(cid:48). If the activity names r, r(cid:48) labeling the
+root activities of s and s(cid:48) are different, then clearly N aive(s) ∩
+N aive(s(cid:48)) = ∅ and s(cid:48)(cid:48) is the empty BP. Otherwise, the root of
+s(cid:48)(cid:48) is labeled by r = r(cid:48). The construction of s(cid:48)(cid:48) proceeds as fol-
+lows. For every compound activity name a in S(cid:48)(cid:48) that hasn’t been
+treated, we set τ (cid:48)(cid:48)(a) = τ (a) ∩ τ (cid:48)(a). This intersection is a regular
+intersection between sets of graphs, where a graph g ∈ τ (a) ap-
+pears in the intersection if it is isomorphic (up to node ids) to some
+g(cid:48) ∈ τ (cid:48)(a).
+
+All the act-comp graphs appearing in τ (cid:48)(cid:48)(a), for some activity
+name a, are added to S(cid:48)(cid:48). Finally, we perform “cleanup”: repeat-
+edly, all the graphs in S(cid:48)(cid:48) are checked and the graphs g having
+compound activities a for which τ (cid:48)(cid:48)(a) = ∅ are removed from S(cid:48)(cid:48).
+τ (cid:48)(cid:48) is being adjusted accordingly, removing g from the implemen-
+tation sets of all activities. Note that this may now make τ (cid:48)(cid:48)(b) = ∅
+for some additional activities b, and recursively trigger the removal
+of more graphs from S(cid:48)(cid:48), etc.
+
+The proof for semi-naive traces follows similar lines. Two main
+differences are that (1) the graphs of the two BPs are now tested
+for isomorphism modulo the activity renaming functions π and π(cid:48),
+and (2) the nodes in s(cid:48)(cid:48) represent pairs of nodes in s and s(cid:48) and are
+labeled by pairs of their origin activity names. The implementa-
+tion of such activity (a, a(cid:48)) is computed as the intersection of the
+implementation of a in s with the implementation of a(cid:48) in s, with
+isomorphisms computed up to π, π(cid:48). The result of each such iso-
+morphism is an act-comp graph whose nodes are labeled by pairs
+of the original activity names from s, s(cid:48), labeling nodes matched
+by the isomorphism. The cleanup step remains as above.
+
+(cid:163)
+We now consider (restricted) complement. We start by deﬁning
+an auxiliary notion of k-bounded EX-traces. A k-bounded EX-trace
+is deﬁned as a trace in which the size of the direct internal traces of
+each compound activity is bounded by k. Given a BP speciﬁcation
+s with activities renaming function π, we use semiN aivek(s, π)
+to denote the set of all k-bounded EX-traces that do not belong
+to semiN aive(s, π). We shall construct a BP s with renaming
+function π s.t. semiN aive(s, π) = semiN aivek(s, π). This
+construction may be used for any k.
+
+PROPOSITION 4.5. For every BP speciﬁcation s and activity
+renaming function π, where semiN aive(s, π) is deterministic, and
+for every k, there exists a BP speciﬁcation s and a renaming func-
+tion π s.t. semiN aive(s, π) = semiN aivek(s, π).
+
+Observe that every BP speciﬁcation is deterministic w.r.t to π
+that is the identity function. Thus, it follows that the same holds for
+naive EX-traces of any s.
+
+Proof:For each (compound) activity a in s , let a be a new (com-
+pound) activity name not in s that will be used to represent the
+
+360
+
+”complement” of a. Let Act be the set of activity names consisting
+of the activity names in s and their ”complements”. The renaming
+function π maps a and a to π(a), i.e. π(a) = π(a) = π(a).
+
+We construct s = (S, s0, τ ) as follows. S is the set of all pos-
+sible act-com DAGs with activity names in Act and size bounded
+by k. s0 is obtained from the root of s by replacing the root ac-
+tivity name a by a. The implementation function τ is deﬁned as
+follows. For compound activities a from s, τ (a) = τ (a). For the
+”complement” activities, τ (a) is a subset of S consisting of (1) all
+graphs g ∈ S where π(g) (cid:54)∈ π(τ (a)), (2) the graphs in τ (a) with
+one or more or their compound activities a replaced by the corre-
+sponding “complement” a. We can show that semiN aive(s, π) =
+semiN aivek(s, π), by induction on the nesting depth of traces.
+
+(cid:163)
+Applying Theorem 3.2, for inferring type s(cid:48)(cid:48) corresponding to
+the query answer, then combining Proposition 4.4 with Proposi-
+tion 4.5 (applied for k which is the size of the s(cid:48)(cid:48)), we obtain an
+EXPTIME algorithm for type checking, when the target type is de-
+terministic.
+
+(cid:163)
+Now that we showed decidability of type checking for determin-
+istic semi-naive target types, we next show that we can translate
+every BP s and renaming function π to equivalent s(cid:48) and π(cid:48) w.r.t.
+which the set of semi-naive EX-traces is deterministic.
+
+THEOREM 4.6. Given a BP s and an activities renaming func-
+tion π, there exist a BP s(cid:48) and a renaming function π(cid:48) such that
+semiN aive(s(cid:48), π(cid:48)) = semiN aive(s, π) and semiN aive(s(cid:48), π(cid:48))
+is deterministic w.r.t. s(cid:48), π(cid:48).
+
+Proof:(Sketch) The idea is to create equivalence classes of ac-
+tivity names from s, that have the same set of semi-naive (sub) EX-
+traces rooted at them. As the trace types here are semi-naive, and
+not selective, each such equivalence class may only contain activi-
+ties that are mapped by π to the same activity name. The grouping
+of activities to equivalence classes will ensure the determinism; to
+ensure that no new traces are created, we will require that each
+member of the equivalence class indeed had, in s, an implementa-
+tion equivalent to each implementation of the equivalence class in
+s(cid:48); ﬁnally to ensure that no traces are lost we will consider only
+the maximal equivalence classes for which the requirements above
+holds. The details follow.
+
+We shall use the notation Π over act-comp graphs, and denote
+Π(g) as the graph obtained from g by applying π over all of its
+activity names. Similarly, Π(G) where G is a set of graphs, denotes
+the set obtained by applying Π on each g ∈ G.
+
+First, we group together all activities of s that are mapped by π
+to the same activity, obtaining a set γ of activity subsets. We say
+that each activities subset is represented by the (single) activity to
+which its members are mapped. As each activity of s is mapped
+by π to a unique activity (π is a function), we can guarantee that
+no activity will appear in two different subsets. Furthermore, each
+subset is represented by a single activity.
+
+Each such subset A(cid:48) forms an activity of s(cid:48) and π(cid:48) maps A(cid:48) to
+its representing activity. We exploit the notation of A(cid:48) to denote
+both the activity name, as well as the subset of activity names that it
+represents. We say that a set A(cid:48) is an equivalence class with respect
+to a graph g(cid:48), if for all a ∈ A(cid:48), there exists a graph ga, obtained
+from g(cid:48) by replacing each activity name B with some b ∈ B, such
+that Π(ga) ∈ Π(τ (a)).
+
+The new implementation function τ (cid:48) is deﬁned as follows. For
+an act-comp graph g(cid:48) labeled by activities of s(cid:48), and for an activity
+A(cid:48) of s(cid:48) (representing a subset of the activities ofs), g(cid:48) ∈ τ (A(cid:48))
+if and only if A(cid:48) is the maximal set out of the sets in γ, that is an
+
+equivalence class with respect to g(cid:48). Also, with respect to each
+speciﬁc A(cid:48) and keeping ﬁxed all other activities in g(cid:48), each atomic
+activity in g(cid:48) is required to represent the maximal set of atomic
+activities out of these in γ.
+
+To conclude we can show that the set of EX-traces stays intact
+
+and is deterministic w.r.t. the deﬁned s(cid:48), π(cid:48).
+
+(cid:163)
+
+The immediate corollary of Theorems 4.3 and 4.6 follows.
+
+COROLLARY 4.7. Given an EX-pattern p, a BP speciﬁcation s
+(with renaming function π), and a target BP speciﬁcation s(cid:48) (with
+renaming function π(cid:48)), the problem of testing if p(N aive(s)) ⊆
+N aive(s(cid:48)) (resp. p(semiN aive(s, π)) ⊆ semiN aive(s(cid:48), π(cid:48))) is
+decidable.
+
+Our proof is constructive, and gives an EXPTIME type checking
+algorithm. It may be extended to an algorithm that checks equal-
+ity to the target trace type, rather than just inclusion, in a fairly
+straightforward manner. For semi-naive trace types, we can show
+that the problem is CO-NP-hard in the size of the trace types. (The
+proof works by reduction from the the problem of testing unsatisﬁ-
+ability of 3NF formulas, known to be CO-NP-complete). For naive
+trace types it is open whether an algorithm polynomial in the size
+of input and output types exists. We already know by Proposition
+3.7 that unless P=NP, an algorithm that is also polynomial in the
+size of the query does not exist.
+
+5. EXTENSIONS
+
+To conclude we consider some useful extensions to the query
+language that enhance the expressive power, and facilitate the query-
+ing of real life EX-traces.
+
+Variables and joins. The ﬁrst extension for EX-patterns that
+we consider is obtained by attaching variables to nodes and tran-
+sitive edges, and introducing equality conditions (called joins) on
+these variables. The notion of embedding (from Deﬁnition 2.15)
+extends naturally to account for such variables: For node variables,
+we require that nodes labeled by equal variables are all mapped
+to EX-trace nodes having the same activity name; For transitive
+edges, if e1 and e2 are transitive edges to which equal variables are
+attached, we require that the sequence of node labels on the paths
+p1, p2 to which e1 and e2 are mapped (resp.) represent the same
+word. Inequality restrictions on variables are similarly deﬁned.
+
+An example for a query with variables and a join is depicted in
+Figure 8(a). Two of its transitive edges are annotated with the vari-
+ables $x and $y, and the join condition is $x = $y. The intuitive
+meaning is that the query searches for EX-traces that contain two
+paths, one from a C activity to an F activity and the other from a
+D activity to an F activity, s.t. the sequences of labels on the two
+paths form the same word. In the sequel, we will refer to the vari-
+ables annotating nodes (transitive edges) as node (path) variables.
+Results.
+Incorporating node variables in our type inference and
+type checking algorithms is straightforward. Theorems 3.2, 3.6 and
+Corollary 4.7 still hold for queries with joins on node variables.
+For queries with joins on path variables, however, type inference
+may no longer be possible, even when the input is of naive trace
+type. This is because a query that tests for equality of path variables
+may have for an answer a set of EX-traces that does not belong to
+Selective, as illustrated by the following theorem. The theo-
+rem also highlights the difﬁculty introduced by the use of transitive
+activities in the query.
+
+THEOREM 5.1.
+
+1. There exist a BP s and an EX-pattern p
+with join on path variables s.t. there is no BP s(cid:48), renaming
+
+361
+
+Further extensions. To conclude this section, we brieﬂy and
+informally discuss two additional extensions to the query language,
+namely projection and negation. We ﬁrst describe them, then con-
+sider their effect on the results presented in the previous sections.
+Projection.
+In a query with projection, the user is interested in
+projecting out only the matches to some part of the EX-pattern.
+These EX-pattern nodes and edges are marked as projected. The
+non-projected EX-pattern parts stand, in this case, as a constraint:
+the projected parts must co-appear with the non-projected parts in
+a qualifying trace.
+Negation. In a query with negation, the patterns have some nodes
+and edges that are marked as negative. These again stand as con-
+straints: the query searches for all traces that contain occurrences
+of the positive portions of the patterns, and does not contain any of
+the negative parts co-appear.
+
+We can show that our results on type checking and type infer-
+ence extend to EX-patterns with negation and projection. That
+is, Theorems 3.2 and 3.6 and Corollary 4.7 hold for the extended
+EX-patterns as well. For space constraints the type inference and
+checking algorithms that support these extensions remain outside
+the scope of this paper.
+
+6. RELATED WORK
+
+We next consider related work, highlighting our relative contri-
+
+bution.
+
+The query language studied here is used in BPQ, a BP manage-
+ment system that allows to analyze BP speciﬁcations, monitor BP
+instances at run time, and query their execution traces [2, 3]. All
+these tasks are performed via a uniform, intuitive, graphical query
+interface, whose abstraction (for the case of traces analysis) was
+presented here. The complexity of query evaluation was studied in
+[10, 3]. The latter work highlights the value, for query optimiza-
+tion, of knowledge on the structure of the queried (sub-) traces, and
+motivated the present work.
+
+There is a tight connection between the classes of EX-trace types
+studied here and corresponding classical classes of string and graph
+languages. We already mentioned the analogy between naive trace
+types and bracketed string languages [14], semi-naive trace types
+and parenthesis languages [19], and selective trace types and con-
+text free languages [26]. There is also a close connection between
+selective trace types and context free graph languages[16, 9]. These
+are deﬁned using context free graph grammars, an extension of con-
+text free string grammars to graphs. They include graphs where
+some nodes represent non-terminals, and derivation rules allow-
+ing to replace them by graphs. A simple variant requires each
+graph to have single entry and exit nodes. It is easy to show that
+Selective is equivalent to the set of graphs deﬁned by such
+grammars. However, to our knowledge, no model in this area that
+is equivalent to Naive or semiNaive has been studied before.
+
+In terms of query languages, most of the work on context free
+graph grammars is concerned with formal logic, and speciﬁcally
+First and (Monadic) Second Order Logic (MSO). MSO is very ex-
+pressive, and in particular may capture our query model. Cour-
+celle [9] has shown that the theory of MSO over context free graph
+grammars is decidable. However, the complexity of the algorithms
+suggested in [9] is non-elementary in the size of the query. By
+choosing a restricted - yet expressive enough for our needs - query
+language, we are able to obtain more efﬁcient, practical, type in-
+ference algorithms. As to type checking, in order to use the decid-
+ability results of Courcelle, it should ﬁrst be shown that the set of
+semi-naive EX-traces of any given BP and renaming function may
+be expressed by MSO. (We know that this is not the case for selec-
+
+Figure 8: Query with variables.
+
+function π(cid:48) and set of activities A(cid:48), where Selective(s(cid:48), A(cid:48), π(cid:48)) =
+p(N aive(s)).
+
+2. For EX-patterns with no transitive activities, type inference
+is possible for semi-naive (resp. selective) input and output
+types, even with joins on path variables. The time complexity
+here, in both cases, is exponential.
+
+Proof:(Sketch) We ﬁrst consider part 1, then part 2. Consider
+again the EX-pattern p depicted in Figure 8(a), and the BP s whose
+act-comp DAGs are depicted in Figure 8(b). Assume that A is
+the root activity and has a single implementation - the act-comp
+graph (d2), while E has two possible implementations - (d3) and
+(d4). Consequently, N aive(s) contains EX-traces where the inter-
+nal trace of the two Es (that follow C and D) includes an arbitrary
+number of nested E activities, ending by a G activity. Note that
+p(N aive(s)) includes only traces in which the number of nested
+E activities on both paths (the one following C and the one follow-
+ing D) is identical. It is easy to show that this set of EX-traces may
+not be captured by any selective trace type (as it requires correlation
+between activity expansions at distinct parts of the EX-trace).
+
+The pattern p in the above example contains a transitive root
+node, hence the transitive edges in its internal trace are matched to
+paths that zoom into the nested activities of the EX-trace. We next
+show that for queries with no transitive nodes, type inference is still
+possible. The difference is due to the fact that in such queries, the
+direct internal trace of each compound node in the query is matched
+against the direct internal trace of the corresponding EX-trace node.
+Thus, the number of possible matchings is ﬁnite, and we may sim-
+ply enumerate all matchings, selecting those that conform to the
+join criteria. However, for transitive edges, the number of possible
+matches (as the number of paths in a DAG) might be exponential,
+hence the exponential time complexity.
+
+(cid:163)
+While such joins make type inference impossible/harder, type
+
+checking is still possible for the same cases as before.
+
+THEOREM 5.2. Type checking is possible for (semi)-naive in-
+
+put and output types, even with joins on path variables.
+
+Proof:(Sketch) We ﬁrst ignore the joins and compute the semi-
+naive output type t for the BP and the pattern (without the joins).
+Next we compute (as in the proof of Corollary 4.7) a semi-naive
+type t(cid:48) describing the EX-traces that belong to t but not to the re-
+quired target type. To conclude we show that, for semi-naive trace
+types, it is possible to check if there exists some EX-trace in t(cid:48) for
+which the result of the EX-pattern (with the joins) is not empty.
+The answer to the type checking problem is positive iff no such
+EX-trace exists.
+(cid:163)
+
+362
+
+tive trace types or else type checking would be decidable for them).
+Whether or not this holds is a subject of on-going research, but in
+any case, even if an algorithm that walks in this path exists, its com-
+plexity will be non-elementary in the size of the type speciﬁcation
+(whereas the complexity of our algorithm is exponential).
+
+Related models have been studied in the area of veriﬁcation. We
+have mentioned above that selective trace types can be expressed by
+SERSM[1]. However, the query languages considered for SERSMs
+differ in expressive power from ours. For instance, graph homo-
+morphism, which can be expressed in our query language cannot
+be expressed by the temporal logics often used in these works.
+Moreover, as the needs and motivations in veriﬁcation are differ-
+ent, there are (to the best of our knowledge) no equivalences of the
+particular families of trace types studied here. We note that query-
+ing processes using formal languages representation was studied
+extensively, typically using temporal logics (see e.g. [11, 12, 7]).
+
+Type checking and type inference are well studied problems in
+functional programming languages [22]. The complexity there is
+derived from the interaction of function types, polymorphism, and
+let-bindings; as pointed out in [8], this analysis is valuable for
+database queries as well. In our setting, the complexity is derived
+from the interaction of nested activities in the types with transi-
+tive edges/activities in queries. Type inference and type checking
+were also considered extensively in the context of XML. The XML
+analogous of the queries studied here are XML selection queries
+[20] that use tree patterns to select subtrees of interest. For such
+XML queries, [20] showed that type checking can be performed
+in time complexity equal to or lower than type inference (depend-
+ing on the XML types/queries being considered). Compare to our
+setting (bearing the obvious distinction of having nested DAGs in-
+stead of ﬂat trees), where type checking may be harder than type
+inference. Another common class of XML queries is transforma-
+tion queries that restructure the input tree. [20] and [21] showed the
+impossibility of type inference and undecidability of type checking
+under a general model of transformations. Further work (e.g. [17],
+[13]) considered restrictive transformation models that allow de-
+cidability of type checking, with complexity ranging from PTIME
+to non-elementary. An interesting future work is to examine the
+adaptation of corresponding (restricted) transformation queries to
+our settings. Another aspect to study are extensions of the query
+language to consider additional information often available in EX-
+traces, such as the names and values of the activities data variables.
+It may be interesting to formulate practical restrictions on the use
+of data values that allow type inference and checking.
+
+7. CONCLUSION
+
+We studied in this paper type inference and type checking for
+queries over BP execution traces, modeled as nested DAGs. We
+formally deﬁned and characterized three common classes of EX-
+trace types - naive, semi-naive, and selective. We considered their
+respective notions of type inference and type checking and studied
+the complexity of the two problems for query languages of varying
+expressive power.
+
+Our results have two main important practical implications. For
+type inference they signal the class of selective trace types as an
+“ideal” type system for BP traces, allowing both ﬂexible descrip-
+tion of the BP traces as well as efﬁcient type inference. We thus
+believe it to be a ﬁrm basis for further study of type-based query op-
+timization for BP management systems. On the other hand, for type
+checking, we showed that even for limited trace types, type check-
+ing takes EXPTIME (and is impossible for selective trace types).
+Consequently, we believe that run-time checks of the query result
+are likely to be a more useful in practice.
+
+8. REFERENCES
+[1] R. Alur, M. Benedikt, K. Etessami, P. Godefroid, T. Reps,
+and M. Yannakakis. Analysis of recursive state machines.
+ACM Trans. Program. Lang. Syst., 27(4), 2005.
+
+[2] C. Beeri, A. Eyal, S. Kamenkovich, and T. Milo. Querying
+
+business processes. In Proc. of VLDB, 2006.
+
+[3] C. Beeri, A. Eyal, T. Milo, and A. Pilberg. Monitoring
+
+business processes with queries. In Proc. of VLDB, 2007.
+
+[4] V. Benzaken, G. Castagna, D. Colazzo, and K. Nguyen.
+
+Type-based xml projection. In Proc. of VLDB, 2006.
+
+[5] Business Process Execution Language for Web Services.
+
+http://www.ibm.com/developerworks/library/ws-bpel/.
+
+[6] BPMI. Business process management initiative.
+
+http://www.service-architecture.com/web-
+services/articles/business process query language bpql.html.
+[7] T. Bultan, J. Su, and X. Fu. Analyzing conversations of web
+
+services. IEEE Internet Computing, 10(1), 2006.
+
+[8] J. Bussche, D. Gucht, and S. Vansummeren. A crash course
+
+on database queries. In Proc. of PODS, 2007.
+
+[9] B. Courcelle. The monadic second-order logic of graphs. Inf.
+
+Comput., 85(1), 1990.
+
+[10] D. Deutch and T. Milo. Querying structural and behavioral
+properties of business processes. In Proc. of DBPL, 2007.
+[11] A. Deutsch, M. Marcus, L. Sui, V. Vianu, and D. Zhou. A
+
+veriﬁer for interactive, data-driven web applications. In Proc.
+of SIGMOD, 2005.
+
+[12] A. Deutsch, L. Sui, V. Vianu, and D. Zhou. Veriﬁcation of
+
+communicating data-driven web services. In Proc. of PODS,
+2006.
+
+[13] J. Engelfriet, H. J. Hoogeboom, and B. Samwel. Xml
+
+transformation by tree-walking transducers with invisible
+pebbles. In Proc. of PODS, 2007.
+
+[14] S. Ginsburg and M. Harrison. Bracketed context-free
+languages. J. Computer and System Sciences, 1, 1967.
+
+[15] G. Gottlob, C. Koch, and R. Pichler. Efﬁcient algorithms for
+processing xpath queries. ACM Trans. Database Syst., 30(2),
+2005.
+
+[16] D. Janssens and G. Rozenberg. Graph grammars with
+
+node-label controlled rewriting and embedding. In Proc. of
+COMPUGRAPH, 1983.
+
+[17] S. Maneth, T. Perst, and H. Seidl. Exact xml type checking in
+
+polynomial time. In Proc. of ICDT, 2007.
+
+[18] Z. Manna and A. Pnueli. The temporal logic of reactive and
+
+concurrent systems. Springer-Verlag, 1992.
+
+[19] R. McNaughton. Parenthesis grammars. J. ACM, 14(3),
+
+1967.
+
+[20] T. Milo and D. Suciu. Type inference for queries on
+
+semistructured data. In Proc. of PODS, 1999.
+
+[21] T. Milo, D. Suciu, and V. Vianu. Type checking for xml
+
+transformers. In Proc. of PODS, 2000.
+
+[22] J. C. Mitchell. Foundations for Programming Languages.
+
+MIT Press, 1996.
+
+[23] Oracle BPEL Process Manager 2.0 Quick Start Tutorial.
+
+http://www.oracle.com/technology/products/ias/bpel/index.html.
+
+[24] Y. Papakonstantinou and V. Vianu. Dtd inference for views
+
+of xml data. In Proc. of PODS, 2000.
+
+[25] D. M. Sayal, F. Casati, U. Dayal, and M. Shan. Business
+
+Process Cockpit. In Proc. of VLDB, 2002.
+
+[26] M. Sipser. Introduction to the Theory of Computation. PWS
+
+Publishing Company, 1997.
+
+363
+
+

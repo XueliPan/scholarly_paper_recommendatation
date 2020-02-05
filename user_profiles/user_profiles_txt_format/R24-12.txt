@@ -1,0 +1,2765 @@
+Modeling and Rendering of Heterogeneous Translucent
+Materials Using the Diffusion Equation
+
+JIAPING WANG
+Microsoft Research Asia
+SHUANG ZHAO
+Shanghai Jiaotong University
+XIN TONG, STEPHEN LIN and ZHOUCHEN LIN
+Microsoft Research Asia
+YUE DONG
+Tsinghua University
+and
+BAINING GUO and HEUNG-YEUNG SHUM
+Microsoft Research Asia and Tsinghua University
+
+In this article, we propose techniques for modeling and rendering of heterogeneous translucent materials that enable acquisition from measured samples,
+interactive editing of material attributes, and real-time rendering. The materials are assumed to be optically dense such that multiple scattering can be
+approximated by a diffusion process described by the diffusion equation. For modeling heterogeneous materials, we present the inverse diffusion algorithm for
+acquiring material properties from appearance measurements. This modeling algorithm incorporates a regularizer to handle the ill-conditioning of the inverse
+problem, an adjoint method to dramatically reduce the computational cost, and a hierarchical GPU implementation for further speedup. To render an object
+with known material properties, we present the polygrid diffusion algorithm, which solves the diffusion equation with a boundary condition deﬁned by the
+given illumination environment. This rendering technique is based on representation of an object by a polygrid, a grid with regular connectivity and an irregular
+shape, which facilitates solution of the diffusion equation in arbitrary volumes. Because of the regular connectivity, our rendering algorithm can be implemented
+on the GPU for real-time performance. We demonstrate our techniques by capturing materials from physical samples and performing real-time rendering and
+editing with these materials.
+
+Categories and Subject Descriptors: I.3.6 [Computer Graphics]: Methodology and Techniques
+
+General Terms: Algorithms
+
+ACM Reference Format:
+
+Additional Key Words and Phrases: Appearance modeling and rendering, subsurface scattering, diffusion approximation
+
+Wang, J., Zhao, S., Tong, X., Lin, S., Lin, Z., Dong, Y., Guo, B., and Shum, H.-Y. 2008. Modeling and rendering of heterogeneous translucent materials using the
+diffusion equation. ACM Trans. Graph. 27, 1, Article 9 (March 2008), 18 pages. DOI = 10.1145/1330511.1330520 http://doi.acm.org/10.1145/1330511.1330520
+
+1.
+
+INTRODUCTION
+
+Many materials in the real world exhibit a complex appearance
+that arises from subsurface scattering of light. For heterogeneous
+translucent objects, the light transport within the material volume is
+determined by its geometry, the optical properties of its constituent
+elements, and the spatial distribution of these elements in the vol-
+ume. Because of the complex effects of these various factors on sub-
+
+surface scattering, models of these materials have been challenging
+to acquire from real objects and to render in real time. Furthermore,
+computational costs and/or modeling deﬁciencies have made inter-
+active editing of material properties a difﬁcult problem.
+
+One approach for generating subsurface scattering effects is to
+acquire and utilize a bidirectional scattering surface reﬂectance
+distribution function (BSSRDF) [Nicodemus et al. 1977] that de-
+scribes the subsurface transfer of light between two surface points.
+
+This work was done when S. Zhao and Y. Dong were visiting students at Microsoft Research Asia.
+Authors’ addresses: J. Wang, X. Tong, S. Lin, B. Guo, H. Shum, Microsoft Research Asia, Sigma Building, No. 49, ZhiChun Road, Beijing 100080, China;
+email: {japw, xtong, stevelin, bainguo, hshum}@microsoft.com.
+Permission to make digital or hard copies of part or all of this work for personal or classroom use is granted without fee provided that copies are not made or
+distributed for proﬁt or direct commercial advantage and that copies show this notice on the ﬁrst page or initial screen of a display along with the full citation.
+Copyrights for components of this work owned by others than ACM must be honored. Abstracting with credit is permitted. To copy otherwise, to republish, to
+post on servers, to redistribute to lists, or to use any component of this work in other works requires prior speciﬁc permission and/or a fee. Permissions may be
+requested from Publications Dept., ACM, Inc., 2 Penn Plaza, Suite 701, New York, NY 10121-0701 USA, fax +1 (212) 869-0481, or permissions@acm.org.
+c(cid:2) 2008 ACM 0730-0301/2008/03-ART9 $5.00 DOI 10.1145/1330511.1330520 http://doi.acm.org/10.1145/1330511.1330520
+
+ACM Transactions on Graphics, Vol. 27, No. 1, Article 9, Publication date: March 2008.
+
+9
+
+9:2
+
+•
+
+J. Wang et al.
+
+Various methods have been presented for recovering the BSSRDF
+of a translucent object from images captured under sampled light-
+ing conditions and viewpoints [Goesele et al. 2004; Tong et al.
+2005; Peers et al. 2006]. However, in this surface-based approach,
+physical material properties cannot be intuitively edited through
+modiﬁcations of 4D appearance data, which itself can be trou-
+blesome to manipulate. Moreover, rendering of surface appear-
+ance involves an integration of BSSRDF contributions from all
+points on the surface. Such global operations cannot be effectively
+implemented on the GPU without precomputation from a ﬁxed
+BSSRDF.
+
+Another approach is to construct an explicit model of scattering
+coefﬁcients throughout the material volume, and then simulate sub-
+surface scattering based on physical principles. Although a material
+representation can be directly modiﬁed in such a volume-based ap-
+proach, scattering within heterogeneous translucent materials can-
+not be rapidly computed using previous techniques [Stam 1995;
+Chen et al. 2004; Li et al. 2005], thus limiting the ability to edit the
+material in practice. Besides the need for ofﬂine rendering, these
+methods do not provide a way to reliably acquire volumetric mate-
+rial models from real world samples.
+
+In this article, we propose techniques for modeling and render-
+ing of heterogeneous translucent materials that enable acquisition
+from measured samples, interactive editing of material attributes,
+and real-time rendering. The material is represented as a discretized
+volume in which spatially variant absorption and diffusion coefﬁ-
+cients are associated with each volume element. We focus on mul-
+tiple scattering and assume the material to be optically dense such
+that subsurface scattering becomes nearly isotropic and can be well
+approximated by a diffusion process [Ishimaru 1978]. This is called
+the diffusion approximation. In medical imaging, the diffusion ap-
+proximation has been widely used to model the multiple scatter-
+ing in heterogeneous human tissues [Schweiger et al. 2003; Boas
+et al. 2001]. For rendering participating media, Stam [1995] used
+the diffusion approximation to model the multiple scattering in het-
+erogeneous clouds, where the absorption and diffusion coefﬁcients
+can vary in the volume. For subsurface scattering, an analytic dipole
+model derived from the diffusion approximation was used by Jensen
+et al. [2001] for multiple scattering in homogeneous materials. In
+this paper, we also address subsurface scattering, but deal with the
+general case of multiple scattering in heterogeneous materials with
+the diffusion approximation.
+
+To model heterogeneous materials, we present the inverse dif-
+fusion algorithm for recovering a volumetric material model from
+appearance measurements by solving an inverse diffusion problem.
+For a given distribution of spatially variant absorption and diffusion
+coefﬁcents, the corresponding diffusion process that generates the
+material appearance can be expressed as a partial differential equa-
+tion (PDE), deﬁned over the volumetric elements, with the boundary
+condition given by the lighting environment. Acquiring a volumetric
+model from a material sample involves an inverse diffusion problem
+in which we search for a distribution of spatially variant absorption
+and diffusion coefﬁcents such that the corresponding diffusion pro-
+cess generates the material appearance that is most consistent with
+the measured surface appearance in captured images. Since the im-
+ages record an actual material sample, a solution to the inverse
+diffusion problem certainly exists. This inverse problem, however,
+is well known to be ill posed, since a range of different volumetric
+models may have indistinguishable surface appearances [Arridge
+and Lionheart 1998]. Consequently, the diffusion equations and im-
+age measurements deﬁne a group of solutions. Since these solutions
+correspond to the same visual appearance, any solution from this
+
+ACM Transactions on Graphics, Vol. 27, No. 1, Article 9, Publication date: March 2008.
+
+group provides a valid volumetric appearance model of the given
+material.
+
+Finding a solution to the inverse diffusion problem is challenging
+due to the nature of the inverse problem and the large number of
+variables involved. The inverse diffusion problem is usually solved
+with an iterative optimization procedure, in which each iteration
+requires an expensive gradient evaluation. For a volume with el-
+ements on an n3 grid, this gradient evaluation involves n3 × M
+light diffusion computations, where M is the number of image mea-
+surements. The inverse diffusion problem is also ill conditioned
+numerically, which presents convergence problems for the iterative
+solver. To ensure stable convergence, we incorporate a regularizer
+on the diffusion coefﬁcients and use an effective initialization that
+assigns uniform diffusion coefﬁcents among the voxels. We addi-
+tionally employ an adjoint method [Lions 1971], widely used in
+optimal control for gradient computation, to dramatically reduce
+the cost of the gradient evaluation down to 2M light diffusion com-
+putations. With these schemes and a GPU implementation of the
+diffusion computation, we show that ﬁnding a solution of the in-
+verse diffusion problem becomes feasible for volumes of moderate
+size.
+
+For rendering a volumetric model with known material properties,
+we present the polygrid diffusion algorithm, which solves a diffu-
+sion equation whose boundary condition is deﬁned by the given
+illumination conditions. That multiple scattering may be modeled
+as a diffusion process was ﬁrst observed by Stam [1995] in the
+context of participating media rendering. He solved the diffusion
+equation on a cubic volume using a regular grid and a ﬁnite differ-
+ence method (FDM). Our rendering algorithm solves the diffusion
+equation on 3D volumes of arbitrary shape using a polygrid and an
+FDM. Our algorithm is centered around the polygrid representation,
+which facilitates the solution of the light diffusion equation in arbi-
+trary volumes. A polygrid is a grid with regular connectivity and an
+irregular shape for a close geometric ﬁt without ﬁne sampling. The
+regular connectivity allows us to develop a hierarchical GPU im-
+plementation of our rendering algorithm for real-time performance.
+We describe how to construct a polygrid on an arbitrary 3D object,
+and present a technique for evaluating diffusion equations deﬁned
+among the irregular intervals of polygrid nodes.
+
+With the proposed technique, models of various materials can be
+readily captured and interactively transformed with adjustments of
+scattering properties as shown in Figure 1. This system for ﬂexible
+use of real appearance data provides designers a valuable tool for
+creating realistic objects with the visual features of heterogeneous
+translucent materials. Indeed, this is the only method to date that
+supports real-time rendering and editing of such volumes.
+
+2. RELATED WORK
+
+Subsurface scattering of light within a material has typically been
+represented with models of radiative light transfer. Hanrahan and
+Krueger [1993] proposed a model based on one-dimensional linear
+transport theory for single scattering in layered materials. Jensen
+et al. [2001] presented a practical model for subsurface scattering
+in homogeneous materials based on an analytic dipole diffusion
+approximation. In Donner and Jensen [2005], a shading model for-
+mulated from multipole theory was proposed for light diffusion in
+multilayered translucent materials. We utilize the diffusion equation
+in our work, which allows for more general modeling of multiple
+scattering effects in heterogeneous translucent materials.
+
+In the following, we review related methods for acquiring sub-
+
+surface scattering models, and rendering and editing of materials.
+
+Modeling and Rendering of Heterogeneous Translucent Materials Using the Diffusion Equation
+
+•
+
+9:3
+
+Fig. 1. Synthesis of a bunny with marble material. (a) Physical sample. (b) Bunny rendered with the acquired material model. (c) After interactive editing to
+add patterns. (d) After placing a pattern at a different depth.
+
+2.1 Acquisition of Subsurface Scattering Models
+
+Subsurface scattering models of heterogeneous materials may be
+acquired directly from image appearance. Acquisition methods
+have been presented for human faces [Debevec et al. 2000],
+object-based models [Goesele et al. 2004], material-based models
+for volumes with an even distribution of heterogeneous elements
+[Tong et al. 2005], and material models for general heterogeneous
+volumes [Peers et al. 2006]. These surface-based representations are
+speciﬁc to the measured object or material. Although the appear-
+ance of a material could potentially be modiﬁed in these models,
+physical material properties cannot be edited in a meaningful way.
+Models of subsurface scattering may also be acquired through
+estimation of scattering parameters from a material sample. Param-
+eter estimation, however, is often confounded by multiple scatter-
+ing, whose appearance arises in a complex manner from a material’s
+scattering properties. For homogeneous materials, multiple scatter-
+ing can be approximated with analytic models [Jensen et al. 2001;
+Narasimhan and Nayar 2003], which have greatly facilitated estima-
+tion of scattering parameters. In Narasimhan et al. [2006], the effects
+of multiple scattering are avoided by diluting participating media to
+low concentrations, such that multiple scattering becomes negligible
+and scattering parameters can be solved from only single scattering.
+For heterogeneous, optically dense materials, multiple scattering
+cannot be addressed with such simpliﬁcations. Our method is the
+ﬁrst to acquire volumetric models of heterogeneous materials.
+
+Recently in medical imaging, special measurement devices based
+on time- and frequency-modulated near infrared lighting have been
+proposed for estimating material properties in body tissues with
+multiple scattering effects [Schweiger et al. 2003; Boas et al. 2001].
+This approach is showing promise in its early stage of development
+[Gibson et al. 2005], but has limited application in computer graph-
+ics. Although its use of infrared lighting may be well suited for tissue
+penetration and categorization of volume elements into particular
+tissue types, general scattering properties over the full visible spec-
+trum need to be acquired for computer graphics purposes. Moreover,
+existing reconstruction algorithms are computationally expensive,
+and are practical only for coarse 3D volumes (e.g., 32 × 32 × 10
+in Boas et al. [2001]) or for 2D slices. Unlike in medical imaging,
+computer graphics applications need not recover the actual scat-
+tering coefﬁcients in a material volume, but instead need only to
+obtain a material model whose appearance is consistent with image
+measurements. This model must be acquired over the full visible
+spectrum and with detailed material variations for high visual ﬁ-
+delity. Our work presents a technique for obtaining such volumetric
+material models using conventional photographs. With our efﬁcient
+
+inverse diffusion algorithm, we can successfully acquire 3D material
+models with a high level of detail.
+
+2.2 Material Rendering and Editing
+
+For rendering of BSSRDF models of subsurface scattering, several
+hierarchical schemes [Jensen and Buhler 2002; Carr et al. 2003]
+have been proposed to facilitate integration of BSSRDF contribu-
+tions from all points on the surface. Since these hierarchical data
+structures need to be precomputed before rendering, they cannot be
+used in material editing. Mertens et al. [2003] proposed a hierarchi-
+cal scheme that supports real-time updates, but since this method is
+based on the dipole diffusion model, it can be used only for render-
+ing homogeneous materials. In Lensch et al. [2003], local subsur-
+face scattering is computed by a local image ﬁlter, while the global
+scattering is determined from vertex-vertex transport. Although this
+method can provide interactive rendering speed, precomputation of
+the local ﬁlter and global transport makes this approach unsuitable
+for material editing.
+
+Subsurface scattering has been simulated for volumetric material
+models using Monte Carlo methods [Dorsey et al. 1999; Pharr and
+Hanrahan 2000] and photon tracing [Jensen and Christensen 1998],
+but at a considerable expense in computation. Real-time rendering
+can be achieved through precomputation of light transport [Hao and
+Varshney 2004; Wang et al. 2005]. However, light transport quanti-
+ties that have been precomputed with respect to a given volumetric
+model are no longer valid after material editing.
+
+For radiance transfer modeled as a diffusion process, the set of
+PDE equations may be numerically solved to determine material ap-
+pearance. Multigrid schemes and simpliﬁed volume representations
+have been employed to facilitate rendering of participating media
+in Stam [1995]. Haber et al. [2005] used embedded boundary dis-
+cretization to solve for light diffusion in object volumes of arbitrary
+shape, though not in real time. A ﬁnite element method (FEM) could
+also be used in computing light diffusion within an arbitrary object.
+However, FEMs require decomposition of the object into tetrahe-
+dra, whose irregular connectivity makes GPU implementation dif-
+ﬁcult. In our proposed approach, real-time evaluation of diffusion
+is achieved with a polygrid representation of the object volume and
+an adaptive hierarchical scheme for diffusion computation that has
+an efﬁcient implementation on the GPU.
+
+3. OVERVIEW
+
+Figure 2 presents an overview of our approach. We denote the object
+interior as volume V and the object surface as A. The outgoing
+
+ACM Transactions on Graphics, Vol. 27, No. 1, Article 9, Publication date: March 2008.
+
+9:4
+
+•
+
+J. Wang et al.
+
+x μκ
+((
+(
+
+),
+
+x
+
+A
+))
+
+Diffusion 
+Process
+
+)(xφ
+
+V
+
+Li
+
+x μκ
+((
+(
+
+),
+
+x
+
+))
+
+Inverse Diffusion 
+
+Problem
+
+(a)
+
+(b)
+
+Li
+
+Lo
+
+Lo
+
+Fig. 2. Overview. (a) Rendering with forward diffusion, from the volumet-
+ric material properties (κ(x) and μ(x)) and illumination setting (Li ) to the
+outgoing radiance (L o). (b) Model acquisition with inverse diffusion, from
+a set of illumination conditions (Li ) and measured outgoing radiances (L o)
+to the volumetric material properties (κ(x) and μ(x)).
+
+radiance L(xo, ωo) at a surface point xo in direction ωo may be
+computed by integrating the incoming radiance L(xi , ωi ) from all
+incident directions ωi and points xi on surface A:
+
+(cid:2)
+
+(cid:2)
+
+A
+
+(cid:4)
+
+L o(xo, ωo) =
+
+S(xi , ωi , xo, ωo)L i (xi , ωi )(n · ωi )dωi dA(xi ),
+
+where n is the surface normal at xi and S(xi , ωi , xo, ωo) is the
+BSSRDF. The outgoing radiance can be divided into single- and
+multiple-scattering components:
+
+L o(xo, ωo) = L s(xo, ωo) + L m(xo, ωo).
+
+The single-scattering component L s(xo, ωo) accounts for light
+that interacts exactly once with the medium before exiting the vol-
+ume, and may be evaluated by integrating the incident radiance
+along the refracted outgoing ray, as described in Equation (6) of
+Jensen et al. [2001].
+
+In our method, we focus on multiple scattering L m(xo, ωo) that
+consists of light that interacts multiple times within the object vol-
+ume, which is the dominant scattering component for optically dense
+materials. For highly scattering, nonemissive materials, the multiple
+scattering can be approximated by a diffusion process described by
+the following equation [Ishimaru 1978]:
+
+∇ · (κ(x)∇φ(x)) − μ(x)φ(x) = 0,
+
+x ∈ V,
+
+(1)
+
+with boundary condition deﬁned on the object surface A [Schweiger
+et al. 1995]:
+
+φ(x) + 2Cκ(x)
+
+= q(x),
+
+x ∈ A,
+
+(2)
+
+∂φ(x)
+
+∂n
+
+(cid:3)
+
+4π L o(x, ω)dω is the radiant ﬂuence (also known
+where φ(x) =
+as the scalar irradiance or radiant ﬂux), κ(x) = 1/[3(μ(x) + σ (cid:4)
+s (x)]
+is the diffusion coefﬁcient, μ(x) is the absorption coefﬁcient, and
+σ (cid:4)
+s (x) = σs(1 − g) is the reduced scattering coefﬁcient with g
+being the mean cosine of the scattering angle. We deﬁne C =
+(1 + Fdr )/(1 − Fdr ), where Fdr is the diffuse Fresnel reﬂectance
+that is determined by the refraction index η of the material [Jensen
+et al. 2001]. The diffused incoming light at a surface point x is given
+by q(x) =
+(cid:4) L i (x, ωi )(n · ωi )Ft (η(x), ωi )dωi , where Ft (η(x), ωi )
+is the incoming Fresnel transmission term. Note that this diffu-
+sion process well describes light transport between voxels of differ-
+
+(cid:3)
+
+ACM Transactions on Graphics, Vol. 27, No. 1, Article 9, Publication date: March 2008.
+
+ent optical properties since the κ and μ used in Equation (1) and
+Equation (2) may vary throughout the volume.
+
+With the diffusion approximation, the multiple scattering com-
+
+ponent of the outgoing radiance is approximated by
+
+L m(xo, ωo) = − C
+
+π Ft (η(xo), ωo)κ(xo)
+
+∂φ(xo)
+
+,
+
+∂n
+
+(3)
+
+where φ(xo) is computed from Equation (1) and Equation (2)
+[Schweiger et al. 1995; Jensen et al. 2001].
+
+Our work centers on modeling and rendering multiple scattering
+in a heterogeneous material using the diffusion approximation. For
+rendering an object with known μ(x) and κ(x) throughout the object
+volume V , we solve the diffusion problem with a given illumination
+condition q(x) on the object surface A. Once the solution φ(x) is
+found, the multiple scattering component of the outgoing radiance
+can be easily evaluated using Equation (3). We note that the diffusion
+equation assumes scattering to be frequent enough to be considered
+nearly isotropic and independent of the phase function.
+
+In acquiring the material properties from measured appearance,
+we need to compute the absorption coefﬁcients μ(x) and dif-
+fusion coefﬁcients κ(x) based on measured outgoing radiances
+{L o,m(x, ωo) | x ∈ A, m = 1, . . . M} from the object surface
+due to multiple scattering under M different illumination conditions
+{L i,m(x, ωi ) | x ∈ A, m = 1, . . . M} on the object surface. For this
+purpose, we solve the inverse diffusion problem to ﬁnd κ(x) and
+μ(x) such that the corresponding diffusion problem, which is ex-
+pressed by Equation (1), Equation (2), and Equation (3), produces
+the outgoing radiance {L R
+o,m(x, ωo)} that is most consistent to the
+measured outgoing radiance L o,m(x, ωo) under the same illumina-
+tion conditions {L i,m(x, ωi )}. The inverse diffusion problem is thus
+formulated as ﬁnding the values of κ(x) and μ(x) throughout the
+volume that minimize the objective function
+
+(cid:2)
+
+(cid:2)
+
+M(cid:4)
+
+(cid:5)
+
+m=1
+
+A
+
+(cid:4)
+
+L o,m(x, ωo) − L R
+
+o,m(x, ωo)
+
+dA(x) dωo.
+
+(4)
+
+(cid:6)
+
+2
+
+To obtain multiple scattering components from image measure-
+ments, a cross-polarization approach as described in Debevec et al.
+[2000] may be employed. We instead utilize an image acquisition
+scheme described in Section 4.1 that minimizes the presence of
+single scattering and surface reﬂections in the image data.
+
+4.
+
+INVERSE DIFFUSION ALGORITHM FOR
+ACQUISITION OF MATERIAL MODEL
+
+To acquire the volumetric material model of a real object, we obtain
+images of the object under different illumination conditions and
+then solve the inverse problem of light diffusion on the multiple
+scattering components. In solving the inverse diffusion problem,
+we search for the volumetric model (μ(x), κ(x)) whose forward
+diffusion solution is most consistent with the acquired images. This
+procedure is described in the following subsections.
+
+4.1 Data Capture
+
+We use a Canon 30D digital camera with a 17–45 mm lens to record
+images of a material sample that is illuminated by an Optoma DLP
+projector with a 4500:1 contrast ratio. In our experiments, the ma-
+terial samples are all block-shaped and represented as a regular grid
+with n × m × l sample points (n ≥ m ≥ l) on the grid nodes. As
+shown in Figure 3, we utilize two setups depending on the thickness
+of the sample. In both setups, we position the sample so that one of
+the n × m faces is perpendicular to the optical axis of the projector.
+
+Modeling and Rendering of Heterogeneous Translucent Materials Using the Diffusion Equation
+
+•
+
+9:5
+
+Camera
+
+Material Sample 
+
+Projector
+
+Camera
+
+(a)
+
+(b)
+
+Material Sample 
+
+Projector
+
+Fig. 3. Two experimental setups used for data acquisition. (a) Backlighting
+setup for thin material samples. (b) Frontlighting for thick material samples.
+
+For thin material samples (n, m (cid:6) l), the camera is placed facing
+the sample from the opposite side, such that the sample is imaged
+with backlighting. For thick material samples with little transmis-
+sion of light through the volume, we position the camera beside the
+projector as done in Peers et al. [2006]. We will refer to the side of
+the sample facing the camera as the front face.
+
+The camera and projector are calibrated prior to image acquisi-
+tion. For radiometric calibration of the camera, we apply the method
+of Debevec and Malik [1997]. Geometric calibration of both the
+camera and projector is done with the technique in Zhang [1999],
+where for the projector we project a chessboard pattern onto dif-
+ferent planes. The white balance of the camera is calibrated with
+respect to the projector, based on the projection of a white image
+onto a Macbeth Color CheckerTM chart with known albedos. The
+color chart is also used in measuring the black level of the projector.
+To avoid interference effects from the projector’s color wheel, we
+utilize exposure times of at least 1/30 second.
+
+In illuminating the sample, we subdivide the face that receives
+direct lighting into 4 × 4 regions, and separately project light onto
+each region while capturing an image sequence of the complete
+sample with a ﬁxed aperture and variable exposure times ranging
+from 1/30 to 8 seconds. Using the method in Debevec and Malik
+[1997], we construct an HDR image from the image sequence for
+each illumination condition. Vignetting effects from the projector
+are minimized by illuminating the sample using only the center of
+the projector images. This capture process typically takes about half
+an hour.
+
+With this capture process, we obtain images of multiple scattering
+data. In the thin-sample setup, the back-lighting is assumed to scatter
+multiple times before exiting from the front face, such that captured
+images contain only multiple scattering. In the setup for thick sam-
+ples, we utilize image data only from surface points that are not di-
+rectly illuminated by the projector. The appearance of these points is
+considered to result only from multiple scattering. Since the projec-
+tor and camera are aligned perpendicularly to the material sample in
+both conﬁgurations, we can disregard the Fresnel transmittance ef-
+fects on the measured multiple scattering, and drop the dependence
+on ωo in Equation (4). For all examples in this paper, we follow
+[Jensen et al. 2001; Tong et al. 2005] and assume that the refraction
+index of all materials η is 1.3. For Equation (2) and Equation (3),
+this value of η is used to derive the constant C = 2.1489.
+
+Table I. Conjugate Gradient Algorithm for Minimizing f M
+
+Set initial material properties: (cid:7)κ0, (cid:7)μ0
+Set initial search direction: (cid:7)d0 = −(cid:7)z(κ0, μ0) and (cid:7)p0 = (cid:7)d0
+Repeat following steps until f M < ε
+(cid:7)
+
+(cid:8)
+
+d f M ((cid:7)κ, (cid:7)μ)
+
+, d f M ((cid:7)κ, (cid:7)μ)
+
+dκ(x)
+
+dμ(x)
+
+Compute gradient (cid:7)z(κt , μt ) =
+Set pt = −(cid:7)z(κt , μt )
+Update search direction (cid:7)dt = (cid:7)pt + β · (cid:7)dt−1, β = max(
+λ(cid:4) [ f M (((cid:7)κt , (cid:7)μt ) + λ(cid:4) (cid:7)dt )]
+Golden section search λ(cid:4) by min
+Update solution ((cid:7)κt+1, (cid:7)μt+1) = ((cid:7)κt , (cid:7)μt ) + λ(cid:4) (cid:7)dt
+
+t ((cid:7)pt −(cid:7)pt−1)
+(cid:7)pT
+(cid:7)pT
+t−1
+
+(cid:7)pt−1
+
+, 0)
+
+4.2 Volumetric Model Acquisition
+
+For each captured image and corresponding lighting condition, we
+map onto each grid node on the front and back faces its incoming
+light intensity and measured outgoing radiance. The material model
+is then acquired by solving for the scattering parameters (κ and μ) of
+each node in the volume that would result in image appearances most
+consistent with the measured data. With the M measured images of
+the material sample, we thus aim to minimize the following objective
+function:
+
+f M ((cid:7)κ, (cid:7)μ) =
+
+fm((cid:7)κ, (cid:7)μ) + λ
+
+(cid:8)∇κ(x)(cid:8)2,
+
+M(cid:4)
+
+m=1
+
+(cid:9)
+
+(cid:4)
+
+x∈V
+
+x∈A (L o,m(x) − L R
+
+where fm((cid:7)κ, (cid:7)μ) =
+o,m(x))2 measures the con-
+sistency between the measured outgoing radiance L o,m(x) from all
+front face points x and the outgoing radiance L R
+o,m(x) that is com-
+puted from the estimated scattering parameters with the illumination
+condition of image m. Note that in fm we drop the dependence on ωo
+that is present in Equation (4) because of our imaging conﬁguration.
+The vectors (cid:7)κ and (cid:7)μ represent the set of diffusion and absorption
+coefﬁcients deﬁned over all the grid nodes. Since model acquisition
+is ill-conditioned with respect to κ, we add a regularization term
+(cid:9)
+(cid:8)∇κ(x)(cid:8)2 to the objective function, weighted by a constant λ
+
+x∈V
+
+set to 1e − 5 in our implementation.
+
+To minimize f M , we employ the conjugate gradient algorithm out-
+lined in Table I. From an initialization of (cid:7)κ and (cid:7)μ, we ﬁrst compute
+the gradient of f M with respect to ((cid:7)κ, (cid:7)μ) over the set of measured
+images. The search direction is then updated with the Polak-Ribiere
+method [Press et al. 1992]. Subsequently, we perform a golden sec-
+tion search to ﬁnd the optimal step length λ(cid:4) along the search direc-
+tion. Finally, we update (cid:7)κ and (cid:7)μ using the computed gradient (cid:7)z(κ, μ)
+and λ(cid:4). These steps are iterated to update (cid:7)κ and (cid:7)μ until the objective
+function falls below a threshold set to ε = 10−4 ×
+x∈A[L o,m(x)]2
+in our implementation. This optimization is performed separately
+on the RGB channels.
+
+(cid:9)
+
+To initialize the scattering parameters in this optimization, we
+solve for the volumetric material model under the assumption that it
+is homogeneous: that is, all the grid nodes have the same μ, κ. Since
+there exist only two unknowns in this case, they can be quickly com-
+puted using the conjugate gradient procedure with user-speciﬁed
+initial values.
+
+A key step in conjugate gradient optimization is the computation
+of the f M gradient relative to the unknown κ and μ values at each
+grid node. Since the diffusion equation has no analytic solution,
+we compute the gradients numerically. A straightforward approach
+for gradient computation is to perturb each of the variables and
+obtain the resultant change in objective function value. One for-
+ward diffusion simulation would then be necessary to compute each
+gradient. Although this method is feasible for a system with few
+
+ACM Transactions on Graphics, Vol. 27, No. 1, Article 9, Publication date: March 2008.
+
+ϕ(x) + 2Cκ(x)
+
+L o,m(x) − L R
+
+o,m(x)
+
+,
+
+x ∈ A, (6)
+
+RENDERING AND EDITING
+
+(cid:8)
+
+5. POLYGRID DIFFUSION ALGORITHM FOR
+
+(cid:7)
+
+∂ϕ(x)
+
+∂n
+
+= 2C
+π
+
+9:6
+
+•
+
+J. Wang et al.
+
+parameters (e.g., a homogeneous volume), it is impractical for ar-
+bitrary heterogeneous volumes which have a large number of un-
+knowns. Speciﬁcally, model acquisition for an n × m × l grid with
+M measurements would require 2×n ×m ×l × M forward diffusion
+simulations for each iteration, clearly a prohibitive expense.
+
+4.3 Adjoint Method for Gradient Computation
+
+To signiﬁcantly expedite gradient computation, we take advantage
+of the adjoint method [Giles and Pierce 1999], a technique that has
+been widely used in optimal control [Lions 1971]. We describe here
+how to directly use the adjoint method in our application, and give
+derivation details in Appendix A.
+
+To use the adjoint method in our solution, we ﬁrst deﬁne the
+
+adjoint equation of the original diffusion equation as
+
+∇ · (κ(x)∇ϕ(x)) − μ(x)ϕ(x) = 0,
+
+x ∈ V,
+
+(5)
+
+with boundary condition deﬁned on the surface A:
+
+where (L o,m(x) − L R
+o,m(x)) is the difference between the measured
+outgoing radiance L o,m(x) from all frontal sample points x and the
+outgoing radiance L R
+o,m(x) that is computed from the diffusion equa-
+tion with the illumination condition qm of image m. Given ϕ, the gra-
+dient of f M with respect to κ and μ at each grid point is computed by
+
+d f M ((cid:7)κ, (cid:7)μ)
+
+dκ(x) =
+
+∇ϕm(x) · ∇φm(x) − 2λ(cid:14)κ(x),
+
+(7)
+
+d f M ((cid:7)κ, (cid:7)μ)
+
+dμ(x) =
+
+ϕm(x)φm(x),
+
+(cid:10)
+
+(cid:10)
+
+M(cid:4)
+
+m=1
+M(cid:4)
+
+m=1
+
+where φm(x) is determined from the diffusion equation with the
+illumination condition qm of image m.
+
+In contrast to the original diffusion equation, the adjoint method
+utilizes “virtual” illumination to deﬁne the boundary condition. This
+virtual illumination (2C/π)(L o,m(x)−L R
+o,m(x)), which may be nega-
+tive, and φ are computed from the diffusion equation using the actual
+illumination condition. With the virtual illumination, we solve the
+adjoint equation for ϕ, and then determine the gradient of f M relative
+to κ and μ using Equation (7). Using the adjoint method, only 2M
+forward diffusion simulations are needed for gradient computation.
+Because of its computational efﬁciency, the adjoint method has also
+been used in McNamara et al. [2004] for gradient computation in
+ﬂuid control.
+
+4.4 GPU-Based Diffusion Computation
+
+In model acquisition, forward diffusion simulations are used not
+only in gradient computation, but also for evaluating the objective
+function in the golden section search. To solve the diffusion equation
+on a 3D regular grid, we discretize the diffusion equation as a set of
+linear equations over the grid nodes using the FDM scheme in Stam
+[1995]:
+
+6(cid:4)
+
+j=1
+φ(v(cid:4)
+
+κ(v j )φ(v j ) − 6
+h2
+i )−φ(v(cid:4)
+j )
+
+1
+h2
+i ) + 2Cκ(v(cid:4)
+i )
+
+φ(v(cid:4)
+
+h
+
+= q(v(cid:4)
+
+i ),
+
+κ(vi )φ(vi ) − u(vi )φ(vi ) = 0,
+
+(8)
+
+ACM Transactions on Graphics, Vol. 27, No. 1, Article 9, Publication date: March 2008.
+
+where v j denotes one of six nodes directly connected to interior
+node vi . h represents the distance between two neighboring nodes.
+q(v(cid:4)
+j is
+the closest interior node to v(cid:4)
+
+i . And v(cid:4)
+i along the inward normal direction.
+
+i ) denotes the incoming radiance at boundary node v(cid:4)
+
+This linear system can be numerically solved using the relaxation
+scheme described in Stam [1995], which involves considerable com-
+putation and is the bottleneck in model acquisition. For efﬁcient
+processing, we present a GPU-based multiresolution scheme that
+simulates forward diffusion in the pixel shader on grid values of κ,
+μ, and q packed into separate 2D textures. This GPU-based method
+can be regarded as a regular-grid version of the rendering algorithm
+in Section 5, where we provide further details.
+
+In solving the diffusion equation on the GPU, we upload all the
+relevant data from main memory to texture memory, and then out-
+put the radiant ﬂuence results from the frame buffer back to main
+memory. The remaining optimization computations are all executed
+on the CPU. Despite some overhead for data transfer, an apprecia-
+ble overall reduction in computation costs is obtained through GPU
+acceleration.
+
+After acquiring a material model from a real sample, a volume of
+arbitrary shape can be formed with this material using the mapping
+techniques described in Chen et al. [2004] and Porumbescu et al.
+[2005]. These approaches map the material properties into a shell
+layer at the object surface, and construct the inner core volume by
+synthesizing a user speciﬁed material texture or interpolating from
+the inner boundary of the shell layer using mean value coordinates
+[Ju et al. 2005].
+
+With a given lighting condition and the material properties deﬁned
+throughout the object volume, the subsurface scattering effects from
+the object can be rendered in a three-pass process. In the ﬁrst pass,
+we compute the incoming radiance on the object surface, based on
+shadow map visibility for directional or point lighting, or from pre-
+computed radiance transfer techniques [Sloan et al. 2002; Ng et al.
+2003] for environment lighting. In the second pass, we render the
+multiple scattering effects by simulating light diffusion inside the
+object volume with the incident radiance on the surface as the bound-
+ary condition. Then, a single scattering term and surface specular re-
+ﬂections from the incoming illumination is computed. The ﬁnal ren-
+dering result is obtained by adding all of these components together.
+To efﬁciently solve for light diffusion on the GPU, we extend
+the FDM scheme on regular volumetric grids to handle a polygrid
+deﬁned in the object volume. A polygrid is a grid with regular 6-
+connections among evenly distributed nodes inside the volume, and
+with boundary nodes that are aligned to the object surface and are
+each connected to one interior node along the inward normal di-
+rection. With the polygrid representation of the object volume, we
+discretize the light diffusion equation and its boundary condition
+into a system of linear equations:
+(cid:12)
+6(cid:4)
+
+6(cid:4)
+
+(cid:11)
+
+w ji κ(v j )φ(v j ) −
+
+κ(vi )φ(vi ) − u(vi )φ(vi ) = 0,
+
+j=1
+φ(v(cid:4)
+
+i ) + 2Cκ(v(cid:4)
+i )
+
+φ(v(cid:4)
+
+j=1
+
+w ji
+i ) − φ(v(cid:4)
+j )
+d ji
+
+= q(v(cid:4)
+
+i ),
+
+(9)
+
+where v j denotes one of six nodes directly connected to interior
+node vi with a weight w ji for the Laplacian operator, as described
+in Appendix B. d ji represents the distance between a boundary node
+i and the closest interior node v(cid:4)
+v(cid:4)
+j along the inward normal direction,
+and q(v(cid:4)
+
+i ) denotes the incoming radiance at surface node v(cid:4)
+i .
+
+Modeling and Rendering of Heterogeneous Translucent Materials Using the Diffusion Equation
+
+•
+
+9:7
+
+Polycube
+
+Object 
+Boundary
+
+Boundary Node
+
+Interior
+Node
+
+Removed 
+
+Node
+
+)a(
+
+)b(
+
+)c(
+
+(d)
+
+(e)
+
+(f)
+
+)g(
+
+)h(
+
+Fig. 4. A 2D illustration of polygrid construction. (a) Creating a polycube that approximates the object. (b) Generating a grid in the polycube. (c) Modifying
+the corner nodes. (d) Projecting boundary nodes to the object surface. (e) Mapping nodes connected to boundary nodes to the object volume. (f) Computing
+the ﬁnal polygrid in the object volume. (g) and (h) are two schemes used to modify irregular corner nodes on 2D slices of the grid.
+
+In the remainder of this section, we describe how to construct the
+polygrid of an object volume and how to solve the diffusion equation
+on the GPU. We also present a hierarchical scheme for accelerating
+GPU evaluation of light diffusion on a polygrid.
+
+5.1 Polygrid Construction
+
+The steps in constructing a polygrid model of the object volume
+are shown in Figure 4. We ﬁrst manually assemble a polycube
+[Tarini et al. 2004] of similar topology that approximates the vol-
+ume. Within the cubes, we form regular grids of equal resolution,
+and connect the grids between adjacent cubes. The interior nodes
+directly linked to boundary nodes on the edges or corners of the cube
+have connectivity to multiple boundary nodes, which may lead to
+artifacts in the light diffusion computation. We address this prob-
+lem by removing certain nodes and adjusting the links to obtain
+single connections to boundary nodes. As shown in Figures 4 (g)
+and (h), we examine axis-aligned 2D slices of the grid and utilize
+different grid adjustment schemes depending on the grid convex-
+ity in each slice. This procedure yields a polygrid deﬁned in the
+polycube.
+
+We then map this polygrid to the object volume. To ﬁnd a map-
+ping, we ﬁrst determine a projection of the polycube surface onto
+the object surface, using a PolyCube-Map [Tarini et al. 2004] or
+other mesh cross-parameterization method [Kraevoy and Sheffer
+2004; Schreiner et al. 2004]. The boundary nodes of the polygrid
+
+are then mapped to the object surface and adjusted to obtain an
+even distribution [Turk 1992]. After that, the interior nodes directly
+connected to the boundary nodes are placed within the object vol-
+ume at a distance d along the inward normal directions, where d is
+one-tenth the average distance between connected boundary nodes
+on the object surface. The close placement of these nodes to the
+boundary nodes is intended for accurate handling of the boundary
+condition. The remaining interior nodes are then positioned within
+the volume in a manner that minimizes the variance of distances
+i ∈ interior Var({(cid:8)vi − v j (cid:8) : j () i}),
+between connected nodes: min
+where Var(·) denotes the variance of a set of scalars, vi is the 3D
+position of node i, and j () i indicates that node j is connected
+to node i. Figure 4 illustrates this construction procedure in 2D.
+In principle, a conformal mapping [Gu and Yau 2003] should be
+used to preserve the orthogonality of the original grid connections
+and minimize distortion (see Appendix B). However, this remains
+a challenging problem for 3D volumes, so in practice we utilize the
+presented variance minimization scheme which we have found to
+yield acceptable solutions.
+
+(cid:9)
+
+This construction scheme maintains the regular connectivity of
+nodes and produces locally uniform distributions of interior grid
+nodes in the object volume. As exempliﬁed in Figure 5, all the inte-
+rior grid nodes of the polygrid are 6-connected, and each boundary
+node is connected to exactly one interior node. The connectivity
+between the boundary grid nodes is not used in rendering and can
+be ignored in the diffusion computation.
+
+ACM Transactions on Graphics, Vol. 27, No. 1, Article 9, Publication date: March 2008.
+
+9:8
+
+•
+
+J. Wang et al.
+
+Fig. 5. The polygrid constructed in a 3D model.
+
+z
+x
+
+y
+
+Polygrid
+
+Packed 2D Texture
+
+Fig. 6. Flattening a polygrid into a packed 2D texture.
+
+5.2 GPU-Based Polygrid Diffusion Computation
+
+With the constructed polygrid, we build a system of linear equations
+for light diffusion. The material properties for each grid node are
+sampled from the object volume, and the incoming illumination is
+computed for boundary nodes. Although a general purpose GPU-
+based linear system solver could be used for computation [Kr¨uger
+and Westermann 2003; Bolz et al. 2003], we have designed a more
+efﬁcient GPU implementation that is speciﬁc to diffusion computa-
+tion on a polygrid.
+
+In this method, the polygrid material parameters are packed into a
+set of 2D textures for computation on the GPU. For efﬁcient render-
+ing, the textures must be packed such that the connected neighbors
+of each node are easily accessible. Towards this end, we organize
+each texture according to the positions of the polygrid nodes within
+the original polycube. We traverse the cubes in the polycube in scan-
+line order, and ﬂatten the grid of each cube as shown in Figure 6.
+The grid in each cube is divided into 2D x-y slices, which are each
+treated as a texture block and ordered in the texture by increasing z
+value. In packing the texture, we retain the empty positions of grid
+nodes that were previously removed, so that the cubes have slices
+of equal size. Two 2D textures Tκ and Tμ are created for the cor-
+responding scattering parameters, and for the iterative computation
+we maintain two swap radiance buffers I A and IB that are organized
+in the same manner as Tκ and Tμ. In addition, we precompute the six
+weights for the Laplacian operator, then similarly pack this data into
+two textures Tw1 and Tw2. The incoming radiance is also packed into
+a 2D texture Tl according to an access order that will be described
+later.
+
+After texture packing, we solve the diffusion equations on the
+polygrid using the relaxation scheme in Stam [1995]. Starting from
+the initial radiant ﬂuence values φ0, we iteratively update the ra-
+diant ﬂuence values in the two radiance buffers until convergence.
+With the radiant ﬂuence at each node corresponding to one pixel in
+
+ACM Transactions on Graphics, Vol. 27, No. 1, Article 9, Publication date: March 2008.
+
+the radiance buffer, this computation can be executed in the pixel
+shader with parameters accessed from the textures. To reduce texture
+fetches in the pixel shader, we store φ(cid:4) = κφ in the radiance buffer.
+In each step, the radiant ﬂuence values are updated as follows:
+
+φ(cid:4)
+n+1(vi ) =
+
+φ(cid:4)
+n+1(v(cid:4)
+
+i ) =
+
+(cid:9)
+
+1≤ j≤6
+
+w ji (vi )φ(cid:4)
+(cid:9)
+
+n(v j )
+
+μ(vi )/κ(vi ) +
+
+,
+
+w ji (vi )
+
+q(v(cid:4)
+
+1≤ j≤6
+j )d + 2Cκ 2(v(cid:4)
+i )φ(cid:4)
+i )κ(v(cid:4)
+j )
+
+i )κ(v(cid:4)
+j )d + 2Cκ(v(cid:4)
+
+i )κ(v(cid:4)
+κ(v(cid:4)
+
+n(v(cid:4)
+j )
+
+,
+
+n+1.
+
+where right-hand-side operators of the form f (·) involve a texture
+access, and the radiance buffer for φ(cid:4)
+n is used as the texture while
+the other radiance buffer is used as the rendering target for φ(cid:4)
+
+As shown in Figure 7, there exist three types of nodes/pixels in the
+radiance buffer, each with different texture access patterns for reach-
+ing connected nodes. We render each type of node using a different
+geometric primitive, represented by colored regions in the ﬁgure.
+For a (blue) node that lies in the interior of a texture block, four of
+its connected neighbors in the polygrid are also adjacent neighbors
+in the 2D texture, while the other two neighbors can be found with
+the same offset value in other texture blocks. We update the values
+of these nodes by rendering a quadrilateral with the texture offsets of
+the two nonadjacent neighbors as vertex attributes. After rasteriza-
+tion, this offset information can be interpolated from the vertices to
+each pixel in the quad. In a similar manner, the (green) nodes on each
+texture block edge are rendered with a line, where three neighbors
+are adjacent in the texture, and the texture offsets of the other three
+are stored as line vertex attributes. The (red) nodes of each texture
+block corner are rendered with points, with the texture offsets of
+all six neighbors stored as vertex attributes. Slices that contain re-
+moved nodes can also be rendered using these three primitives. All
+of these geometric primitives and their vertex attributes can be pre-
+computed and loaded into graphics memory before rendering. Since
+the surface boundary nodes and the interior nodes are processed
+differently, we render their corresponding geometric primitives in
+two separate passes with different pixel shaders. After completing
+this computation, we calculate the output radiance on the surface
+by updating the boundary nodes in the radiance buffer as L(v(cid:4)
+i ) =
+Ft (xo, ωo)[φ(cid:4)(vi )−q(vi )κ(vi )]/[2πκ(vi )]. These boundary node val-
+ues are then used as a texture for surface vertices in the ﬁnal pass.
+With this packing and rendering scheme, the radiant ﬂuence val-
+ues are updated with ten texture fetches for interior nodes and
+ﬁve texture fetches for surface nodes. Compared to Kr¨uger and
+Westermann [2003] and Bolz et al. [2003], our scheme avoids extra
+texture storage for node connectivity information and dependent tex-
+ture accesses in rendering. We acknowledge that alternative schemes
+for packing and rendering are possible and may be better, but we
+nevertheless have obtained good performance with this method.
+
+5.3 Hierarchical Acceleration
+
+For greater efﬁciency in computing light diffusion, we employ a
+hierarchical scheme to accelerate rendering with the polygrid. In
+this scheme, we ﬁrst construct a multiresolution polygrid in the
+object volume. Starting from the original polygrid, the positions
+and material properties of nodes at successively coarser levels are
+determined by averaging the positions and material properties of
+its eight children at the next ﬁner level. For nodes whose children
+contain removed nodes, we normalize the result by the number of
+existing children. Before rendering, we pack the material properties
+at each resolution and generate texture pyramids for Tκ , Tμ, Tw1,
+and Tw2. Pyramids need not be generated for the radiance buffers
+
+Modeling and Rendering of Heterogeneous Translucent Materials Using the Diffusion Equation
+
+•
+
+9:9
+
+A Slice in Polygrid
+
+Texture Blocks
+
+(a)
+
+Texture Blocks
+
+(b)
+
+Fig. 7. Geometric primitives for nodes with different texture access patterns. (a) Three types of nodes, rendered using different geometric primitives. Each
+region is rendered by one primitive. (b) Geometric primitives for some texture blocks with removed nodes.
+
+scheme. Also, V-cycle multigrid algorithms require extra texture
+storage for residual and temporary radiant ﬂuence values in each
+level. If all grid nodes are used in light diffusion, our hierarchical
+solution algorithm can be regarded as a simpliﬁed N-cycle multigrid
+scheme without the V-cycles for each resolution [Press et al. 1992].
+A favorable property of the light diffusion algorithm is that the
+coherence between frames can be exploited to facilitate rendering.
+For applications in which the lighting or material changes gradually,
+the rendering result of the last frame provides an excellent initial-
+ization for the current frame. With good initial values, the number
+of iteration steps can be signiﬁcantly reduced.
+
+5.4 Editing
+
+With this real-time rendering system, the acquired volumetric ma-
+terial model can be interactively edited with real-time feedback on
+the modiﬁed appearance. To illustrate this capability, we developed
+a simple editing system shown in Figure 9. In addition to painting
+new values for μ(x) and κ(x), various ways to modify existing μ(x)
+and κ(x) are supported. The user can directly adjust μ(x) and κ(x)
+by multiplying them with or adding them to user-supplied constants.
+Alternatively, the user can modulate the μ and κ values within a pat-
+tern mask using a texture. With our volumetric representation, users
+can also modify a material at speciﬁc depth levels. For a demon-
+stration of a material editing session, please view the supplemental
+video.
+
+κ and T (cid:4)
+
+In our system, all editing operations are executed as pixel oper-
+ations on the GPU. We maintain extra buffers T (cid:4)
+μ of the κ
+and μ textures as rendering targets for editing. In each frame, T (cid:4)
+κ
+and T (cid:4)
+μ are modiﬁed by user-speciﬁed operations, and then swapped
+to Tκ and Tμ for rendering. To support editing operations on local
+regions, we store the positions of grid nodes in a texture Tp. Then
+when the user selects a region on the screen for editing, we com-
+pute the screen projection of each grid node based on its position in
+the editing shader, and execute the editing operations only for the
+nodes within the user-speciﬁed local region. In material editing, we
+do not use the adaptive scheme, but instead take advantage of the
+coherence between frames to reduce rendering computation, which
+allows for more complex material editing operations to be executed
+on the GPU.
+
+ACM Transactions on Graphics, Vol. 27, No. 1, Article 9, Publication date: March 2008.
+
+Fig. 8. A 2D illustration of the adaptive hierarchical technique used in
+diffusion computation. In this scheme, we ﬁx the values of the blue nodes
+in the middle level after initialization from the coarsest level. The blue and
+green nodes at the ﬁnest resolution are also ﬁxed after initialization. Nodes
+in the gray region are not used in the diffusion computation and are removed
+from textures.
+
+I A and IB, which can simply be reused for computation at each
+level. During rendering, we ﬁrst solve the diffusion equations at the
+coarsest grid level, and then use the computed radiant ﬂuence at
+each node as initializations for its children nodes at the next ﬁner
+level. This process iterates until a solution at the original polygrid
+resolution is obtained.
+
+The hierarchical algorithm can be accelerated by employing an
+adaptive scheme in which light diffusion is computed to different
+resolutions at different depths in the volume. Since material vari-
+ations deeper inside the object volume have more subtle effects
+on surface appearance, it is sufﬁcient to approximate light diffu-
+sion at deeper nodes with coarser-resolution solutions. As shown in
+Figure 8, after we obtain the solution at a coarse resolution and copy
+it to a ﬁner resolution, the radiant ﬂuence values at nodes below a
+certain depth are ﬁxed, while the nodes closer to the boundary are
+updated. In our implementation of this adaptive scheme, the com-
+puted resolution at different depth levels is given by the user. Texture
+blocks whose nodes are not used in computation at a given level are
+removed to save on texture storage.
+
+In our current implementation, we do not use the V-cycle multi-
+grid algorithm to speed up light diffusion computation, since the
+multigrid algorithm cannot easily be incorporated into our adaptive
+
+9:10
+
+•
+
+J. Wang et al.
+
+Fig. 9. User interface for material editing.
+
+6. EXPERIMENTAL RESULTS
+
+We have implemented our material acquisition and rendering sys-
+tem on a PC conﬁgured with an Intel Core2Duo 2.13GHZ CPU,
+4GB memory, and a Geforce 8800GTX graphics card with 768MB
+graphics memory. The GPU-based light diffusion and rendering
+algorithm was implemented in the OpenGL shading language.
+For the GPU-based light diffusion computation used in model ac-
+quisition, we represent all parameters and computation results as
+32-bit ﬂoating-point values for high precision. For light diffusion
+computations on the polygrid, each channel of κ and μ is quan-
+tized to 8-bits and stored together in 24-bit textures. We use 16-bit
+ﬂoating-point values in rendering computations, which provides suf-
+ﬁcient precision in appearance.
+
+6.1 Model Acquisition
+
+Figure 10 displays the material samples used in our experiments
+and the acquired κ and μ values along the surfaces of the material
+volumes. For these samples, the grid resolutions, lighting conﬁgu-
+rations, and computation times are listed in Table II. We set the grid
+resolutions according to sample size and the material variability in
+the volume, where higher resolutions are needed to preserve the rich
+material variations in detailed volumes. With GPU acceleration, the
+reconstruction algorithm gains a ﬁfty-fold increase in speed over a
+CPU-based implementation on the same platform. Because of the
+signiﬁcant surface reﬂection of the marble sample, we obtain an
+approximate measure of its reﬂectance component with the front-
+lighting setup and the method in Tong et al. [2005], which records
+one image of the sample under uniform lighting. The diffuse surface
+reﬂectance term is obtained by subtracting the multiple scattering
+contribution from it.
+
+ACM Transactions on Graphics, Vol. 27, No. 1, Article 9, Publication date: March 2008.
+
+In theory, the diffuse BSSRDF should be densely sampled to
+ensure that the acquired material volume generates accurate sur-
+face appearances for arbitrary illumination conditions. However,
+because of the redundancy in BSSRDF data, we have found that
+models acquired from sparsely sampled images provide good re-
+sults in practice. Note that each image here corresponds to a 2D
+slice of the 4D BSSRDF.
+
+(cid:9)
+
+(cid:9)
+
+To examine the relationship between the number of measure-
+ments and model quality, we applied our inverse diffusion algo-
+rithm on all material samples shown in Figure 10. We subdivide
+the face that receives direct lighting into n × n regions that are
+each separately illuminated. For different n, we acquired n × n
+images under different illumination as input to our algorithm. Nor-
+malized errors were then computed as E =
+d (xi , x j ) −
+Rd (xi , x j )]2/
+is
+the diffuse
+BSSRDF captured from the original volume, and R(cid:4)
+d is that com-
+puted from the acquired material volume. Figure 11 displays the
+errors of the material models acquired from four material samples
+with different numbers of measurements, n = 1, 2 . . . 8, which in-
+dicates that for 16 or more images, the error is comparable to that
+reported for the factorized BSSRDF representation in Peers et al.
+[2006]. In our current implementation, we use 16 images under dif-
+ferent illumination settings for model acquisition, which provides
+faithful rendering results exempliﬁed in Figure 12.
+
+xi ,x j ∈A[Rd (xi , x j )]2, where Rd
+
+xi ,x j ∈A[R(cid:4)
+
+Figure 13 illustrates the role of regularization in optimization. The
+regularization term adds a smoothness constraint to κ in solving the
+nonlinear optimization of the acquisition step, while the coefﬁcient
+λ is used to adjust the effects of the regularization term in non-
+linear optimization. Note that without a proper weight, the resulting
+material model yields an inaccurate ﬁt to the input data. Typically in
+practice, λ is experimentally set by the user. In our implementation,
+we found that 1.0e−5 works well for all samples shown in the paper.
+
+Modeling and Rendering of Heterogeneous Translucent Materials Using the Diffusion Equation
+
+•
+
+9:11
+
+Wax I
+
+Wax II
+
+Marble  
+
+ArtificialStone
+
+Fig. 10. Acquired material samples. Top row: real image of sample. Middle row: reconstructed κ along the surface. Bottom row: reconstructed μ along the
+surface. The values of κ and μ are scaled for better viewing.
+
+Wax I
+
+Marble
+
+Wax II
+
+ArtificialStone
+
+Error
+
+0.027
+
+0.024
+
+0.021
+
+0.018
+
+0.015
+
+0.012
+
+0.009
+
+0.006
+
+0.003
+
+0
+
+1
+
+4
+
+9
+
+16
+
+25
+
+36
+
+49
+
+64
+
+Number of 
+
+Measurements
+
+Fig. 11. Model quality vs. number of measurements. Errors of BSSRDFs computed from material volumes acquired from real material samples using different
+numbers of measurements.
+
+Table II. Acquisition Settings for the Different Materials
+
+Computation
+
+Illumination
+
+Time (hrs)
+
+Material
+Wax I
+Wax II
+Marble
+Artiﬁcial Stone
+
+Grid Resolution
+130 × 53 × 37
+140 × 75 × 48
+256 × 256 × 20
+128 × 128 × 41
+
+back
+front
+back
+back
+
+2.0
+4.0
+11.0
+3.0
+
+surface. Figures 14(a) and (b) illustrate the properties of a material
+model acquired from 16 measurements of a synthetic volume. In
+Figure 14(c), we compare the the BSSRDFs generated from the ac-
+quired material model to the BSSRDFs rendered from the synthetic
+volume. The acquired material model generates a BSSRDF that can
+faithfully serve as an appearance model. On the other hand, it also
+lacks the precision needed in some applications such as solid texture
+mapping, where deep volumes may become exposed on the surface.
+
+Although our approach effectively acquires a detailed appear-
+ance model of subsurface scattering, it cannot determine the actual
+material properties and their variations in the volume, especially
+deep within the volume. This results from object appearance being
+relatively insensitive to the material composition far beneath the
+
+6.2 Rendering and Editing
+
+Table III lists the polygrid resolution at the ﬁnest level, the texture
+size, and rendering performance for all the examples shown in the
+
+ACM Transactions on Graphics, Vol. 27, No. 1, Article 9, Publication date: March 2008.
+
+9:12
+
+•
+
+J. Wang et al.
+
+Fig. 12. Comparison of acquired models to ground truth. Top row: Illumination settings. Front lighting is applied for WaxII while back lighting is used for
+the other material samples. Middle row: Rendering results of volumes acquired from 16 images. Bottom row: Real images of the materials.
+
+(a)
+
+(b)
+
+(c)
+
+(d)
+
+(e)
+
+Fig. 13. Effect of the regularization parameter on optimization. Top row: result acquired with an over-weighted regularization term (λ = 1.0e − 4). Middle
+row: result acquired with proper regularization term (λ = 1.0e − 5). Bottom row: result acquired with an under-weighted regularization term (λ = 1.0e − 6).
+For each row, (a) is one of the captured images used for optimization. (b) is the image computed from the acquired model with the illumination condition of
+image (a). In (c), we compare the values along the 1d scanline in (a) and (b), where the red line represents ground truth and the blue line represents computed
+values. (d) and (e) show acquired κ and μ along the top surface. The values of κ and μ are scaled for better viewing.
+
+ACM Transactions on Graphics, Vol. 27, No. 1, Article 9, Publication date: March 2008.
+
+Modeling and Rendering of Heterogeneous Translucent Materials Using the Diffusion Equation
+
+•
+
+9:13
+
+Z=1
+
+Z=4
+
+Z=7
+
+Error
+
+0.025
+
+0.020
+
+0.015
+
+0.010
+
+0.005
+
+0.000
+
+Number of 
+
+Measurements
+
+0
+
+10
+
+20
+
+30
+
+40
+
+50
+
+60
+
+(a)
+
+(b)
+
+(c)
+
+Fig. 14. Accuracy in material model acquisition. (a) Values of κ for the acquired material model (left) at different depth layers below the front face, and the
+ground truth (right). (b) Values of μ for the acquired material model (left) at different depths, and the ground truth (right). (c) Errors of BSSRDFs computed
+from acquired material model using different numbers of measurements. The material model shown in (a) and (b) is acquired from 16 measurements.
+
+Table III. Rendering Conﬁguration and Performance
+
+For the rendering times, ti indicates the time for the ith rendering
+pass. The ﬁnal speed is measured both without frame coherence
+and with frame coherence (in parentheses).
+
+Polygrid
+Resolution
+
+Model
+Bunny 253 × 16 × 16 × 16
+17 × 32 × 32 × 32
+Bust
+108 × 24 × 24 × 24
+Bird
+36 × 12 × 12 × 12
+Hole
+81 × 12 × 12 × 12
+Snail
+
+Size (MB)
+
+Texture Rendering Time Final Speed
+
+t1/t2/t3 (ms)
+3.9/23.2/11.5
+2.5/19.9/7.0
+4.0/48.3/13.0
+1.5/8.9/2.1
+1.6/14.0/3.1
+
+(fps)
+
+25.9 (34.7)
+34.0 (52.7)
+15.3 (24.0)
+80.0 (160.4)
+53.4 (106.7)
+
+24.9
+18.9
+39.6
+4.8
+18.9
+
+paper. The polygrid resolution is the product of the number of cubes
+in the polycube and the grid resolution in each cube. The polygrid
+resolution is determined by the resolution of the material volume
+such that each material voxel corresponds to one grid cell in the
+object volume. Our experiments show that the ploygrid model works
+well for materials with different scattering properties.
+
+The texture size includes all textures used for light diffusion com-
+putation. In this table, the rendering times are broken down into the
+three passes, for incident light computation (t1), light diffusion (t2),
+and ﬁnal rendering (t3). For the overall rendering speed, the ﬁrst
+number reports the frame rate without frame coherence (i.e., radi-
+ances initialized to zero), while the second number in parentheses
+gives the speed with frame coherence. In rendering, we use the am-
+bient occlusion to determine visibility for environment lighting, and
+the shadow buffer for visibility of local lighting. A three-level poly-
+grid with the adaptive scheme is used in the measurements for this
+table. In the ﬁnal rendering step, specular reﬂections on the surface
+are computed with a user-speciﬁed Ward model, and single scatter-
+ing is ignored. For the model with marble material, the measured
+surface reﬂectance term is also added to the multiple scattering in
+this step.
+
+(cid:9)
+
+Figure 15 charts the convergence speed of the different render-
+ing methods on the hole model. Here, the error of a result L is
+x∈A L 0(x)2, where L 0 is the
+computed as
+converged result precomputed without hierarchical and adaptive ac-
+celeration. A multi-resolution polygrid with three levels is used in
+the hierarchical schemes. The polygrid for the hole model contains
+
+x∈A (L(x) − L 0(x))2/
+
+(cid:9)
+
+36 cubes, and the grid resolution in each cube at the ﬁnest level
+is 12 × 12 × 12. For the hierarchical method without the adaptive
+scheme, we use all grid nodes in the light diffusion computation. In
+the adaptive scheme, we manually specify the depth of nodes that
+are involved in computing each resolution such that the ﬁnal error
+is less than 0.5%. It can be seen that the hierarchical scheme can
+substantially improve light diffusion performance on the polygrid.
+With the adaptive scheme, the computation is further accelerated
+(a two-fold speedup in this case) to generate a result with an error
+below a user-speciﬁed threshold.
+
+Figure 16 compares images of a bunny model rendered with
+the polygrid diffusion algorithm and the result rendered by photon
+mapping. The volumetric material applied to the bunny shown in
+Figures 16(a)–(d) is modeled by the user, while the volumetric ma-
+terial shown in Figures 16(e) and (f) is edited from captured marble
+volume. All results are rendered under directional lighting, and only
+multiple scattering is considered. As shown in the ﬁgure, visually
+faithful results can be generated with our method. The small dis-
+crepancy on the bunny ear is caused by the distortion of the polygrid
+in that area.
+
+Figures 17 (a) and (b) show rendering results for a bust model
+whose volumetric material properties are acquired from a marble
+sample, and a hole model generated with acquired wax material.
+Complex surface appearances from subsurface scattering and vol-
+umetric material variations are well preserved with our volumetric
+appearance model.
+
+In Figure 18, a bird model is rendered with a reconstructed wax
+material and an artiﬁcial stone material. Results are shown with
+different viewing and lighting directions. The heterogeneity beneath
+the surface is well handled in our modeling and rendering technique.
+Rendering results of a bunny with different translucent materials
+edited by the user are shown in Figure 19. Both the local scattering
+properties of the material and their distributions are modiﬁed in
+these cases. With the volumetric material model, editing of physical
+attributes can be done in an intuitive manner. Additional editing
+results are exhibited in Figure 1.
+
+Finally, we display the rendering result of a snail in Figure 20.
+The volumetric material properties of the snail body are designed
+by an artist using our editing tool. The artist also painted the opaque
+snail shell.
+
+ACM Transactions on Graphics, Vol. 27, No. 1, Article 9, Publication date: March 2008.
+
+9:14
+
+•
+
+J. Wang et al.
+
+Error (%)
+
+7.50
+7.00
+6.50
+6.00
+5.50
+5.00
+4.50
+4.00
+3.50
+3.00
+2.50
+2.00
+1.50
+1.00
+0.50
+0.00
+
+Single Resolution Scheme
+
+Hierarchical Scheme
+
+Adaptive Hierarchical Scheme
+
+0.1
+
+30 60 90 120 150 180 210 240 270 300 330 360 390 420 450
+
+Amount of 
+Computation
+
+Fig. 15. Convergence speed of the three schemes. The X axis represents convergence speed in terms of 100K’s of nodes that are processed.
+
+Fig. 16. Comparison of the polygrid based diffusion algorithm to photon mapping. (a)(c)(f) Results rendered by the polygrid-based diffusion algorithm.
+(b)(d)(g) Results rendered by photon mapping.
+
+ACM Transactions on Graphics, Vol. 27, No. 1, Article 9, Publication date: March 2008.
+
+Modeling and Rendering of Heterogeneous Translucent Materials Using the Diffusion Equation
+
+•
+
+9:15
+
+Fig. 17. Rendering results of the bust and the hole models with materials acquired from real samples. (a)(b) The bust model rendered with marble material.
+(c)(d) The hole model rendered with wax.
+
+Fig. 18. Rendering results of a bird model with different materials. (a)(b) With wax material. (c)(d) With artiﬁcial stone material.
+
+Fig. 19. Rendering results of a bunny model. (a) Constructed from an acquired wax material. (b–d) Edited with our system by a user.
+
+Fig. 20. The rendering result of a snail with local lighting. The translucent material of the snail body was designed using our editing tool, while the snail shell
+was modeled and rendered as an opaque surface.
+
+ACM Transactions on Graphics, Vol. 27, No. 1, Article 9, Publication date: March 2008.
+
+9:16
+
+•
+
+J. Wang et al.
+
+7. CONCLUSION
+
+In this article, we proposed efﬁcient techniques based on the
+diffusion equation for modeling and rendering heterogeneous
+translucent materials. A practical scheme is presented for ac-
+quiring volumetric appearance models from real material sam-
+ples, and for rendering the appearance effects of multiple scat-
+tering in real time. With this method, a user can easily edit
+translucent materials and their volumetric variations with real-time
+feedback.
+
+In rendering, the FDM scheme used in this article can be re-
+garded as an approximate solution for arbitrary-shaped object vol-
+umes. With this approximation, we obtain realistic rendering results
+and real-time performance. For objects with ﬁne geometric detail
+or complex topology, however, the presented polygrid construc-
+tion scheme may produce large distortions in some regions, which
+can lead to rendering artifacts. We intend to address this issue in
+future work by examining better methods for mesh and volume
+parameterization.
+
+Another problem we plan to investigate is acquisition of the single
+scattering effects and phase functions of heterogeneous translucent
+materials. In addition, we would like to extend our rendering algo-
+rithm to real-time deformation of translucent objects.
+
+APPENDIX
+
+A. Adjoint Method for the Inverse
+
+Diffusion Problem
+
+In the following, we show the deduction of the adjoint method for
+M = 1. Generalization to larger values of M is straightforward.
+
+The adjoint function is the Lagrangian multiplier ϕ1(x) in the
+
+following augmented objective function:
+
+˜f1( (cid:7)μ, (cid:7)κ; φ1, ϕ1) = f1( ¯μ, ¯κ) −
+
+ϕ1(x) {∇ · [κ(x)∇φ1(x)]
+
+(cid:2)
+
+V
+
+− μ(x)φ1(x)} dV,
+(cid:5)
+(cid:6)
+2
+
+(cid:3)
+
+A
+
+o,1(x)
+
+dA + λ
+
+L o,1(x) − L R
+
+(cid:8)∇κ(cid:8)2 dV .
+where f1( (cid:7)μ, (cid:7)κ) =
+From the boundary condition of Equation (2) and Equation (3), we
+o,1(x) = (φ1(x) − q1(x)) /2π, where x ∈ A. The adjoint
+see that L R
+equation is the equation for ϕ1(x) such that ∂ ˜f1/∂φ1 = 0. By deﬁni-
+tion, the change in ∂ ˜f /∂φ1 for a small perturbation δφ1 of φ1 is the
+linear component of the difference ˜f1( (cid:7)μ, (cid:7)κ; φ1, ϕ1) − ˜f1( (cid:7)μ, (cid:7)κ; φ1 +
+δφ1, ϕ1). By Green’s formula and the boundary condition in
+Equation (2) for φ1, we have
+
+V
+
+˜f1( ¯μ, ¯κ; φ1, ϕ1) =
+
+L o,1(x) − L R
+
+o,1(x)
+
+dA + λ
+
+(cid:8)∇κ(cid:8)2 dV
+
+(cid:6)
+2
+
+(cid:3)
+
+(cid:2)
+
+V
+
+ϕ1(x) {∇ · [κ(x)∇φ1(x)] − μ(x)φ1(x)} dV
+
+(cid:14)
+2
+
+2π (φ1(x) − q1(x))
+
+dA
+
+=
+
+L o,1(x) − 1
+(cid:2)
+
+(cid:8)∇κ(cid:8)2 dV
+
+−
+
+φ1(x) {∇ · [κ(x)∇ϕ1(x)] − μ(x)ϕ1(x)} dV
+
+(cid:5)
+
+(cid:2)
+
+(cid:2)
+
+A
+
+−
+
+V
+(cid:13)
+
+(cid:2)
+
+A
+
++ λ
+
+V
+
+(cid:2)
+
+V
+
+ACM Transactions on Graphics, Vol. 27, No. 1, Article 9, Publication date: March 2008.
+
+(cid:2)
+
+− 1
+2C
+
+ϕ1(x)q1(x) dA +
+
+A
+∂ϕ1(x)
+
+(cid:14)
+
+∂n
+
++ κ(x)
+
+φ1(x)dA.
+
+(cid:2)
+
+(cid:13)
+
+A
+
+1
+2C
+
+ϕ1(x)
+
+Therefore, we have
+
+˜f1( ¯μ, ¯κ, φ1 + δφ1; ϕ1) − ˜f1( ¯μ, ¯κ, φ1; ϕ1)
+
+(cid:13)
+
+(cid:14)
+
+δφ1
+
+L o,1(x) − 1
+
+2π (φ1(x) − q1(x))
+
+dA
+
+(cid:2)
+
+A
+
+= − 1
+π
+(cid:2)
+
+δφ1(x) {∇ · [κ(x)∇ϕ1(x)] − μ(x)ϕ1(x)} dV
+
+−
+
++
+
+V
+(cid:2)
+
+(cid:13)
+
+A
+
+1
+2C
+
+ϕ1(x) + κ(x)
+
+δφ1(x) dA + O((cid:8)δφ1(cid:8)2).
+
+(cid:14)
+
+∂ϕ1(x)
+
+∂n
+
+As ∂ ˜f1/∂φ1 must be a zero operator, the linear component of the
+above perturbation must be zero for all possible δφ1. So the adjoint
+equation is
+∇ · [κ(x)∇ϕ1(x)] − μ(x)ϕ1(x) = 0,
+ϕ1(x) + 2Cκ(x)
+
+x ∈ V,
+2π (φ1(x) − q1(x))
+
+L o,1(x) − 1
+
+= 2C
+π
+
+∂ϕ1(x)
+
+∂n
+
+(cid:15)
+
+(cid:16)
+
+,
+
+x ∈ A.
+
+And the gradient of the original function can be solved using the
+adjoint function as
+
+∂ ˜f1
+∂κ
+∂ ˜f1
+∂μ
+
+=
+
+=
+
+d f1
+dκ
+d f1
+dμ
+
+= ∇ϕ1(x) · ∇φ1(x) − 2λ(cid:14)κ(x),
+
+x ∈ V
+
+= ϕ1(x)φ1(x),
+
+with the boundary condition ∂κ/∂n = 0 for κ and ∂μ/∂n = 0 for
+μ.
+
+B. Discrete Partial Derivatives
+
+For Forward Diffusion
+To compute the gradient and Laplacian of a funtion f on a node v0
+of the polygrid, we have
+
+f (v j ) − f (v0) ≈
+
+(cid:14)y j +
+
+(cid:14)z j
+
+∂ f
+∂ y
+
+(cid:14)x 2
+j
+
+(cid:14)z2
+j
+
+(cid:14)x j +
+
+·
+
+∂ f
+∂ x
++ 1
+2
++ 1
+2
+∂ 2 f
+∂ y∂z
+
++
+
+·
+
+∂ 2 f
+∂ x 2
+∂ 2 f
+∂z2
+
+∂ f
+∂z
+∂ 2 f
+∂ y2
+
+·
+
++
+
++ 1
+2
+∂ 2 f
+∂ x∂ y
+∂ 2 f
+∂z∂ x
+
+(cid:14)y2
+j
+
+(cid:14)x j (cid:14)y j
+
+(cid:14)y j (cid:14)z j +
+
+(cid:14)z j (cid:14)x j ,
+
+(10)
+
+where v j = v0 +((cid:14)x j , (cid:14)y j , (cid:14)z j ), j = 1, 2, . . . , 6 are the six nodes
+connected to v0. For near-regular grids, if the coordinate directions
+are roughly along the directions of the grids, we may assume that
+
+for j = 1, 2, |(cid:14)y j | (cid:11) |(cid:14)x j | and |(cid:14)z j | (cid:11) |(cid:14)x j |;
+for j = 3, 4, |(cid:14)x j | (cid:11) |(cid:14)y j | and |(cid:14)z j | (cid:11) |(cid:14)y j |;
+for j = 5, 6, |(cid:14)x j | (cid:11) |(cid:14)z j | and |(cid:14)y j | (cid:11) |(cid:14)z j |.
+
+(11)
+
+∂2 f
+∂ x∂ y
+
+(cid:14)z j (cid:14)x j ≈ 0,
+Since
+∀ j, we may discard the last three terms in Equation (10). Then
+
+(cid:14)y j (cid:14)z j ≈ 0, and
+
+(cid:14)x j (cid:14)y j ≈ 0,
+
+∂2 f
+∂ y∂z
+
+∂2 f
+∂z∂ x
+
+Modeling and Rendering of Heterogeneous Translucent Materials Using the Diffusion Equation
+
+•
+
+9:17
+
+Equation (10) can be written in matrix form:
+
+⎛
+
+⎜
+⎜
+⎜
+⎜
+⎜
+⎜
+⎜
+⎜
+⎜
+⎝
+
+(cid:14)x1 (cid:14)x 2
+1
+(cid:14)x2 (cid:14)x 2
+2
+(cid:14)x3 (cid:14)x 2
+3
+(cid:14)x4 (cid:14)x 2
+4
+(cid:14)x5 (cid:14)x 2
+5
+(cid:14)x6 (cid:14)x 2
+6
+
+/2 (cid:14)y1 (cid:14)y2
+1
+/2 (cid:14)y2 (cid:14)y2
+2
+/2 (cid:14)y3 (cid:14)y2
+3
+/2 (cid:14)y4 (cid:14)y2
+4
+/2 (cid:14)y5 (cid:14)y2
+5
+/2 (cid:14)y6 (cid:14)y2
+6
+
+/2 (cid:14)z1 (cid:14)z2
+1
+/2 (cid:14)z2 (cid:14)z2
+2
+/2 (cid:14)z3 (cid:14)z2
+3
+/2 (cid:14)z4 (cid:14)z2
+4
+/2 (cid:14)z5 (cid:14)z2
+5
+/2 (cid:14)z6 (cid:14)z2
+6
+
+/2
+/2
+/2
+/2
+/2
+/2
+
+⎞
+
+⎛
+
+⎟
+⎟
+⎟
+⎟
+⎟
+⎟
+⎟
+⎟
+⎟
+⎠
+
+⎜
+⎜
+⎜
+⎜
+⎜
+⎜
+⎜
+⎜
+⎜
+⎝
+
+⎞
+
+⎟
+⎟
+⎟
+⎟
+⎟
+⎟
+⎟
+⎟
+⎟
+⎠
+
+∂ f /∂ x
+∂ 2 f /∂ x 2
+∂ f /∂ y
+∂ 2 f /∂ y2
+∂ f /∂z
+∂ 2 f /∂z2
+
+⎛
+
+⎜
+⎜
+⎜
+⎜
+⎜
+⎜
+⎜
+⎜
+⎜
+⎝
+
+⎞
+
+⎟
+⎟
+⎟
+⎟
+⎟
+⎟
+⎟
+⎟
+⎟
+⎠
+
+.
+
+f (v1) − f (v0)
+f (v2) − f (v0)
+f (v3) − f (v0)
+f (v4) − f (v0)
+f (v5) − f (v0)
+f (v6) − f (v0)
+
+=
+
+Therefore,
+
+⎞
+
+⎟
+⎟
+⎟
+⎟
+⎟
+⎟
+⎟
+⎟
+⎠
+
+⎛
+
+⎜
+⎜
+⎜
+⎜
+⎜
+⎜
+⎜
+⎜
+⎝
+
+∂ f /∂ x
+∂ 2 f /∂ x 2
+∂ f /∂ y
+∂ 2 f /∂ y2
+∂ f /∂z
+∂ 2 f /∂z2
+
+= W
+
+⎛
+
+⎜
+⎜
+⎜
+⎜
+⎜
+⎜
+⎜
+⎝
+
+⎞
+
+⎟
+⎟
+⎟
+⎟
+⎟
+⎟
+⎟
+⎠
+
+,
+
+f (v1) − f (v0)
+f (v2) − f (v0)
+f (v3) − f (v0)
+f (v4) − f (v0)
+f (v5) − f (v0)
+f (v6) − f (v0)
+
+where
+
+W =
+
+⎛
+
+⎜
+⎜
+⎜
+⎜
+⎜
+⎜
+⎜
+⎜
+⎝
+
+(cid:14)x1 (cid:14)x 2
+1
+(cid:14)x2 (cid:14)x 2
+2
+(cid:14)x3 (cid:14)x 2
+3
+(cid:14)x4 (cid:14)x 2
+4
+(cid:14)x5 (cid:14)x 2
+5
+(cid:14)x6 (cid:14)x 2
+6
+
+/2 (cid:14)y1 (cid:14)y2
+1
+/2 (cid:14)y2 (cid:14)y2
+2
+/2 (cid:14)y3 (cid:14)y2
+3
+/2 (cid:14)y4 (cid:14)y2
+4
+/2 (cid:14)y5 (cid:14)y2
+5
+/2 (cid:14)y6 (cid:14)y2
+6
+
+/2 (cid:14)z1 (cid:14)z2
+1
+/2 (cid:14)z2 (cid:14)z2
+2
+/2 (cid:14)z3 (cid:14)z2
+3
+/2 (cid:14)z4 (cid:14)z2
+4
+/2 (cid:14)z5 (cid:14)z2
+5
+/2 (cid:14)z6 (cid:14)z2
+6
+
+/2
+/2
+/2
+/2
+/2
+/2
+
+−1
+
+.
+
+⎞
+
+⎟
+⎟
+⎟
+⎟
+⎟
+⎟
+⎟
+⎟
+⎠
+
+If the chosen coordinate is not along the grid directions, we may
+choose a local coordinate frame (x (cid:4), y(cid:4), z(cid:4)), such that the new coor-
+dinate directions are roughly along near-regular grid directions at
+v0. Due to the rotational invariance of the Laplacian operator
+
+∂ 2 f
+∂ x 2
+
++
+
+∂ 2 f
+∂ y2
+
++
+
+∂ 2 f
+∂z2
+
+=
+
+∂ 2 f
+∂ x (cid:4)2
+
++
+
+∂ 2 f
+∂ y(cid:4)2
+
++
+
+∂ 2 f
+∂z(cid:4)2
+
+,
+
+we may compute the coefﬁcients of ∂ 2 f /∂ x (cid:4)2, ∂ 2 f /∂ y(cid:4)2, ∂ 2 f /∂z(cid:4)2
+as linear combinations of f (v j ) − f (v0) in the new local coordinate,
+and form the coefﬁcient matrix for f (v j ) − f (v0) in the original
+coordinate.
+
+In our application, we deﬁne f = κφ as in Stam [1995], and
+compute the coefﬁcient matrix W at vi = v0 using a linear system
+solver. Then w ji is computed as
+
+w ji = W2 j + W4 j + W6 j .
+
+For the relationships in Equation (11) to hold on an arbitrary
+object volume, a conformal mapping between the polygrid in the
+polycube and the object volume is needed. Although our mapping
+may not be exactly conformal, it leads to acceptable solutions.
+
+ACKNOWLEDGMENTS
+The snail in Figure 20 was modeled by Feiyang Tong. The authors
+thank Ming Jiang, Tie Zhou, Ruo Li, and Guanquan Zhang for dis-
+
+cussions on inverse diffusion, and the anonymous reviewers for their
+helpful suggestions and comments.
+
+REFERENCES
+
+ARRIDGE, S. AND LIONHEART, B. 1998. Non-uniqueness in diffusion-based
+
+optical tomography. Optical Letters 23, 882–884.
+
+BOAS, D., BROOKS, D., DIMARZIO, C., KILMER, M., GAUETTE, R., AND
+Imaging the body with diffuse optical tomography.
+
+ZHANG, Q. 2001.
+IEEE Signal Proc. Magazine 18, 6, 57–75.
+
+BOLZ, J., FARMER, I., GRINSPUN, E., AND SCHR ¨ODER, P. 2003. Sparse matrix
+solvers on the GPU: conjugate gradients and multigrid. ACM Trans.
+Graph. 22, 3, 917–924.
+
+CARR, N. A., HALL, J. D., AND HART, J. C. 2003. GPU algorithms for
+radiosity and subsurface scattering. In Proccedings Graphics Hardware.
+51–59.
+
+CHEN, Y., TONG, X., WANG, J., LIN, S., GUO, B., AND SHUM, H.-Y. 2004.
+
+Shell texture functions. ACM Trans. Graph. 23, 3 (Aug.), 343–353.
+
+DEBEVEC, P., HAWKINS, T., TCHOU, C., DUIKER, H.-P., SAROKIN, W., AND
+SAGAR, M. 2000. Acquiring the reﬂectance ﬁeld of a human face. In
+Proccedings ACM SIGGRAPH. 145–156.
+
+DEBEVEC, P. E. AND MALIK, J. 1997. Recovering high dynamic range radi-
+ance maps from photographs. In Proccedings ACM SIGGRAPH. 369–378.
+DONNER, C. AND JENSEN, H. W. 2005. Light diffusion in multi-layered
+
+translucent materials. ACM Trans. Graph. 24, 3 (July), 1032–1039.
+
+DORSEY, J., EDELMAN, A., LEGAKIS, J., JENSEN, H. W., AND PEDERSEN,
+H. K. 1999. Modeling and rendering of weathered stone. In Proccedings
+ACM SIGGRAPH. 225–234.
+
+GIBSON, A., HEBDEN, J., AND ARRIDGE, S. 2005. Recent advances in diffuse
+
+optical imaging. Phys. Medicine Biol. 50, R1–R43.
+
+GILES, M. B. AND PIERCE, N. A. 1999. An introduction to the adjoint
+
+approach to design. In ERCOFTAC Workshop on Adjoint Methods.
+
+GOESELE, M., LENSCH, H. P. A., LANG, J., FUCHS, C., AND SEIDEL,
+H.-P. 2004. DISCO: acquisition of translucent objects. ACM Trans.
+Graph. 23, 3, 835–844.
+
+GU, X. AND YAU, S.-T. 2003. Global conformal surface parameterization.
+
+In Proccedings of the Symposium Geometry Processing. 127–137.
+
+HABER, T., MERTENS, T., BEKAERT, P., AND VAN REETH, F. 2005. A compu-
+tational approach to simulate light diffusion in arbitrarily shaped objects.
+In Proccedings Graphics Interface. 79–85.
+
+HANRAHAN, P. AND KRUEGER, W. 1993. Reﬂection from layered surfaces
+due to subsurface scattering. In Proccedings ACM SIGGRAPH. 165–174.
+HAO, X. AND VARSHNEY, A. 2004. Real-time rendering of translucent
+
+meshes. In ACM Trans. Graph. 23, 120–142.
+
+ISHIMARU, A. 1978. Wave Propagation and Scattering in Random Media.
+
+Academic Press.
+
+JENSEN, H. W. AND BUHLER, J. 2002. A rapid hierarchical rendering tech-
+
+nique for translucent materials. ACM Trans. Graph. 21, 3, 576–581.
+
+JENSEN, H. W. AND CHRISTENSEN, P. 1998. Efﬁcient simulation of light
+transport in scenes with participating media using photon maps. In Proc-
+cedings ACM SIGGRAPH. 311–320.
+
+JENSEN, H. W., MARSCHNER, S. R., LEVOY, M., AND HANRAHAN, P. 2001.
+A practical model for subsurface light transport. In Proccedings ACM
+SIGGRAPH. 511–518.
+
+JU, T., SCHAEFER, S., AND WARREN, J. 2005. Mean value coordinates for
+
+closed triangular meshes. ACM Trans. Graph. 24, 3, 561–566.
+
+KRAEVOY, V. AND SHEFFER, A. 2004. Cross-parameterization and compati-
+
+ble remeshing of 3d models. ACM Trans. Graph. 23, 3, 861–869.
+
+KR ¨UGER, J. AND WESTERMANN, R. 2003. Linear algebra operators for GPU
+implementation of numerical algorithms. ACM Trans. Graph. 22, 3, 908–
+916.
+
+ACM Transactions on Graphics, Vol. 27, No. 1, Article 9, Publication date: March 2008.
+
+9:18
+
+•
+
+J. Wang et al.
+
+LENSCH, H. P. A., GOESELE, M., BEKAERT, P., MAGNOR, J. K. M. A., LANG,
+J., AND SEIDEL, H.-P. 2003. Interactive rendering of translucent objects in
+Comput. Graph. For. 22, 2, 195–205.
+
+LI, H., PELLACINI, F., AND TORRANCE, K. E. 2005. A hybrid monte carlo
+In Rendering
+
+method for accurate and efﬁcient subsurface scattering.
+Techniques. 283–290.
+
+LIONS, J.-L. 1971. Optimal Control Systems Governed by Partial Differential
+
+Equations. Springer-Verlarg.
+
+MCNAMARA, A., TREUILLE, A., POPOVI ´C, Z., STAM, J. 2004. Fluid control
+
+using the adjoint method. ACM Trans. Graph. 23, 3, 449–456.
+
+MERTENS, T., KAUTZ, J., BEKAERT, P., SEIDEL, H.-P., AND REETH, F. V. 2003.
+Interactive rendering of translucent deformable objects. In Proccedings
+of the Eurographics Workshop on Rendering, P. Dutr´e, F. Suykens, P. H.
+Christensen, and D. Cohen-Or, Eds. 130–140.
+
+NARASIMHAN, S. G., GUPTA, M., DONNER, C., RAMAMOORTHI, R., NAYAR,
+S. K., AND JENSEN, H. W. 2006. Acquiring scattering properties of par-
+ticipating media by dilution. ACM Trans. Graph. 25, 3, 1003–1012.
+
+NARASIMHAN, S. G. AND NAYAR, S. K. 2003. Shedding light on the weather.
+In Proccedings of the IEEE Computer Vision and Pattern Recognition
+(CVPR). 665–672.
+
+NG, R., RAMAMOORTHI, R., AND HANRAHAN, P. 2003. All-frequency
+shadows using non-linear wavelet lighting approximation. ACM Trans.
+Graph. 22, 3, 376–381.
+
+NICODEMUS, F. E., RICHMOND, J. C., HSIA, J. J., GINSBERG, I. W., AND
+LIMPERIS, T. 1977. Geometrical Considerations and Nomenclature for
+Reﬂectance. National Bureau of Standards (US).
+
+PEERS, P., VOM BERGE, K., MATUSIK, W., RAMAMOORTHI, R., LAWRENCE,
+J., RUSINKIEWICZ, S., AND DUTR´E, P. 2006. A compact factored represen-
+tation of heterogeneous subsurface scattering. ACM Trans. Graph. 25, 3,
+746–753.
+
+PHARR, M. AND HANRAHAN, P. M. 2000. Monte Carlo evaluation of non-
+linear scattering equations for subsurface reﬂection. In Proccedings ACM
+SIGGRAPH. 275–286.
+
+PORUMBESCU, S. D., BUDGE, B., FENG, L., AND JOY, K. I. 2005. Shell maps.
+
+ACM Trans. Graph. 24, 3, 626–633.
+
+PRESS, W. H. ET AL. 1992. Numerical recipes in C (2nd Ed.). Cambridge
+
+University Press.
+
+SCHREINER, J., ASIRVATHAM, A., PRAUN, E., AND HOPPE, H. 2004. Inter-
+
+surface mapping. ACM Trans. Graph. 23, 3, 870–877.
+
+SCHWEIGER, M., ARRIDGE, S., M., H., AND D.T., D. 1995. The ﬁnite element
+method for the propagation of light in scattering media: Boundary and
+source conditions. Medical Phys. 22, 11, 1779–1792.
+
+SCHWEIGER, M., GIBSON, A., AND ARRIDGE, S. 2003. Computational as-
+pects of diffuse optical tomography. Comput. Sci. and Engin. 5, 6, 33–
+41.
+
+SLOAN, P.-P., KAUTZ, J., AND SNYDER, J. 2002. Precomputed radiance trans-
+fer for real-time rendering in dynamic, low-frequency lighting environ-
+ments. ACM Trans. Graph. 21, 3, 527–536.
+
+STAM, J. 1995. Multiple scattering as a diffusion process. In E. Rendering
+
+Workshop. 41–50.
+
+TARINI, M., HORMANN, K., CIGNONI, P., AND MONTANI, C. 2004. PolyCube-
+
+maps. ACM Trans. Graph. 23, 3, 853–860.
+
+TONG, X., WANG, J., LIN, S., GUO, B., AND SHUM, H.-Y. 2005. Modeling
+and rendering of quasi-homogeneous materials. ACM Trans. Graph. 24, 3,
+1054–1061.
+
+TURK, G. 1992. Re-tiling polygonal surfaces. Proccedings of the ACM
+
+SIGGRAPH 26, 2, 55–64.
+
+WANG, R., TRAN, J., AND LUEBKE, D. 2005. All-frequency interactive re-
+lighting of translucent objects with single and multiple scattering. ACM
+Trans. Graph. 24, 3, 1202–1207.
+
+ZHANG, Z. 1999. Flexible camera calibration by viewing a plane from
+unknown orientations. In Proccedings IEEE International Conference on
+Computer Vision (ICCV). 666–673.
+
+Received May 2007; accepted December 2007
+
+ACM Transactions on Graphics, Vol. 27, No. 1, Article 9, Publication date: March 2008.
+
+

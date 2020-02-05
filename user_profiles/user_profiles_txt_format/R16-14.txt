@@ -1,0 +1,2692 @@
+Dynamic Run›time Architecture Techniques for Enabling
+
+Continuous Optimization
+
+Tipp Moseleyy, Alex Shye, Vijay Janapa Reddi, Matthew Iyer, Dan Fay,
+
+David Hodgdon, Joshua L. Kihm, Alex Settle, Dirk Grunwaldy, Daniel A. Connors
+
+Department of Electrical and Computer
+
+yDepartment of Computer Science
+
+Engineering
+
+University of Colorado
+
+Boulder, CO 80309›0430
+
+shye,janapare,iyer,faydr,hodgdon,kihm,
+f
+
+mw.settle,dconnors
+@colorado.edu
+g
+
+University of Colorado
+
+Boulder, CO 80309›0430
+
+moseleyt,grunwald
+f
+
+@colorado.edu
+g
+
+ABSTRACT
+Future computer systems will integrate tens of multithreaded
+processor cores on a single chip die, resulting in hundreds
+of concurrent program threads sharing system resources.
+These designs will be the cornerstone of improving through-
+put in high-performance computing and server environments.
+However, to date, appropriate systems software (operat-
+ing system, run-time system, and compiler) technologies for
+these emerging machines have not been adequately explored.
+Future processors will require sophisticated hardware mon-
+itoring units to continuously feed back resource utilization
+information to allow the operating system to make opti-
+mal thread co-scheduling decisions and also to software that
+continuously optimizes the program itself. Nevertheless, in
+order to continually and automatically adapt systems re-
+sources to program behaviors and application needs, speci(cid:12)c
+run-time information must be collected to adequately enable
+dynamic code optimization and operating system schedul-
+ing. Generally, run-time optimization is limited by the time
+required to collect pro(cid:12)les, the time required to perform op-
+timization, and the inherent bene(cid:12)ts of any optimization
+or decisions. Initial techniques for e(cid:11)ectively utilizing run-
+time information for dynamic optimization and informed
+thread scheduling in future multithreaded architectures are
+presented.
+
+Categories and Subject Descriptors
+B.8.2 [Hardware]: Performance Analysis and Design Aids;
+D.4.1 [Operating Systems]: Process Management
+
+Permission to make digital or hard copies of all or part of this work for
+personal or classroom use is granted without fee provided that copies are
+not made or distributed for pro(cid:2)t or commercial advantage and that copies
+bear this notice and the full citation on the (cid:2)rst page. To copy otherwise, to
+republish, to post on servers or to redistribute to lists, requires prior speci(cid:2)c
+permission and/or a fee.
+CF’05, May 4(cid:150)6, 2005, Ischia, Italy.
+Copyright 2005 ACM 1›59593›018›3/05/0005 ...$5.00.
+
+General Terms
+Performance, Design
+
+Keywords
+Performance counters, pro(cid:12)ling, scheduling, multithreading
+
+1.
+
+INTRODUCTION
+
+By leveraging the advances in semiconductor technologies,
+system developers are exploring new paradigms of System-
+on-a-Chip (SoC) processors, Chip Multiprocessors (CMP),
+and Multithreaded (MT) architectures. The evolution dic-
+tates that future high-performance systems will integrate
+tens of multithreaded processor cores on a single chip die,
+resulting in hundreds of concurrent program threads shar-
+ing system resources. These designs will be the cornerstone
+of not only high-performance computing and server envi-
+ronments, but will also emerge in general-purpose and em-
+bedded domains. Managing hundreds of threads requires
+continuous optimization of both system resource decisions
+and thread execution, for which hardware-only techniques
+are not su(cid:14)cient. As such, it is critical to advance cur-
+rent systems software (operating system, run-time system,
+and compiler) technologies for these emerging machines. Al-
+though it is important for systems software to understand
+the complete view of multiple cores, it is (cid:12)rst necessary to
+build e(cid:11)ective models of multithreaded core execution that
+will likely be the basis for the multi-core designs.
+
+Multithreaded architectures address the growing processor-
+memory gap by supporting multiple hardware thread con-
+texts capable of hiding memory latencies of individual
+threads. Coarse Grained Multi-Threaded (CGMT) proces-
+sors issue instructions from a single thread each cycle and
+switch between threads on long latency instructions such
+as cache misses or on de(cid:12)nable time intervals. Alternative
+hardware thread contexts can perform useful work, increas-
+ing throughput, where a single thread would stall a pro-
+cessor. IBM released the PowerPC RS64-IV [6] which is a
+commercial implementation of a course grain multithreading
+processor. Simultaneous Multithreaded (SMT) [17][31][30]
+processors share the resources (ALUs, branch target bu(cid:11)ers,
+etc.) of one physical processor between multiple \virtual
+
+processors" that simultaneously execute each cycle. The
+SMT design is intended to have a low design overhead for
+out-of-order processors, allowing it to be added into existing
+processor designs without signi(cid:12)cant cost. It was estimated
+that adding SMT support to the Compaq Alpha EV8 pro-
+cessor only required an additional 5% to the die area, and
+researchers at Intel found similar costs for their implemen-
+tation of SMT called Hyper-Threading [19].
+
+The most commonly available SMT processor is the In-
+tel Pentium-4 processor with Hyper-Threading [13]. Hyper-
+Threading is technically similar to the SMT designs de-
+scribed in the research literature, although it has unique
+characteristics { in particular, certain physical resources are
+partitioned between the virtual processors while others are
+shared. Support for multithreading is enabled by the mul-
+tiprocessor con(cid:12)guration tables in the ACPI (Application
+Con(cid:12)guration and Power Interface). When running a con-
+ventional operating system on a Pentium-4 Xeon system
+with Hyper-Threading enabled, each virtual processor ap-
+pears to the operating system as two distinct processors
+and the base operating system does not need to have de-
+tailed knowledge that certain processors are in fact logical
+processors.
+
+Despite e(cid:11)orts at enabling transparency in multithreaded
+processors, there exists signi(cid:12)cant potential in the operat-
+ing system to be aware of the multithreaded model. More
+importantly, as multithreaded multi-core systems emerge,
+it will be increasingly important for operating systems to
+continuously monitor application behavior and assess job
+scheduling opportunities. To explore the space of this work,
+we evaluate SMT processors with the intent of providing the
+initial results and rationale of enabling operating systems for
+multithreading. Figure 1 shows a matrix of speedup values
+for di(cid:11)erent SPEC CPU 2000 applications run with reference
+input sets on a 2.53GHz Intel Pentium-4 using the \North-
+wood" processor design. The speedup is greater than 1 for
+applications pairs where the time to completion for the ap-
+plication is less when Hyper-Threading is enabled. When
+the speedup is less than 1, it is more e(cid:14)cient to run the
+applications sequentially or using a uniprocessor. Most ap-
+plication pairs either achieve little speedup or achieve some
+speedup { up to 30% speedup in some cases. However, there
+are some applications pairs that achieve signi(cid:12)cant slow-
+downs { as much as a 30% slowdown. In order to improve
+multithreading systems, performance-aware scheduling is re-
+quired.
+
+Like operating systems, run-time optimization systems for
+future processors can deploy optimizations, guided by pro(cid:12)le
+information, to improve performance. However, in order to
+maximize the performance gain of these run-time optimiza-
+tions, e(cid:14)cient pro(cid:12)ling techniques are required that can ac-
+curately describe a program’s runtime behavior. Pro(cid:12)ling
+provides valuable information to a whole class of optimiza-
+tions: superblock formation [12], code positioning [22], and
+improved function inlining[11]. The ideal run-time pro(cid:12)le
+collection system has three distinct characteristics. First,
+it should provide accurate pro(cid:12)le information for a dynamic
+optimizer to utilize. Second, the system ideally would gather
+all pro(cid:12)le information in one stage. Finally, and most im-
+portantly, the run-time collection of information should oc-
+cur with little to no overhead. Unfortunately, most ap-
+proaches to pro(cid:12)ling only meet one or two of these three
+goals.
+Instrumentation-based techniques provide an accu-
+
+rate pro(cid:12)le while sacri(cid:12)cing the cost of overhead as well
+as convenience of compilation. Novel hardware-based tech-
+niques are emerging to collect run-time events using hard-
+ware performance counters. Although such structures e(cid:14)-
+ciently capture run-time information, researchers have only
+begun to study the characteristics and bene(cid:12)t of the amount
+and type of information needed for driving run-time opti-
+mization [7, 18].
+
+Modern microprocessors such as the Intel Pentium-4, In-
+tel Itanium, and IBM PowerPC 970 provide a rich set of
+performance counters. Hardware performance monitoring
+units are commonly placed onto microprocessors to provide
+software engineers with low overhead means of performance
+tuning. These PMUs are usually fairly simplistic allowing
+for PC sampling and counters for certain events. The Intel
+Pentium-4 [29] provides a set of 18 event counters which can
+collect 50 di(cid:11)erent events. The Apple Computer Hardware
+Understanding Development(CHUD) Tool [2] can be used
+to sample the G5 performance counters.
+
+This paper illustrates the potential of using low-overhead
+HPM (Hardware Performance Monitoring) information in
+scheduling and optimization in multithreaded processor cores.
+It is demonstrated that using the run-time information re-
+quires substantial analysis to construct e(cid:11)ective algorithms
+and heuristics that aid systems software. The rest of this
+paper is organized as follows. Section 2 discusses related
+work in multithreaded scheduling and run-time pro(cid:12)ling.
+Section 3 presents the potential of using modern hardware-
+based pro(cid:12)ling techniques in run-time optimization. Sec-
+tion 4 gives an overview of constructing an accurate SMT-
+resource model using hardware counter information and in
+turn the implementation of that model in a performance-
+guided multi-threaded job scheduler. Section 5 describes the
+e(cid:11)ectiveness of the scheduler, and conclusions are presented
+in Section 6.
+
+2. RELATED WORK
+
+2.1 Multithreaded Scheduling
+
+Operating systems have a direct role in the performance
+of multithreaded machines when the number of software
+threads exceeds the number of hardware thread contexts.
+Since contention on shared resources can cause variations in
+an multithreaded system, the throughput of machines ben-
+e(cid:12)t from job scheduling, which is the process of selecting
+among a set of application threads to simultaneously exe-
+cute and share the processor resources.
+
+The work on thread symbiosis by Snavely et al [26, 27, 28]
+is the closest to the idea presented in this paper. Snavely et
+al proposes an operating system mechanism for discourag-
+ing threads with poor performance pairings from executing
+with one another. The SOS (Sample, Optimize, Symbios)
+scheduler [27] performs as the name suggests. A set of pro-
+cesses are sampled, collecting information from performance
+counters. Following this, an optimized schedule is calculated
+based on performance counter attributes recorded during
+the sampling phase; a number of \pairing functions" are pro-
+posed. This yields a period of symbiosis scheduling, where
+jobs deemed to bene(cid:12)t from co-scheduling or \Symbios" are
+executed concurrently. Snavely proposes a set of heuristics
+based on intuition or knowledge of the system microarchi-
+tecture and show that certain heuristics (e.g. using data
+cache miss rate or IPC (instruction per cycle) to indicate
+
+ammp
+
+applu
+
+apsi
+
+art
+
+bzip2
+
+crafty
+
+eon
+
+equake
+
+fma3d
+
+galgel
+
+gap
+
+gcc
+
+gzip
+
+lucas
+
+mcf
+
+mesa
+
+mgrid
+
+parser perlbmk sixtrack swim
+
+twolf
+
+vortex wupwise
+
+1.17
+
+1.03
+
+1.05
+
+1.14
+
+1.07
+
+1.13
+
+0.98
+
+0.94
+
+0.99
+
+0.78
+
+0.97
+
+1.02
+
+1.00
+
+0.86
+
+1.18
+
+1.04
+
+1.13
+
+1.07
+
+1.01
+
+1.11
+
+1.06
+
+1.20
+
+1.20
+
+1.22
+
+1.29
+
+1.07
+
+1.10
+
+1.12
+
+0.99
+
+1.01
+
+1.02
+
+0.86
+
+0.94
+
+1.16
+
+1.15
+
+1.04
+
+1.09
+
+1.09
+
+1.10
+
+1.07
+
+1.02
+
+1.08
+
+1.15
+
+1.05
+
+1.08
+
+1.08
+
+1.15
+
+1.13
+
+1.01
+
+1.04
+
+1.13
+
+1.24
+
+1.07
+
+1.16
+
+1.16
+
+1.03
+
+1.12
+
+1.07
+
+0.98
+
+1.19
+
+1.23
+
+1.13
+
+1.24
+
+1.09
+
+1.11
+
+1.24
+
+0.92
+
+0.95
+
+0.94
+
+0.79
+
+0.99
+
+1.01
+
+1.02
+
+0.94
+
+0.98
+
+0.95
+
+1.05
+
+0.86
+
+0.96
+
+1.01
+
+0.97
+
+0.83
+
+1.12
+
+1.07
+
+1.04
+
+1.03
+
+1.00
+
+0.98
+
+1.10
+
+1.09
+
+1.27
+
+0.98
+
+0.97
+
+1.01
+
+0.86
+
+1.01
+
+1.13
+
+1.10
+
+1.01
+
+1.03
+
+1.06
+
+1.14
+
+0.90
+
+0.98
+
+0.92
+
+1.02
+
+1.03
+
+1.04
+
+0.84
+
+0.95
+
+1.10
+
+1.20
+
+0.98
+
+1.09
+
+1.09
+
+1.09
+
+0.84
+
+0.90
+
+0.96
+
+0.94
+
+1.13
+
+1.21
+
+1.17
+
+1.17
+
+1.09
+
+1.12
+
+1.15
+
+1.17
+
+1.15
+
+1.23
+
+1.17
+
+1.03
+
+1.05
+
+1.13
+
+1.22
+
+1.20
+
+ammp
+applu
+apsi
+art
+bzip2
+crafty
+eon
+equake
+fma3d
+galgel
+gap
+gcc
+gzip
+lucas
+mcf
+mesa
+mgrid
+parser
+perlbmk
+sixtrack
+swim
+twolf
+vortex
+wupwise
+
+1.01
+
+1.00
+
+1.04
+
+0.89
+
+0.99
+
+1.07
+
+1.00
+
+0.96
+
+1.06
+
+1.06
+
+1.08
+
+0.95
+
+1.01
+
+0.92
+
+0.94
+
+1.16
+
+0.92
+
+1.08
+
+1.10
+
+1.11
+
+0.98
+
+1.02
+
+1.09
+
+1.17
+
+1.06
+
+1.11
+
+1.10
+
+1.12
+
+0.96
+
+1.01
+
+1.03
+
+1.03
+
+1.22
+
+1.03
+
+1.11
+
+0.94
+
+0.97
+
+0.94
+
+0.83
+
+1.03
+
+0.93
+
+1.01
+
+0.96
+
+0.96
+
+0.96
+
+1.08
+
+1.06
+
+1.13
+
+0.92
+
+0.86
+
+1.02
+
+0.97
+
+0.97
+
+1.08
+
+1.19
+
+1.27
+
+1.23
+
+1.29
+
+1.10
+
+1.18
+
+1.26
+
+1.17
+
+1.23
+
+1.27
+
+1.19
+
+1.02
+
+1.06
+
+1.17
+
+1.26
+
+1.28
+
+1.21
+
+1.29
+
+1.01
+
+1.29
+
+0.97
+
+0.92
+
+1.01
+
+0.76
+
+0.94
+
+1.04
+
+1.23
+
+0.90
+
+1.04
+
+1.00
+
+1.05
+
+0.90
+
+0.94
+
+0.88
+
+0.84
+
+1.25
+
+0.86
+
+0.98
+
+0.92
+
+1.31
+
+0.73
+
+1.14
+
+1.01
+
+1.11
+
+0.92
+
+0.98
+
+1.01
+
+1.20
+
+0.98
+
+1.05
+
+1.03
+
+1.03
+
+0.93
+
+0.94
+
+0.98
+
+0.96
+
+1.12
+
+0.95
+
+1.04
+
+0.93
+
+1.20
+
+0.91
+
+1.07
+
+0.97
+
+1.00
+
+0.99
+
+0.86
+
+1.10
+
+1.07
+
+1.05
+
+1.04
+
+1.00
+
+1.01
+
+1.15
+
+1.00
+
+1.10
+
+0.99
+
+0.95
+
+1.06
+
+0.97
+
+1.00
+
+1.03
+
+1.09
+
+0.94
+
+0.94
+
+1.05
+
+1.05
+
+1.12
+
+1.07
+
+1.00
+
+1.07
+
+1.17
+
+1.15
+
+1.11
+
+1.09
+
+1.18
+
+1.18
+
+0.99
+
+1.05
+
+1.03
+
+1.15
+
+1.18
+
+1.03
+
+1.13
+
+0.90
+
+1.19
+
+1.06
+
+1.05
+
+1.06
+
+1.02
+
+>=1.30
+
+1.29−1.25
+
+1.24−1.20
+
+1.19−1.05
+
+1.04−0.95
+
+0.94−0.90
+
+0.89−0.80
+
+0.79−0.70
+
+Figure 1: Speedup comparison when running application pairs sequentially vs. concurrently on an Intel
+Pentium-4 processor with Hyper-Threading. The speedup is expressed as a percentage of of the concurrent
+execution over sequential execution. Shading has been added based on the range of speedup.
+
+likely pairings) yield poor results. By comparison, this paper
+presents a methodical, statistical model that can be used to
+derive the scheduling \pairing function". More importantly,
+use of a one-time machine characterization avoids the need
+for any distinct \sampling" and \optimization" phases. In-
+stead, sampling and characterization are continuous, which
+are essential given the limited speedups possible from such
+sampling mechanisms. Likewise, this paper illustrates actual
+operating system implementation and discusses building ef-
+fective scheduling models for real processors.
+
+There is a large history of scheduling mechanisms that try
+to exploit program characteristics to improve throughput {
+[27] has a good survey. These techniques exploit higher level
+characteristics of the process (such as communication or I/O
+accesses). Our work focuses on scheduling tasks based on ob-
+served execution behavior once they have been entered into
+in a queue { it simply adjusts the selection of jobs of equal
+priority. There has been limited work in co-scheduling sys-
+tem for SMT processors that is actually implemented in the
+operating system and evaluated on a commercial processor.
+The most similar study compares the SOS technique on the
+Tera MTA, and yields 10% speedups [26] on combinations of
+parallel programs using manual co-scheduling. The speedup
+rises from balancing parallel vs. serial sections of di(cid:11)erent
+multithreaded programs as well as (cid:12)ne-tuning machine re-
+sources. In the same way, the statistical model used in our
+system is related to work by Isci and Martonosi [15], which
+derives a linear combination of performance counters to val-
+idate an activity based power model. However, they did not
+consider the percentage of variation from speci(cid:12)c counters
+nor did they consider interactions between counters.
+
+2.2 Pro(cid:2)ling with Hardware Counters
+
+Specialized hardware pro(cid:12)ling techniques have been pro-
+posed for collecting run-time pro(cid:12)le information. Conte [8]
+
+examines using branch handling hardware coupled with the
+branch predictor to obtain branch information. Merten’s [20]
+work explores using a branch behavior bu(cid:11)er for collecting
+branch pro(cid:12)le data. These techniques incur a low overhead
+and can e(cid:11)ectively gather data during one program run but
+su(cid:11)er in accuracy because they are designed to collect edge
+pro(cid:12)les. The ADORE dynamic optimization system [7, 18]
+is one excellent example of directly using hardware infor-
+mation for dynamic trace generation. ADORE uses the
+Itanium-2 PMU (Performance Monitoring Unit) for collect-
+ing pro(cid:12)le information aimed at improving data cache per-
+formance. The primary goal of the ADORE optimizer is
+to use the Itanium-2 PMU to detect a small amount of hot
+traces for optimization. While ADORE is interested in a
+few traces to optimize during run-time, future run-time sys-
+tems will need to gather and exploit as much information
+possible from PMUs, correlating these samples and charac-
+terizing the nature of the PMU information with respect to
+program behavior.
+
+Other sampling ideas originate from continuous pro(cid:12)ling
+and optimization systems [1, 16]. These systems sample per-
+formance monitors for pro(cid:12)le information to drive feedback-
+based optimization between application invocations. This
+paper demonstrates an important addition into the area of
+continuous program optimization by illustrating how future
+systems can make use of existing hardware monitoring units
+in run-time optimization.
+
+3. PATH PROFILING USING HARDWARE
+
+MONITORING
+
+Collecting run-time program information is critical to di-
+recting next generation processors. A number of optimiza-
+tion techniques can use run-time pro(cid:12)le to adapt program
+behavior as well as the allocation of resources. However,
+
+hardware pro(cid:12)ling has several issues which bring its e(cid:11)ective
+use into question. Accuracy is critical to enabling e(cid:11)ective
+optimization. More importantly, in order for pro(cid:12)ling to be
+feasible in a run-time system, it must be done with mini-
+mal collection overhead. Finally, unlike software pro(cid:12)ling,
+hardware pro(cid:12)ling is not deterministic as it uses sampling
+of events which might occur at di(cid:11)erent time points in a
+program execution.
+
+3.1 Performance Monitoring
+
+The work in this section of the paper uses the Intel Itanium-
+2 PMU [14]. The Itanium-2 includes a set of counters which
+can be con(cid:12)gured to count among 500 events. It also allows
+for sampling of Event Address Registers to capture recent
+data or instruction cache or TLB misses. In the following
+section, it is illustrated how the Itanium-2 PMU can sample
+the processor’s branch execution to obtain accurate partial
+paths.
+
+3.2 A Study of Using Hardware to Generate
+
+Path Pro(cid:2)les
+
+Path pro(cid:12)ling [3] has been shown to be an important form
+of pro(cid:12)ling [4]. Path pro(cid:12)les correlate branches by keep-
+ing track of path execution counts instead of simple branch
+counts. However, path pro(cid:12)ling usually comes with a sig-
+ni(cid:12)cant increase in overhead(31% for path pro(cid:12)ling versus
+16% for edge pro(cid:12)ling [3]). As such, using hardware to help
+generate path pro(cid:12)les has substantial promise. However,
+since hardware-collected execution information is limited in
+size and type, any collected information must be assembled
+and transformed to be put in a more usable form. Figure 2
+illustrates the problem of adapting hardware monitoring in-
+formation to the problem of run-time path pro(cid:12)ling. The
+(cid:12)gure illustrates a hot path of a program’s execution and
+the partial information (PMU trace) that is collected from
+performance monitoring units. Essentially the sampled re-
+gions of code do not indicate the complete path pro(cid:12)le of
+the code region.
+
+Figure 2: Path detection using PMU information.
+
+At the center of the problem of hardware monitoring is
+that hardware has limited capacity to maintain all program
+
+information. For instance, the Itanium-2 PMU contains
+eight registers for collecting branch execution outcomes and
+the registers are treated as a circular bu(cid:11)er. Each executed
+branch instruction usually requires two of the BTB registers;
+one for the branch instruction address and another for the
+branch target address. Because of this, the BTB registers ef-
+fectively act as a four branch circular bu(cid:11)er. In the Itanium-
+2 PMU, the user is able to conduct BTB samples through a
+set of user-de(cid:12)ned (cid:12)lters. The following set of experiments
+use the SPEC 2000 benchmarks compiled with the base con-
+(cid:12)guration of the OpenIMPACT Research Compiler [21]. A
+PMU collection tool based on the perfmon kernel interface
+and libpfm library [10] was constructed to collect samples
+of the Itanium-2 PMU taken-branch registers. The PMU
+samples are analyzed within an OpenIMPACT module to
+expand to larger intra-procedure paths.
+
+3.2.1 Effect of PMU Sampling Period
+
+Figure 3 shows the e(cid:11)ect of sampling rate on run-time
+overhead as well as the number of unique paths discovered
+by the PMU for a few benchmarks. The sampling period
+is varied from 50K to 10M clock cycles. Naturally, a lower
+sampling rate decreases the overhead but provides a lower
+number of unique paths, while a high sampling rate increases
+the overhead but provides more unique paths. PMU sam-
+pling overhead remains relatively low, less than 10%, from
+10M all the way down to around 500K. When the sampling
+rate is increased further, the percentage overhead increases
+quickly up to 50% for a sampling period of 50K. The num-
+ber of unique paths discovered by the PMU rises steadily
+for each increase in sampling rate.
+
+3.2.2 Pro(cid:2)le Determinism
+
+The pro(cid:12)ling infrastructure enables aggregate pro(cid:12)le in-
+formation to be collected from multiple runs of a program
+and compared. By gathering PMU information over sepa-
+rate runs, analysis of lost paths due to statistical sampling
+can be measured. Figure 4 shows the e(cid:11)ects of aggregat-
+ing the PMU branch samples from multiple runs of a few
+benchmarks with the same input. The (cid:12)gure illustrates the
+additional runs increase the number of unique PMU paths.
+The greatest increase occurring from combining up to 10
+runs, after which there is a slight leveling o(cid:11). It is possi-
+ble that the paths collected from multiple runs will (cid:12)ll in
+important partial paths that are missing from other runs.
+However, it is more important to understand if the paths
+collected accurately (cid:12)nd the most important paths of pro-
+gram execution.
+
+3.2.3 Accuracy Results
+
+To measure accuracy of the PMU-generated paths, a full
+path pro(cid:12)le was generated with a Pin tool. Pin was de-
+signed to provide functionality similar to the popular ATOM
+toolkit [9] for Compaq’s Tru64 Unix on Alpha. Unlike
+ATOM, Pin does not instrument an executable statically by
+rewriting it before execution, but rather adds the code dy-
+namically while the executable is running. This makes it
+possible to attach Pin to an already running process to col-
+lect pro(cid:12)le information on the (cid:13)y. However, Pin-instrumented
+binaries experience average slowdowns on the order of 1000%
+when collecting detailed information, and by themselves do
+not meet the pro(cid:12)ling constraint of low overhead. The PMU
+path pro(cid:12)le is compared to a full path pro(cid:12)le gathered with
+
+164.gzip
+
+181.mcf
+
+5e4
+
+1e5
+
+5e5
+
+1e6
+
+5e6
+
+1e7
+
+5e4
+
+1e5
+
+5e5
+
+1e6
+
+5e6
+
+1e7
+
+Sampling Period
+
+186.crafty
+
+Sampling Period
+
+300.twolf
+
+50
+
+40
+
+30
+
+20
+
+10
+
+0
+
+60
+
+50
+
+40
+
+30
+
+20
+
+10
+
+0
+
+d
+a
+e
+h
+r
+e
+v
+O
+
+ 
+t
+
+n
+e
+c
+r
+e
+P
+
+d
+a
+e
+h
+r
+e
+v
+O
+
+ 
+t
+
+n
+e
+c
+r
+e
+P
+
+5e4
+
+1e5
+
+5e5
+
+1e6
+
+5e6
+
+1e7
+
+5e4
+
+1e5
+
+5e5
+
+1e6
+
+5e6
+
+1e7
+
+Sampling Period
+
+Sampling Period
+
+Figure 3: Overhead and number of unique paths for various sampling periods.
+
+164.gzip
+
+181.mcf
+
+0
+
+2
+
+4
+
+6
+
+8
+
+10
+
+12
+
+14
+
+16
+
+18
+
+20
+
+0
+
+2
+
+4
+
+6
+
+8
+
+10
+
+12
+
+14
+
+16
+
+18
+
+20
+
+Number of Aggregated Runs
+
+Number of Aggregated Runs
+
+186.crafty
+
+300.twolf
+
+40
+
+30
+
+20
+
+10
+
+0
+
+50
+
+40
+
+30
+
+20
+
+10
+
+0
+
+d
+a
+e
+h
+r
+e
+v
+O
+
+ 
+t
+
+n
+e
+c
+r
+e
+P
+
+d
+a
+e
+h
+r
+e
+v
+O
+
+ 
+t
+
+n
+e
+c
+r
+e
+P
+
+t
+
+ 
+
+s
+h
+a
+P
+e
+u
+q
+n
+U
+
+i
+
+ 
+
+t
+
+s
+h
+a
+P
+e
+u
+q
+n
+U
+
+i
+
+3000
+
+2000
+
+1000
+
+0
+
+8000
+
+6000
+
+4000
+
+2000
+
+0
+
+s
+h
+t
+a
+P
+ 
+e
+u
+q
+n
+U
+
+i
+
+s
+h
+
+t
+
+ 
+
+a
+P
+e
+u
+q
+n
+U
+
+i
+
+8000
+
+6000
+
+4000
+
+2000
+
+0
+
+20000
+
+15000
+
+10000
+
+5000
+
+0
+
+ 
+
+t
+
+s
+h
+a
+P
+e
+u
+q
+n
+U
+
+i
+
+1200
+
+700
+
+200
+
+t
+
+ 
+
+s
+h
+a
+P
+e
+u
+q
+n
+U
+
+i
+
+15000
+
+10000
+
+5000
+
+0
+
+s
+h
+t
+a
+P
+ 
+e
+u
+q
+n
+U
+
+i
+
+s
+h
+
+t
+
+ 
+
+a
+P
+e
+u
+q
+n
+U
+
+i
+
+4000
+
+3000
+
+2000
+
+1000
+
+0
+
+40000
+
+30000
+
+20000
+
+10000
+
+0
+
+0
+
+2
+
+4
+
+6
+
+8
+
+10
+
+12
+
+14
+
+16
+
+18
+
+20
+
+0
+
+2
+
+4
+
+6
+
+8
+
+10
+
+12
+
+14
+
+16
+
+18
+
+20
+
+Number of Aggregated Runs
+
+Number of Aggregated Runs
+
+5e4
+
+1e5
+
+5e5
+
+1e6
+
+5e6
+
+1e7
+
+Figure 4: Number of unique paths found by aggregating data from runs with same input set.
+
+a Pin tool using a method similar to Wall’s weight match-
+ing scheme [32]. The accuracy is described as the fraction
+of estimated hot path (cid:13)ows as compared to hot path (cid:13)ows
+in the full path pro(cid:12)le:
+
+Accuracy of Pestimated =
+
+p
+
+(Hestimated \
+
+2
+
+P
+
+p
+
+2
+
+Hactual
+
+Hactual ) F (p)
+
+F (p)
+
+P
+
+In this equation F (p) is the (cid:13)ow of a path. This is de(cid:12)ned
+as the paths count divided by the count of all the paths
+added together. This represents the percentage of the all
+counts that path p accounts for. Hactual is the set of paths
+in the full path pro(cid:12)le which are above a set threshold. A
+threshold of 0.125% is used, similar to previous path pro(cid:12)l-
+ing studies [4, 5]. Hestimated is then the created by selecting
+the hottest paths in our path pro(cid:12)le equal to the number of
+paths in Hactual.
+
+Figure 5 shows accuracy results using the method de-
+scribed above. In general, our accuracy ranges from 75%
+to 95%, averaging 80% accuracy. Applications 177.mesa
+and 197.parser are particularly bad with accuracies of 60%.
+Evidence shows that although our method performs well for
+some benchmarks such as 175.vpr, 178.art, and 183.equake,
+it could use some improvement in others. Noise from the
+path matching scheme is most likely distorting the (cid:12)nal path
+counts. Nevertheless, the data clearly motivates using hard-
+ware collected pro(cid:12)le information for optimization methods
+that require even the most speci(cid:12)c of information. The fol-
+lowing section more closely examines the use of hardware
+information to impact multithreaded scheduling.
+
+y
+c
+a
+r
+u
+c
+c
+A
+
+ 
+t
+
+n
+e
+c
+r
+e
+P
+
+100
+
+90
+
+80
+
+70
+
+60
+
+50
+
+40
+
+30
+
+20
+
+10
+
+0
+
+gzip
+
+vpr
+
+mesa
+
+art
+
+ammp
+
+parser
+
+bzip2
+
+twolf
+
+equake
+
+mcf
+Benchmarks
+
+Figure 5: Accuracy of PMU-based path pro(cid:12)ling.
+
+4. SCHEDULING FOR SIMULTANEOUS
+
+MULTITHREADED ARCHITECTURES
+The performance impact of operating system scheduling
+on multithreaded architectures depends directly on having
+an integrated run-time model of processor resources and ap-
+plication characteristics. For example, it is important for the
+scheduler to view logical processors in a multithreaded phys-
+ical processor core as a dynamically varying pair of asym-
+metric processors.
+In the case that one logical processor
+is running a memory intensive application the other logical
+processor should be treated like a machine with fewer mem-
+ory resources. Since the behavior of the processors depends
+on dynamically varying application demands and the cur-
+rent allocation of threads to logical processors, the scheduler
+determines the \properties" of a logical processor by pro(cid:12)l-
+ing application demand and adjusting its internal scheduling
+model based on this pro(cid:12)le. Building an e(cid:11)ective run-time
+model for scheduling is the topic of the following section.
+
+Consider a case where there are two logical processors
+(in a single 2-way multithreaded physical processor) and
+
+(cid:3)
+
+.
+
+(cid:1)
+
+(cid:1)
+
+(cid:0)
+
+(cid:1)
+
+(cid:0)
+
+(cid:0)
+
+=
+
+(cid:3)
+
+(cid:3)
+
+(cid:0)
+
+(cid:0)
+
+(cid:0)
+
+R
+2
+
+R
+2
+
+R
+2
+
+G
+2
+
+(B
+
+(B
+
+(B
+
+1))=
+
+1))=
+
+a total of R processes ready to execute. Furthermore, as-
+sume that it’s possible to classify processes as either \good"
+(causing no or minimal slowdown when scheduled with most
+other processes) or \bad" (causing slowdown when sched-
+uled with most other processes) and that there are R =
+G + B of each of those processes available to run. At any
+scheduling interval, the probability of scheduling two \bad"
+jobs to the same physical processor concurrently using a
+random scheduler would be (B
+, and the
+probability of scheduling exactly one \bad" job would be
+1
+
+(cid:0)
+Since an operating system scheduler must eventually run
+all processes, the best outcome is to not run two \bad" jobs
+at the same time (this assumes that the scheduler always
+uses both logical processors).
+If running the full combi-
+nation of the SPEC benchmarks in Figure 1 concurrently,
+then G = 21 and B = 3 (considering 176.gcc, 171.swim
+and 179.art to be \bad" processes). This would result in
+about 2% of scheduling intervals where two \bad" jobs are
+scheduled concurrently, and about 22% of scheduling inter-
+vals where one \bad" program is run with a \good" pro-
+gram. If, as Figure 1 indicates, running a combination of
+\bad" jobs impacts performance by 20%. By detecting such
+\bad" jobs, the overall performance may be improved by
+0.4% overall. The potential performance improvement in-
+creases when a smaller number of processes are involved. If
+G = 2; B = 2 then the overall performance might be im-
+proved by 33%
+
+20%, or about 6%.
+
+(cid:0)
+
+(cid:1)
+
+These potential speedups are small, but this simple anal-
+ysis mainly indicates that any improved scheduling mecha-
+nism has to be e(cid:14)cient to be worth implementing. Micropro-
+cessor designers are hard-pressed to improve performance by
+more than 3-5% by any single architectural improvement.
+If a simple scheduling mechanism can achieve comparable
+gains, there is value in implementing it, as long as it does
+not hurt performance by co-scheduling \bad" processes more
+frequently than a random scheduler would.
+
+Due to the need for extreme e(cid:14)ciency, this paper ex-
+plores using hardware performance counters to predict how
+co-scheduled processes might interact. Most processors sup-
+port performance counters for both debugging processor de-
+signs and gathering data for performance tuning applica-
+tions. The organization in the Pentium-4 is similar to that
+of many other processors - the processor has a limited num-
+ber of performance registers and a larger number of per-
+formance counters. A given performance counter can be
+associated with speci(cid:12)c performance registers. Additional
+performance information can be synthesized from combina-
+tions of performance counters (for example, the instructions
+per cycle delivered by a processor can be calculated once
+the number of instructions retired and the processor cycles
+are counted). It is important to characterize the interaction
+of logical processors in an SMT system using a data-driven,
+empirical approach to determine which threads should be
+co-scheduled rather than adopt the ad hoc approach used in
+prior studies [27].
+
+Five performance metrics are identi(cid:12)ed that indicate ei-
+ther particular aspects of program activity (such as the num-
+ber of branches or (cid:13)oating point instructions) or imple-
+mentation speci(cid:12)c characteristics of the processor, such as
+branch mispredictions or trace cache lookup misses that oc-
+cur due to incorrect processor speculation. These are shown
+in Table 1. These (cid:12)ve metrics are chosen because they
+
+b Retired branches
+
+tcm Trace cache lookup misses
+l2m Second-level cache misses
+
+f Retired Floating point (cid:22)ops
+
+ipc
+
+Instructions per cycle
+
+Table 1: Performance metrics recorded for applica-
+tion characterization.
+In reported metrics, events
+are normalized by the number of instructions issued
+to be per-cycle events counts. Thus, a value of 0.05
+for f would indicate that 5% of cycles are spent on
+(cid:13)oating point instructions.
+
+are a good representation of thread behavior given the con-
+straints on performance counter allocation. Since there are
+two threads, each counter must be allocated twice, one per
+logical processor, and certain events can only be counted
+with certain counters. The Linux 2.6 task structure was
+modi(cid:12)ed to include software counters to shadow the hard-
+ware counters. Counter values are recorded during execution
+and can be used during scheduling.
+
+Pair-wise combinations of the SPEC CPU 2000 bench-
+mark suite ran with reference input sets and measured the
+performance counters of each application each time the sched-
+uler was invoked. Using the R statistical computing pack-
+age [23] to (cid:12)t a linear model on this data and predict the
+IPC based on the sum of performance counters extracted
+from each application for each application pair. The mo-
+tivation in using the sum of the performance counters was
+the intuition that most architectural mechanisms have some
+form of capacity limit. For example, the processor memory
+bandwidth is (cid:12)nite; if two processes tend to approach that
+limit, they will probably interfere with one another.
+
+The goal of this was to determine if there is a simple set of
+performance registers that can be used to predict speedup
+(or slowdown); scheduling decisions could then use those
+speci(cid:12)c set of performance counters and the derived model
+to predict which application pairings are most likely to yield
+speedups. It was separately observed that application be-
+havior is reasonably consistent across scheduling quanta { in
+other words, that the immediate past is a reasonable predic-
+tor for the immediate future. Most programs exhibit some
+degree of phase behavior in the use of microarchitectural
+features [25]; this is one reason why the SOS technique of
+Snavely et al undergoes periodic resampling to determine
+which processes cooperate. The autocorrelation coe(cid:14)cient
+for the ipc and l2m counters were computed as 0.93 and 0.92
+(respectively) for a single lag period, indicating that using
+the prior sample provides reasonable accuracy. Rather than
+use a larger sampling period and periodically re-sampled,
+the auto-correlation decreases, indicating less predictive ac-
+curacy { for example, summed over six scheduling quanta,
+the autocorrelation for l2m drops to 0.52. This implies that
+the resampling mechanism of Snavely et al would have higher
+overhead than our simpler mechanism.
+
+The predictor for speedup was a linear model of each of
+the normalized performance counters that included multi-
+plicative terms to capture interactions between microarchi-
+
+tectural features. The model is of the form
+
+speedup = w0 + w1b + w2tcm + : : :
+
++w10cpc + w11b
++residual:
+
+(cid:3)
+
+tcm + w12b
+
+l2m + : : :
+
+(cid:3)
+
+(cid:3)
+
+The full linear model includes a total of 256 terms. The
+weights for individual terms (wi) de(cid:12)ne the contribution of
+a particular factor (e.g. b or tcm) or a combination of factors
+l2m). The combinations of factors include interac-
+(e.g. tcm
+tions between speci(cid:12)c factors { for example, tcm
+l2m repre-
+sents the contribution of the interaction of trace cache misses
+and level-2 cache misses. This linear model has a multiple
+correlation coe(cid:14)cient of R2 = 0:942,
+indicating that the
+model has very high predictive accuracy. The \residual"
+term represents any error term needed to have the linear
+model (cid:12)t the data. The correlation coe(cid:14)cient can occasion-
+ally provide a misleading measure of the model accuracy.
+Further analysis was performed to verify that the statistical
+model was accurate.
+
+(cid:3)
+
+The linear model serves three purposes. First, it indi-
+cates that it is possible to accurately predict speedup using
+samples from performance counter sampling of independent
+applications. Second, using the linear model, it’s possible to
+determine which performance counters are most signi(cid:12)cant
+in predicting speedup. This can be done using two tech-
+niques. The (cid:12)rst involves adding or removing terms from the
+linear model to see if a reduced set of performance counters
+yields a model with the same accuracy (de(cid:12)ned by the R2
+metric); a complete analysis was performed by dropping in-
+dividual performance counters and found that omitting any
+one counter reduced R2 to values of 0:70 : : : 0:30. Thus, it
+appeared important to include this full set of performance
+counters.
+
+The basic performance counters explain about 90% of
+the variation in the speedup when applications are paired.
+Based on the linear model, it should be possible to select ap-
+plications by comparing a scaled sum of performance coun-
+ters corresponding to the model {
+(cid:3)
+b +
+tcm. This simple heuristic captures the relative
+contribution of the leading contributors to the performance
+variation and involved only simple calculation, yielding an
+e(cid:14)cient solution.
+
+l2m + 1:5
+
+f + 5:2
+
+23
+
+(cid:0)
+
+(cid:0)
+
+1
+
+(cid:3)
+
+(cid:3)
+
+(cid:3)
+
+4.1 Informed›Multithreaded Scheduling
+
+Informed scheduling decisions are made in two ways: (cid:12)rst
+by migrating tasks between processors so that any decision
+is more likely to be positive, and second by selecting tasks
+predicted to behave well with the other tasks currently run-
+ning on the other logical processor. Previous work [24] illus-
+trated that informing operating system schedulers with the
+information of processor performance counters has the po-
+tential of improving multithreaded architectures. This sec-
+tion examines the complete implementation of constructing
+an informed performance-guided multithreaded scheduler.
+
+The Pentium-4 performance counters are con(cid:12)gured prior
+to execution to record (cid:12)ve separate metrics for each logi-
+cal processor: branches, DTLB misses, L2 misses, (cid:13)oating
+point micro-ops, and instructions. Due to the constraints on
+performance counter allocation, it’s not possible to directly
+record all the performance counters used in the linear model
+concurrently, and thus use this reduced set of counters. Each
+time the scheduler is invoked, these counters, along with the
+
+time stamp (in nanoseconds) are read and set to zero. Af-
+ter reading, the value is multiplied by a large integer factor
+before being divided by the elapsed time so that a scaled
+metric per cycle is created without using the (cid:13)oating point
+unit within the kernel. The adjusted value is then stored
+with the task structure of the previous task, providing an
+estimate of the events per cycle for the previous scheduling
+quantum. New processes have null values for these coun-
+ters, meaning they will be scheduled ahead of most other
+processes; this is corrected once that process executes and
+records the performance counter values.
+
+Our scheduler modi(cid:12)cation is done by adding a hook into
+the default Linux 2.6 scheduler that calls a function if it is
+registered by a module. The module handles all instrumen-
+tation, task selection, and the decision of when to migrate
+tasks, but the migration is part of the statically loaded ker-
+nel because the scheduling data structures are not exported.
+The Linux 2.6 scheduler uses a queue based scheme, and the
+(cid:12)rst task in the queue has the highest priority to be sched-
+uled next. In order to maintain scheduling fairness and re-
+sponsiveness, but still exploit di(cid:11)erences in processes, the
+scheduler only looks at the (cid:12)rst four tasks on the run-queue
+and never skip a task more than three times.
+
+The linear model is useful for predicting IPC and giving
+us information about what resources are most critical for
+scheduling. However, it is less useful for predicting actual
+speedup of paired tasks because of the residual e(cid:11)ect be-
+tween the actual counters and IPC. For example, the model
+predicts that a high (cid:13)oating point count will yield a high
+IPC, but it is obvious that pairing two applications with
+high (cid:13)oating point is the wrong decision. Instead of directly
+applying the model, its factors are used as a heuristic to
+guide scheduling.
+Instead of summing the counters from
+each process, the absolute di(cid:11)erence is taken and weighed
+to indicate the di(cid:11)erence. This scheme will pair jobs with
+di(cid:11)erent usage patterns. The following prediction function
+was derived. Assume process A is running on logical CPU 0,
+and a decision between other processes for co-scheduling is
+required. Each process has a set of counters representing the
+event count per cycle { for example Br; Bl2m and so on. For
+each process, value is calculated: v = 4(abs(Al2m(cid:0)
+Bl2m))+
+Bb)).
+(abs(Atcm (cid:0)
+The process among the (cid:12)rst three in the priority queue with
+the highest v is selected. Notice that the scaling for the l2m
+term is four-fold that of the b and f terms { this is done
+because the model indicates that the l2m contributes 20%
+of the variance compared to the other counters. A similar
+argument holds for the ipc counters, but those counters are
+subtracted from the others since IPC is the only \higher is
+better" counter.
+
+Btcm)) + (abs(Af (cid:0)
+
+Bf)) + 2(abs(Ab (cid:0)
+
+In a situation where jobs are randomly distributed be-
+tween run queues, it is possible to encounter a situation
+where there is little choice but to schedule two processes
+that are cache-intensive. Our solution to this was to add
+a two bit saturating counter to each task structure. The
+counter is incremented after a \high-cache" interval, and
+decremented after a \low-cache" interval. When a task’s
+two bit counter is maximized, it is migrated to a CPU that
+has been designated as the "high-cache" CPU, if it is not
+already located there, and then the a(cid:14)nity mask is set so
+that process cannot be migrated away. When tasks on the
+"high-cache" CPU fall to a weak state in the two bit counter
+the a(cid:14)nity mask is restored and the Linux scheduler can mi-
+
+grate it to another processor if necessary for load balancing.
+Fortunately, the Linux scheduler does an adequate job of
+load balancing, and as such no additional compensation is
+performed to account for tasks the algorithm removes. In
+practice, this method was very e(cid:11)ective in grouping tasks;
+on average there were two or three tasks of a set of eight
+that were (cid:12)xed at any given time. To prevent an imbalance,
+the number of (cid:12)xed tasks was capped at half of the total
+runnable task count.
+
+5. CO›SCHEDULER RESULTS
+
+All measurements and experiments reported were run on
+a single 2.53GHz Pentium-4 \Northwood" workstation with
+768MB of RDRAM using a modi(cid:12)ed Linux 2.6.5 kernel.
+All benchmarks were executed using a reference data set.
+Each experiment involved executing eight randomly selected
+benchmarks for a (cid:12)xed time interval of four minutes on both
+the base Linux scheduler and our modi(cid:12)ed co-scheduler.
+Speedup was measured using the throughput IPC (measured
+in IA32 instructions per cycle rather than (cid:22)ops/cycle) of the
+processor.
+
+The time limit was chosen for several reasons. First, it
+seems that the best way to evaluate this system would be
+to allow jobs to run to completion, but doing so makes it
+di(cid:14)cult to understand the results.
+In a set of jobs, sup-
+pose that all jobs except the slowest one improve; the sys-
+tem has obviously increased throughput, but the time to
+completion remained the same. Summing individual bench-
+mark execution times is also (cid:13)awed; improvement in shorter
+benchmarks has a cascading e(cid:11)ect on the results of longer
+benchmarks. Also, since the timeslice in the Linux 2.6 ker-
+nel is 100ms for IA32 systems, the scheduler will make at
+least 2400 decisions in each experiment.
+
+Figure 6 shows the speedup for (cid:12)fty random sets of eight
+di(cid:11)erent applications drawn from the SPEC2000 benchmark
+suite. The speedup reported is an average of three measure-
+ments of four minute intervals of program execution. We
+ran the same combination of benchmarks using the default,
+unmodi(cid:12)ed scheduler in Linux 2.6.5 and our own modi(cid:12)ed
+version for the same period of time and then compare the
+throughput of the processor. For eight co-scheduled pro-
+cesses, we achieve an average speedup of 6.0%, with values
+ranging from -2.9% to 58%.
+
+Figure 7 gives a closer look at the worst, median, and
+best benchmark sets. In these three examples, along with
+every other experiment, there is a severe disparity between
+the amount of speedup individual applications receive, even
+though the overall speedup is positive.
+It is important to
+note that although processes are chosen to run in a di(cid:11)erent
+order, they always receive the same amount of time on the
+processor. Since the scheduler is fair with respect to time,
+this implies that there is an issue of microarchitectural un-
+fairness that must be addressed.
+
+6. CONCLUSION
+
+This work demonstrates that there is good potential to
+improve throughput using hardware-monitoring-based co-
+operative scheduling for multithreaded processors. Across
+(cid:12)fty random sets of eight di(cid:11)erent applications, an average
+speedup of 6%, with some positive speedup values ranging
+from 11% to 25%. The results show a clear potential for
+operating systems to in(cid:13)uence future systems, and more im-
+
+p
+u
+d
+e
+e
+p
+S
+
+t
+
+n
+e
+c
+r
+e
+P
+
+60%
+
+50%
+
+40%
+
+30%
+
+20%
+
+10%
+
+0%
+
+−10%
+
+Figure 6: Speedup realized by each set of benchmarks over the base Linux scheduler.
+
+50 Sets of 8 SPEC Benchmarks
+
+Individual Benchmark Speedup
+
+Worst Set
+
+Median Set
+
+Best Set
+
+p
+u
+d
+e
+e
+p
+S
+
+3.50
+
+3.00
+
+2.50
+
+2.00
+
+1.50
+
+1.00
+
+0.50
+
+t
+r
+a
+
+i
+
+p
+z
+b
+
+p
+a
+g
+
+p
+a
+g
+
+i
+
+p
+z
+g
+
+s
+a
+c
+u
+
+l
+
+r
+e
+s
+r
+a
+p
+
+k
+c
+a
+r
+t
+x
+s
+
+i
+
+l
+l
+
+a
+r
+e
+v
+O
+
+i
+
+s
+p
+a
+
+y
+t
+f
+
+a
+r
+c
+
+n
+o
+e
+
+e
+k
+a
+u
+q
+e
+
+l
+
+e
+g
+a
+g
+
+l
+
+f
+l
+
+o
+w
+
+t
+
+f
+l
+
+o
+w
+
+t
+
+x
+e
+t
+r
+o
+v
+
+l
+l
+
+a
+r
+e
+v
+O
+
+c
+c
+g
+
+l
+
+e
+g
+a
+g
+
+l
+
+i
+
+p
+z
+g
+
+i
+
+m
+w
+s
+
+i
+
+m
+w
+s
+
+i
+
+m
+w
+s
+
+f
+l
+
+o
+w
+
+t
+
+f
+l
+
+o
+w
+
+t
+
+l
+l
+
+a
+r
+e
+v
+O
+
+Benchmark Set
+
+Figure 7: Individual benchmark speedups for sets with the worst, median, and best speedup.
+
+portantly for performance counters to be integrated into op-
+erating systems. However, the improved throughput is dis-
+tributed very unevenly; threads are sometimes penalized due
+to architectural unfairness, some receive dramatic improve-
+ment over the default scheduler and others only receive a few
+percent. A mechanism to evaluate how well a job \should"
+be doing is a novel problem in operating system scheduling.
+Traditionally, operating systems have scheduled \time," but
+increased sharing of resources may require scheduling for a
+combination of resources simultaneously. We believe the
+methodology used for selecting \pairing functions" can be
+applied to larger future systems with many SMT cores, or
+to systems with di(cid:11)erent microarchitures.
+
+This paper also presented a system for extending hardware-
+collected information related to run-time optimization. The
+construction of a run-time hardware-based pro(cid:12)ling system
+demonstrated that path pro(cid:12)ling information can be accu-
+rately estimated (between 80-90%) while requiring very little
+performance overhead (between 3-5%). Overall the schedul-
+ing and pro(cid:12)ling results illustrate the promising potential
+of performing continuous optimization of future processor
+resource decisions and thread execution.
+
+7. REFERENCES
+[1] J. Anderson, L. M. Berc, J. Dean, S. Ghemawat,
+
+M. R. Henzinger, S. Leung, R. L. Sites, M. T.
+Vandevoorde, C. A. Waldspurger, and W. E. Weihl.
+Continuous pro(cid:12)ling: Where have all the cycles gone?
+In Proc. of the 16th ACM Symposium of Operating
+Systems Principles, pages 1{14, October 1997.
+
+[2] Apple Computer, Inc.
+
+http://developer.apple.com/tools/performance/.
+
+[3] T. Ball and J. R. Larus. E(cid:14)cient path pro(cid:12)ling. In
+
+Proceedings of 29th Annual Int’l Symposium on
+Microarchitecture, pages 46{57, December 1996.
+
+[4] T. Ball, P. Mataga, and M. Sagiv. Edge pro(cid:12)ling
+
+versus path pro(cid:12)ling: The showdown. In Proceedings
+of the 25th ACM SIGPLAN-SIGACT Symposium on
+Principles of Programming Languages, pages 134{148,
+January 1998.
+
+[5] M. D. Bond and K. S. McKinley. Practical path
+
+pro(cid:12)ling for dynamic optimizer. In Proceedings of the
+3rd International Symposium on Code Generation and
+Optimization(CGO-2005), March 2005.
+
+[6] J. M. Borkenhagen, R. J. Eickemeyer, R. N. Kalla,
+
+[11] W. W. Hwu and P. P. Chang. Inline function
+
+[26] A. Snavely and L. Carter. Symbiotic jobscheduling on
+
+[21] OpenIMPACT Research Compiler.
+
+http://www.gelato.uiuc.edu/.
+
+[22] K. Pettis and R. C. Hansen. Pro(cid:12)le guided code
+
+positioning. In Proceedings of the ACM SIGPLAN
+1990 Conference on Programming Language Design
+and Implementation, pages 16{27, June 1990.
+
+[23] R Development Core Team. R: A language and
+
+environment for statistical computing. R Foundation
+for Statistical Computing, Vienna, Austria, 2004.
+3-900051-07-0.
+
+[24] A. Settle, J. Kihm, , A. Janiszewski, and D. Connors.
+Performance analysis of simultaneous multithreading
+in a powerpc-based processor. In Proceedings of the
+International Conference on Parallel Architectures and
+Compiler Techniques, October 2004.
+
+[25] T. Sherwood, S. Sair, and B. Calder. Phase tracking
+
+and prediction. In Proceedings of the 30th annual
+international symposium on Computer architecture,
+pages 336{349. ACM Press, 2003.
+
+the tera mta. In Workshop on Multi-Threaded
+Execution Architecture and Compilers, Jan 2000.
+
+[27] A. Snavely and D. M. Tullsen. Symbiotic
+
+jobscheduling for a simultaneous multithreaded
+processor. In Proceedings of the ninth international
+conference on Architectural support for programming
+languages and operating systems, pages 234{244. ACM
+Press, 2000.
+
+[28] A. Snavely, D. M. Tullsen, and G. Voelker. Symbiotic
+
+jobscheduling with priorities for a simultaneous
+multithreading processor. In Proceedings of the 2002
+ACM SIGMETRICS international conference on
+Measurement and modeling of computer systems,
+pages 66{76. ACM Press, 2002.
+
+[29] B. Sprunt. Pentium 4 performance-monitoring
+
+features. In IEEE Micro 22(4), pages 72{82, 2002.
+
+Simultaneous multithreading: Maximizing on-chip
+parallelism. In 22nd Annual International Symposium
+on Computer Architecture, June 1995.
+
+[31] D. M. Tullsen, J. L. Lo, S. J. Eggers, and H. M. Levy.
+
+Supporting (cid:12)ne-grained synchronization on a
+simultaneous multithreading processor. In
+International Symposium on Architectural Support for
+Programming Languages and Operating Systems,
+pages 54{58, 2000.
+
+[32] D. W. Wall. Predicting program behavior using real
+
+and estimated pro(cid:12)les. In Proceedings of the ACM
+SIGPLAN 1991 Conference on Programming
+Language Design and Implementation, pages 59{70,
+June 1991.
+
+and S. R. Kunkel. A multithreaded powerpc processor
+for commercial servers. IBM Journal of Research and
+Development, 44(6):885{898, November 2000.
+
+[7] H. Chen, W.-C. Hsu, J. Lu, P.-C. Yew, and D.-Y.
+Chen. Dynamic trace selection using performance
+monitoring hardware sampling. In Proceedings of the
+International Symposium on Code Generation and
+Optimization(CGO 2003), March 2003.
+
+[8] T. M. Conte, B. A. Patel, K. N. Menezes, and J. S.
+
+Cox. Hardware-based pro(cid:12)ling: An e(cid:11)ective technique
+for pro(cid:12)le-driven optimization. International Journal
+of Parallel Programming, 24(2):187{206, April 1996.
+
+[9] A. Eustace and A. Srivastava. ATOM: A (cid:13)exible
+interface for building high performance program
+analysis tools. In Proceedings of the Winter 1995
+USENIX Conference, January 1995.
+
+[10] Hewlett-Packard Development Company. perfmon
+
+project
+http://www.hpl.hp.com/research/linux/perfmon/.
+
+expansion for compiling realistic C programs. In
+Proceedings of the ACM SIGPLAN 1989 Conference
+on Programming Language Design and
+Implementation, pages 246{257, June 1989.
+
+[12] W. W. Hwu, S. A. Mahlke, W. Y. Chen, P. P. Chang,
+N. J. Warter, R. A. Bringmann, R. G. Ouellette, R. E.
+Hank, T. Kiyohara, G. E. Haab, J. G. Holm, and
+D. M. Lavery. The Superblock: An e(cid:11)ective technique
+for VLIW and superscalar compilation. The Journal
+of Supercomputing, 7(1):229{248, January 1993.
+
+[13] Intel Corporation. Special issue on intel
+
+hyperthreading in pentium-4 processors. Intel
+Technology Journal, 1(1), January 2002.
+
+[14] Intel Corporation. Intel Itanium 2 processor reference
+manual: For software development and optimization.
+May 2004.
+
+in high-end processors: Methodology and empirical
+data. In Proceedings of the 36th Annual IEEE/ACM
+International Symposium on Microarchitecture,
+page 93. IEEE Computer Society, 2003.
+
+[16] T. Kistler and M. Franz. Continuous program
+
+optimization. In IEEE Transactions on Computers
+vol. 50 n. 6, June 2001.
+
+[17] V. Krishnan and J. Torrellas. A chip-multiprocessor
+architecture with speculative multithreading. IEEE
+Transactions on Computers, 48(9):866{880, 1999.
+
+[18] J. Lu, H. Chen, P.-C. Yew, and W.-C. Hsu. Design
+
+and implementation of a lightweight dynamic
+optimization system. In Journal of Instruction-Level
+Parallelism 6(2004), pages 1{24, April 2004.
+
+[19] D. T. Marr, F. Binns, D. L. Hill, G. Hinton, D. A.
+
+Koufaty, J. A. Miller, and M. Upton. Hyper-threading
+technology architecture and microarchitecture. Intel
+Technology Journal, 6(1):4{15, Feb. 2002.
+
+[20] M. C. Merten, A. R. Trick, E. M. Nystrom, R. D.
+
+Barnes, J. C. Gyllenhaal, and W. W. Hwu. A
+hardware mechanism for dynamic extraction and
+relayout of program hot spots. In Proc. 2000 Int’l
+Symp. on Computer Architecture, pages 136{147, June
+2000.
+
+[15] C. Isci and M. Martonosi. Runtime power monitoring
+
+[30] D. M. Tullsen, S. J. Eggers, and H. M. Levy.
+
+

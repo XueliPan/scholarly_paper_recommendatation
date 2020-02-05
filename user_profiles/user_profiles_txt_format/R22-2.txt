@@ -1,0 +1,899 @@
+Cycle-Accurate Performance Modelling in an Ultra-Fast
+Just-In-Time Dynamic Binary Translation Instruction
+
+Set Simulator
+
+Igor Böhm, Björn Franke, and Nigel Topham
+
+Institute for Computing Systems Architecture,
+School of Informatics, University of Edinburgh
+
+Informatics Forum, 10 Crichton Street, Edinburgh, EH8 9AB, United Kingdom
+
+I.Bohm@sms.ed.ac.uk,{bfranke,npt}@inf.ed.ac.uk
+
+http://groups.inf.ed.ac.uk/pasta/
+
+Abstract. Instruction set simulators (ISS) are vital tools for compiler and proces-
+sor architecture design space exploration and veriﬁcation. State-of-the-art simula-
+tors using just-in-time (JIT) dynamic binary translation (DBT) techniques are able
+to simulate complex embedded processors at speeds above 500 MIPS. However,
+these functional ISS do not provide microarchitectural observability. In contrast,
+low-level cycle-accurate ISS are too slow to simulate full-scale applications, forc-
+ing developers to revert to FPGA-based simulations. In this paper we demonstrate
+that it is possible to run ultra-high speed cycle-accurate instruction set simula-
+tions surpassing FPGA-based simulation speeds. We extend the JIT DBT engine of
+our ISS and augment JIT generated code with a veriﬁed cycle-accurate processor
+model. Our approach can model any microarchitectural conﬁguration, does not
+rely on prior proﬁling, instrumentation, or compilation, and works for all binaries
+TM
+targeting a state-of-the-art embedded processor implementing the ARCompact
+instruction set architecture (ISA). We achieve simulation speeds up to 88 MIPS on
+a standard x86 desktop computer for the industry standard EEMBC, COREMARK
+and BIOPERF benchmark suites.
+
+1
+
+Introduction
+
+Simulators play an important role in the design of today’s high performance micropro-
+cessors. They support design-space exploration, where processor characteristics such as
+speed and power consumption are accurately predicted for different architectural mod-
+els. The information gathered enables designers to select the most efﬁcient processor
+designs for fabrication. On a slightly higher level instruction set simulators provide a
+platform on which experimental instruction set architectures can be tested, and new
+compilers and applications may be developed and veriﬁed. They help to reduce the
+overall development time for new microprocessors by allowing concurrent engineering
+during the design phase. This is especially important for embedded system-on-chip
+(SOC) designs, where processors may be extended to support speciﬁc applications.
+However, increasing size and complexity of embedded applications challenges current
+ISS technology. For example, the JPEG encode and decode EEMBC benchmarks execute
+between 10 ∗ 109 and 16 ∗ 109 instructions. Similarly, AAC (Advanced Audio Coding)
+
+2
+
+Igor Böhm, Björn Franke, and Nigel Topham
+
+decoding and playback of a six minute excerpt of Mozart’s Requiem using a sample
+rate of 44.1 kHz and a bit rate of 128 kbps results in ≈ 38 ∗ 109 executed instructions.
+These ﬁgures clearly demonstrate the need for fast ISS technology to keep up with
+performance demands of real-world embedded applications.
+
+The broad introduction of multi-core systems, e.g. in the form of multi-processor
+systems-on-chip (MPSOC), has exacerbated the strain on simulation technology and
+it is widely acknowledged that improved single-core simulation performance is key to
+making the simulation of larger multi-core systems a viable option [1].
+
+This paper is concerned with ultra-fast ISS using recently developed just-in-time
+(JIT) dynamic binary translation (DBT) techniques [27,6,15]. DBT combines interpre-
+tive and compiled simulation techniques in order to maintain high speed, observability
+and ﬂexibility. However, achieving accurate state and even more so microarchitectural
+observability remains in tension with high speed simulation. In fact, none of the existing
+JIT DBT ISS [27,6,15] maintains a detailed performance model.
+
+In this paper we present a novel methodology for fast and cycle-accurate perfor-
+mance modelling of the processor pipeline, instruction and data caches, and memory
+within a JIT DBT ISS. Our main contribution is a simple, yet powerful software pipeline
+model together with an instruction operand dependency and side-effect analysis JIT
+DBT pass that allows to retain an ultra-fast instruction-by-instruction execution model
+without compromising microarchitectural observability. The essential idea is to recon-
+struct the microarchitectural pipeline state after executing an instruction. This is less
+complex in terms of runtime and implementation than a cycle-by-cycle execution model
+and reduces the work for pipeline state updates by more than an order of magnitude.
+
+In our ISS we maintain additional data structures relating to the processor pipeline
+and the caches and emit lightweight calls to functions updating the processor state in the
+JIT generated code. In order to maintain ﬂexibility and to achieve high simulation speed
+our approach decouples the performance model in the ISS from the functional simula-
+tion, thereby eliminating the need for extensive rewrites of the simulation framework
+to accommodate microarchitectural changes. In fact, the strict separation of concerns
+(functional simulation vs. performance modelling) enables the automatic generation of
+a pipeline performance model from a processor speciﬁcation written in an architecture
+description language (ADL) such as LISA [26]. This is, however, beyond the scope of
+this paper.
+
+We have evaluated our performance modelling methodology against the industry
+standard EEMBC, COREMARK, and BIOPERF benchmark suites for our ISS of the EN-
+CORE [33] embedded processor implementing the ARCompactTM [32] ISA. Our ISS
+faithfully models the 5-stage interlocked ENCORE processor pipeline (see Figure 3)
+with forwarding logic, its mixed-mode 16/32-bit instruction set, zero overhead loops,
+static and dynamic branch prediction, branch delay slots, and four-way set associative
+data and instruction caches. We also provide results for the 7-stage ENCORE processor
+pipeline variant modelled by our ISS. Across all 44 benchmarks from EEMBC, CORE-
+MARK, and BIOPERF the speed of simulation reaches up to 88 MIPS on a standard x86
+desktop computer and outperforms that of a speed-optimised FPGA implementation of
+the ENCORE processor.
+
+Cycle-Accurate Performance Modelling in an Ultra-Fast JIT DBT ISS
+
+3
+
+Fig. 1. Dynamic binary translation ﬂow integrated into main simulation loop.
+
+1.1 Motivating Example
+
+Before we take a more detailed look at our JIT DBT engine and the proposed JIT per-
+formance model code generation approach, we provide a motivating example in order
+to highlight the key concepts.
+
+Consider the block of ARCompactTM instructions in Figure 2 taken from the CORE-
+MARK benchmark. Our ISS identiﬁes this block of code as a hotspot and compiles it to
+native machine code using the sequence of steps illustrated in Figure 1. Each block maps
+onto a function denoted by its address (see label 1(cid:13) in Figure 2), and each instruction is
+translated into semantically equivalent native code faithfully modelling the processors
+architectural state (see labels 2(cid:13), 3(cid:13), and 6(cid:13) in Figure 2). In order to correctly track mi-
+croarchitectural state, we augment each translated ARCompactTM instruction with calls
+to specialised functions (see labels 3(cid:13) and 7(cid:13) in Figure 2) responsible for updating the
+underlying microarchitectural model (see Figure 3).
+
+Figure 3 demonstrates how the hardware pipeline microarchitecture is mapped onto
+a software model capturing its behaviour. To improve the performance of microarchi-
+tectural state updates we emit several versions of performance model update functions
+tailored to each instruction kind (i.e. arithmetic and logical instructions, load/store in-
+structions, branch instructions). Section 3.1 describes the microarchitectural software
+model in more detail.
+
+ Block TranslatedNew BlockEnd of Trace IntervalExecute Translated Block Record Block TraceInterpretive Block Simulation  Translate Recorded TracesUpdate Translated Block MapYesYesPC addressNoNoNoYesInstruction SelectionEmit Target Instruction Dependency AnalysisEmit Performance Model UpdateJIT DBT EngineCompile and Link214
+
+Igor Böhm, Björn Franke, and Nigel Topham
+
+After code has been emitted for a batch of blocks, it is translated and linked by a
+JIT compiler. Finally, the translated block map is updated with addresses of each newly
+translated block. On subsequent encounters to a previously translated block during sim-
+ulation, it will be present in the translated block map and can be executed directly.
+
+1.2 Contributions
+
+Among the contributions of this paper are:
+
+1. The development of a cycle-accurate timing model for state-of-the-art embedded
+processors that can be adapted to different microarchitectures and is independent
+of the implementation of a functional ISS,
+
+2. the integration of this cycle-accurate timing model into a JIT DBT engine of an ISS
+to improve the speed of cycle-accurate instruction set simulation to a level that is
+higher than a speed-optimised FPGA implementation of the same processor core,
+without compromising accuracy,
+
+3. an extensive evaluation against industry standard COREMARK, EEMBC, and BIOP-
+ERF benchmark suites and an interpretive cycle-accurate mode of our ISS that has
+been veriﬁed and calibrated against an actual state-of-the-art hardware implemen-
+tation of the ENCORE embedded processor implementing the full ARCompactTM
+ISA.
+
+1.3 Overview
+
+The remainder of this paper is structured as follows. In section 2 we provide a brief
+outline of the ENCORE embedded processor that serves as a simulation target in this
+paper. In addition, we outline the main features of our ARCSIM ISS and describe the
+basic functionality of its JIT DBT engine. This is followed by a description of our ap-
+proach to decoupled, cycle-accurate performance modelling in the JIT generated code
+in section 3. We present the results of our extensive, empirical evaluation in section 4
+before we discuss the body of related work in section 5. Finally, we summarise and
+conclude in section 6.
+
+2 Background
+
+2.1 The ENCORE Embedded Processor
+
+In order to demonstrate the effectiveness of our approach we use a state-of-the-art pro-
+cessor implementing the ARCompactTM ISA, namely the ENCORE [33].
+
+The ENCORE’s microarchitecture is based on an interlocked pipeline with forward-
+ing logic, supporting zero overhead loops (ZOL), freely intermixable 16- and 32-bit
+instruction encodings, static and dynamic branch prediction, branch delay slots, and
+predicated instructions. There exist two pipeline variants of the ENCORE processor,
+namely a 5-stage (see Figure 3) variant and a 7-stage variant which has an additional
+ALIGN stage between the FETCH and DECODE stages, and an additional REGISTER
+stage between the DECODE and EXECUTE stages.
+
+Cycle-Accurate Performance Modelling in an Ultra-Fast JIT DBT ISS
+
+5
+
+Fig. 2. JIT dynamic binary translation of ARCompact
+representing architectural
+of the microarchitectural state update function pipeline().
+
+basic block with CpuState structure
+6(cid:13) and microarchitectural state 7(cid:13). See Figure 3 for an implementation
+
+TM
+
+extern CpuState cpu;             // global processor statevoid BLK_0x00000848(void) {  cpu.r[2] = (uint16_t)(cpu.r[9]);  pipeline(0,cpu.avail[9],&(cpu.avail[2]),0x00000848,1,0);  cpu.r[3] = cpu.r[12] ^ cpu.r[2];  pipeline(cpu.avail[12],cpu.avail[2],&(cpu.avail[3]),0x0000084c,1,0);  cpu.r[3] = cpu.r[3] & (uint32_t)15;  pipeline(cpu.avail[3],0,&(cpu.avail[3]),0x00000850,1,0);  cpu.r[3] = cpu.r[3] << ((sint8_t)3 & 0x1f);  pipeline(cpu.avail[3],0,&(cpu.avail[3]),0x00000854,1,0);  cpu.r[2] = cpu.r[2] & (uint32_t)7;  pipeline(cpu.avail[2],0,&(cpu.avail[2]),0x00000858,1,0);  cpu.r[3] = cpu.r[3] | cpu.r[2];  pipeline(cpu.avail[3],cpu.avail[2],&(cpu.avail[3]),0x0000085c,1,0);  cpu.r[4] = cpu.r[3] << ((sint8_t)8 & 0x1f);  pipeline(cpu.avail[3],0,&(cpu.avail[4]),0x00000860,1,0);  // compare and branch instruction with delay slot  pipeline(cpu.avail[10],cpu.avail[13],&(ignore),0x00000864,1,0);  if (cpu.r[10] >= cpu.r[13]) {    cpu.pl[FE] = cpu.pl[ME] - 1; // branch penalty    fetch(0x0000086c);           // speculative fetch due to branch pred.    cpu.auxr[BTA] = 0x00000890;  // set BTA register    cpu.D = 1;                   // set delay slot bit  } else {    cpu.pc = 0x0000086c;  }  cpu.r[4] = cpu.r[4] | cpu.r[3];// delay slot instruction  pipeline(cpu.avail[4],cpu.avail[3],&(cpu.avail[4]),0x00000868,1,0);  if (cpu.D) {                   // branch was taken    cpu.D = 0;                   // clear delay slot bit    cpu.pc = cpu.auxr[BTA];      // set PC  }  cpu.cycles = cpu.pl[WB];       // set total cycle count at end of block  return;} ....0x00000848: [0x00000848] ext     r2,r9 [0x0000084c] xor     r3,r12,r2 [0x00000850] and     r3,r3,0xf [0x00000854] asl     r3,r3,0x3 [0x00000858] and     r2,r2,0x7 [0x0000085c] or      r3,r3,r2 [0x00000860] asl     r4,r3,0x8 [0x00000864] brcc.d  r10,r13,0x2c [0x00000868] or      r4,r4,r3 ....51234Block of ARCompact™ InstructionsJIT Translated Block with Performance ModelData Structures// pipeline stagestypedef enum {  FE,    // fetch   DE,    // decode  EX,    // execute   ME,    // memory  WB,    // write back  STAGES // 5 stages} Stage;// processor statetypedef struct {  uint32_t pc;  uint32_t r[REGS];          // general purpose registers  uint32_t auxr[AUXREGS];    // auxiliary registers  char     L,Z,N,C,V,U,D,H;  // status flags (H...halt bit)  uint64_t pl[STAGES];       // per stage cycle count  uint64_t avail[REGS];      // per register cycle count  uint64_t cycles;           // total cycle count  uint64_t ignore;           // used when insn. does not produce result} CpuState;676
+
+Igor Böhm, Björn Franke, and Nigel Topham
+
+In our conﬁguration we use 32K 4-way set associative instruction and data caches
+with a pseudo-random block replacement policy. Because cache misses are expensive,
+a pseudo-random replacement policy requires us to exactly model cache behaviour to
+avoid large deviations in cycle count. Although the above conﬁguration was used for
+this work, the processor is highly conﬁgurable. Pipeline depth, cache sizes, associativ-
+ity, and block replacement policies as well as byte order (i.e. big endian, little endian),
+bus widths, register-ﬁle size, and instruction set speciﬁc options such as instruction set
+extensions (ISEs) are conﬁgurable. The processor is fully synthesisable onto an FPGA
+and fully working ASIP silicon implementations have been taped-out recently.
+
+2.2 ARCSIM Instruction Set Simulator
+
+In our work we extended ARCSIM [34], a target adaptable simulator with extensive sup-
+port of the ARCompactTM ISA. It is a full-system simulator, implementing the processor,
+its memory sub-system (including MMU), and sufﬁcient interrupt-driven peripherals to
+simulate the boot-up and interactive operation of a complete Linux-based system. The
+simulator provides the following simulation modes:
+
+– Co-simulation mode working in lock-step with standard hardware simulation tools
+
+used for hardware and performance veriﬁcation.
+
+– Highly-optimised [27] interpretive simulation mode.
+– Target microarchitecture adaptable cycle-accurate simulation mode modelling the
+processor pipeline, caches, and memories. This mode has been calibrated against a
+5-stage and 7-stage pipeline variant of the ENCORE processor.
+
+– High-speed JIT DBT functional simulation mode [27][15] capable of simulating an
+embedded system at speeds approaching or even exceeding that of a silicon ASIP
+whilst faithfully modelling the processor’s architectural state.
+
+– A proﬁling simulation mode that is orthogonal to the above modes delivering addi-
+tional statistics such as dynamic instruction frequencies, detailed per register access
+statistics, per instruction latency distributions, detailed cache statistics, executed
+delay slot instructions, as well as various branch predictor statistics.
+
+In common with the ENCORE processor, the ARCSIM simulator is highly conﬁg-
+urable. Architectural features such as register ﬁle size, instruction set extensions, the set
+of branch conditions, the auxiliary register set, as well as memory mapped IO extensions
+can be speciﬁed via a set of well deﬁned APIs and conﬁguration settings. Furthermore,
+microarchitectural features such as pipeline depth, per instruction execution latencies,
+cache size and associativity, cache block replacement policies, memory subsystem lay-
+out, branch prediction strategies, as well as bus and memory access latencies are fully
+conﬁgurable. The microarchitectural conﬁgurations used for our experiments are listed
+in Table 2.
+
+2.3 Hotspot Detection and JIT Dynamic Binary Translation
+
+In ARCSIM simulation time is partitioned into epochs, where each epoch is deﬁned
+as the interval between two successive JIT translations. Within an epoch frequently
+
+Cycle-Accurate Performance Modelling in an Ultra-Fast JIT DBT ISS
+
+7
+
+Fig. 3. ENCORE 5-Stage hardware pipeline model with a sample JIT generated software microar-
+chitectural model.
+
+ENCORE 5-Stage Pipeline Hardware ModelFETCHPCZOLLogicInstruction CacheTagsDataHit &SelectLogicNext  Fetch PCAlignLogicQBDECODEPCInstLimmInstDecodeLogicRegister Filer0Bcc/Jcc TargetLogicEXECUTEPCBypassLogicALUSelectResultMEMORYPCBRcc/BBIT TargetLogicABSMINMAXSELECTWRITEBACKPCException&ReplayLogicDataCacheInputSelect&ControlLogicHit &SelectLogicLoadAlignDATA MEMORY PIPELINEBypassLogicWRITEBACKMEMORYEXECUTEDECODEFETCHENCORE 5-Stage Pipeline JIT Generated Software Modelvoidpipeline(uint64_t  opd1,  uint64_t  opd2,         uint64_t* dst1,  uint64_t* dst2,         uint32_t  faddr, uint32_t  xc,   uint32_t mc){  // FETCH     - account for instruction fetch latency  cpu.pl[FE] += fetch(faddr);  // INVARIANT - see section 3.1 processor pipeline model  if (cpu.pl[FE] < cpu.pl[DE]) cpu.pl[FE] = cpu.pl[DE];  // DECODE    - determine operand availability time   cpu.pl[DE] = max3((cpu.pl[FE] + 1), opd1, opd2);  if (cpu.pl[DE] < cpu.pl[EX]) cpu.pl[DE] = cpu.pl[EX];  // EXECUTE   - account for execution latency and destination availability time  cpu.pl[EX] = *dst1 = cpu.pl[DE] + xc;                     if (cpu.pl[EX] < cpu.pl[ME]) cpu.pl[EX] = cpu.pl[ME];  // MEMORY    - account for memory latency and destination availability time  cpu.pl[ME] = *dst2 = cpu.pl[EX] + mc;  if (cpu.pl[ME] < cpu.pl[WB]) cpu.pl[ME] = cpu.pl[WB];  // WRITEBACK  cpu.pl[WB] = cpu.pl[ME] + 1;                           }21345Data CacheTagsData8
+
+Igor Böhm, Björn Franke, and Nigel Topham
+
+executed basic blocks (i.e. hotspots) are detected at runtime and recorded as traces (see
+Figure 1). After each epoch the hottest recorded traces (i.e. frequently executed traces)
+are passed to the JIT DBT engine for native code generation. More recently [15] we have
+extended hotspot detection and JIT DBT with the capability to ﬁnd and translate large
+translation units (LTU) consisting of multiple traced control-ﬂow-graphs. By increasing
+the size of translation units it is possible to achieve signiﬁcant speedups in simulation
+performance. The simulation speedup can be attributed to improved locality, more time
+is spent simulating within a translation unit, and greater scope for optimisations for the
+JIT compiler as it can optimise across multiple blocks.
+
+3 Methodology
+
+In this paper we describe our approach to combine cycle accurate and high-speed JIT
+DBT simulation modes in order to provide architectural and microarchitectural ob-
+servability at speeds exceeding speed-optimised FPGA implementations. We do this
+by extending our JIT DBT engine with a pass responsible for analysing instruction
+operand dependencies and side-effects, and an additional code emission pass emitting
+specialised code for performance model updates (see labels 1(cid:13) and 2(cid:13) in Figure 1).
+
+In the following sections we outline our generic processor pipeline model and de-
+scribe how to account for instruction operand availability and side-effect visibility tim-
+ing. We also discuss our cache and memory model and show how to integrate control
+ﬂow and branch prediction into our microarchitectural performance model.
+
+3.1 Processor Pipeline Model
+
+The granularity of execution on hardware and RTL simulation is cycle based —cycle-
+by-cycle. If the designer wants to ﬁnd out how many cycles it took to execute an instruc-
+tion or program, all that is necessary is to simply count the number of cycles. While this
+execution model works well for hardware it is too detailed and slow for ISS purposes.
+Therefore fast functional ISS have an instruction-by-instruction execution model. While
+this execution model yields faster simulation speeds it usually compromises microar-
+chitectural observability and detail. Our software pipeline model together with an in-
+struction operand dependency and side-effect analysis JIT DBT pass allows to retain an
+instruction-by-instruction execution model without compromising microarchitectural
+observability. The essential idea is to reconstruct the microarchitectural pipeline state
+after executing an instruction.
+
+Thus the processor pipeline is modelled as an array with as many elements as there
+are pipeline stages (see deﬁnition of pl[STAGES] at label 7(cid:13) in Figure 2). For each
+pipeline stage we add up the corresponding latencies and store the cycle-count at which
+the instruction is ready to leave the respective stage. The line with label 1(cid:13) in Figure 3
+demonstrates this for the fetch stage cpu.pl[FE] by adding the amount of cycles it
+takes to fetch the corresponding instruction to the current cycle count at that stage. The
+next line in Figure 3 with the label 2(cid:13) is an invariant ensuring that an instruction cannot
+leave its pipeline stage before the instruction in the immediately following stage is ready
+to proceed. Figure 4 contains a detailed example of the microarchitectural performance
+model determining the cycle count for a sample ARCompactTM instruction.
+
+Cycle-Accurate Performance Modelling in an Ultra-Fast JIT DBT ISS
+
+9
+
+Fig. 4. ENCORE 5-Stage Pipeline model example using ﬁnal instruction from ARCompact
+ba-
+sic block depicted in Figure 2. It demonstrates the reconstruction of microarchitectural pipeline
+state after the instruction has been executed. Bold red numbers denote changes to cycle-counts
+for the respective pipeline stages, bold green numbers denote already committed cycle-counts.
+
+TM
+
+Pipeline Modelif (cpu.pl[FE] < cpu.pl[DE])     cpu.pl[FE] = cpu.pl[DE];cpu.pl[FE] += fetch(0x00000868);// INITIAL STATE AT FETCHif (cpu.pl[DE] < cpu.pl[EX])    cpu.pl[DE] = cpu.pl[EX];cpu.pl[DE] = max3((cpu.pl[FE]+1),                  opd1, opd2);// INITIAL STATE AT DECODEif (cpu.pl[EX] < cpu.pl[ME])    cpu.pl[EX] = cpu.pl[ME];cpu.pl[EX] = cpu.pl[DE] + 1;*dst1      = cpu.pl[EX];// INITIAL STATE AT EXECUTEif (cpu.pl[ME] < cpu.pl[WB])    cpu.pl[ME] = cpu.pl[WB];cpu.pl[ME] = cpu.pl[EX] + 0;*dst2      = cpu.pl[ME];// INITIAL STATE AT MEMORY// FINAL PIPELINE STATEcpu.pl[WB] = cpu.pl[ME] + 1;// INITIAL STATE AT WRITEBACKFEDEEXMEWBInstructionor r4,r4,r3FETCHDECODEEXECUTEMEMORYWRITEBACKPer Pipeline Stage Cycle Count11010210311510210311510111010211511010310210011010510311510210311510211010511511010310210211010511011510210611510211010511511010310510211510511011510211011510211110511511011010510211510511011610211011610211510511511511010510210
+
+Igor Böhm, Björn Franke, and Nigel Topham
+
+3.2
+
+Instruction Operand Dependencies and Side Effects
+
+In order to determine when an instruction is ready to leave the decode stage it is nec-
+essary to know when operands become available. For instructions that have side-effects
+(i.e. modify the contents of a register) we need to remember when the side-effect will
+become visible. The avail[GPRS] array (see label 7(cid:13) in Figure 2) encodes this in-
+formation for each operand.
+
+When emitting calls to microarchitectural update functions our JIT DBT engine
+passes source operand availability times and pointers to destination operand availability
+locations determined during dependency analysis as parameters (see label 3(cid:13) in Figure
+2). This information is subsequently used to compute when an instruction can leave the
+decode stage (see label 3(cid:13) in Figure 3) and to record when side-effects become visible
+in the execute and memory stage (see labels 4(cid:13) and 5(cid:13) in Figure 3). Because not all
+instructions modify general purpose registers or have two source operands, there exist
+several highly optimised versions of microarchitectural state update functions, and the
+function outlined in Figure 3 demonstrates only one of several possible variants.
+
+3.3 Control Flow and Branch Prediction
+
+When dealing with control ﬂow operations (e.g. jump, branch, branch on compare)
+special care must be taken to account for various types of penalties and speculative
+execution. The ARCompactTM ISA allows for delay slot instructions and the ENCORE
+processor and ARCSIM simulator support various static and dynamic branch prediction
+schemes.
+
+The code highlighted by label 4(cid:13) in Figure 2 demonstrates how a branch penalty is
+applied for a mis-predicted branch. The pipeline penalty depends on the pipeline stage
+when the branch outcome and target address are known (see target address availability
+for BCC/JCC and BRCC/BBIT control ﬂow instructions in Figure 3) and the availability
+of a delay slot instruction. One also must take care of speculatively fetched and executed
+instructions in case of a mis-predicted branch.
+
+3.4 Cache and Memory Model
+
+Because cache misses and off-chip memory access latencies signiﬁcantly contribute
+towards the ﬁnal cycle count, ARCSIM maintains a 100% accurate cache and memory
+model. In its default conﬁguration the ENCORE processor implements a pseudo-random
+block replacement policy where the content of a shift register is used in order to deter-
+mine a victim block for eviction. The rotation of the shift register must be triggered at
+the same time and by the same events as in hardware, requiring a faithful microarchi-
+tectural model.
+
+Because the ARCompactTM ISA speciﬁes very ﬂexible and powerful load/store
+operations, memory access simulation is a critical aspect of high-speed full system sim-
+ulations. [27] describes in more detail how memory access simulation is implemented
+in ARCSIM so that accurate modelling of target memory semantics is preserved whilst
+simulating load and store instructions at the highest possible rate.
+
+Cycle-Accurate Performance Modelling in an Ultra-Fast JIT DBT ISS
+
+11
+
+Vendor & Model
+
+Number CPUs
+Processor Type
+Clock Frequency
+L1-Cache
+L2-Cache
+FSB Frequency
+
+TM
+
+TM
+
+HP
+
+COMPAQ
+
+dc7900 SFF
+
+1 (dual-core)
+TM
+
+Intel c(cid:13)Core
+
+2 Duo processor E8400
+
+32K Instruction/Data caches
+
+3 GHz
+
+6 MB
+
+1333 MHz
+
+Table 1. Simulation Host Conﬁguration.
+
+4 Empirical Evaluation
+
+We have extensively evaluated our cycle-accurate JIT DBT performance modelling ap-
+proach and in this section we describe our experimental setup and methodology before
+we present and discuss our results.
+
+4.1 Experimental Setup and Methodology
+
+We have evaluated our cycle-accurate JIT DBT simulation approach using the BIOPERF
+benchmark suite that comprises a comprehensive set of computationally-intensive life
+science applications [5]. We also used the industry standard EEMBC 1.1, and CORE-
+MARK [36] embedded benchmark suites comprising applications from the automotive,
+consumer, networking, ofﬁce, and telecom domains.
+
+All codes have been built with the ARC port of the GCC 4.2.1 compiler with full
+optimisation enabled (i.e. -O3 -mA7). Each benchmark has been simulated in a stand-
+alone manner, without an underlying operating system, to isolate benchmark behaviour
+from background interrupts and virtual memory exceptions. Such system-related effects
+are measured by including a Linux full-system simulation in the benchmarks.
+
+The BIOPERF benchmarks were run with “class-A” input data-sets available from
+the BIOPERF web site. The EEMBC 1.1 and COREMARK benchmarks were conﬁgured
+using large iteration counts to execute at least 109 instructions. All benchmarks were
+simulated until completion. The Linux benchmark consisted of simulating the boot-up
+and shut-down sequence of a Linux kernel conﬁgured to run on a typical embedded
+ARC700 system with two interrupting timers, a console UART, and a paged virtual
+memory system.
+
+Our main interest has been on simulation speed, therefore we have measured the
+maximum possible simulation speed in MIPS using various simulation modes (FPGA
+speed vs. cycle-accurate interpretive mode vs. cycle-accurate JIT DBT mode - see Fig-
+ures 5, 6, 7 and 8). Table 2 lists the conﬁguration details of our simulator and target
+processor. All measurements were performed on a X86 desktop computer detailed in
+Table 1 under conditions of low system load. When comparing ARCSIM simulation
+speeds to FPGA implementations shown in Figures 5, 6, 7 and 8, we used a XILINX
+VIRTEX5 XC5 VFX70T (speed grade 1) FPGA clocked at 50 MHz.
+
+12
+
+Igor Böhm, Björn Franke, and Nigel Topham
+
+Fig. 5. 5-Stage Pipeline - Simulation rate (in MIPS) using EEMBC and COREMARK benchmarks
+comparing (a) ISS interpretive cycle-accurate simulation mode, (b) speed-optimised FPGA im-
+plementation, and (c) our novel ISS JIT DBT cycle-accurate simulation mode.
+
+Fig. 6. 5-Stage Pipeline - Simulation rate (in MIPS) using the BIOPERF benchmarks comparing
+(a) ISS interpretive cycle-accurate simulation mode, (b) speed-optimised FPGA implementation,
+and (c) our novel ISS JIT DBT cycle-accurate simulation mode.
+
+-10%-8%-6%-4%-2%0%2%4%6%8%10%a2time01aifftr01aifirf01aiifft01autcor00basefp01bezier01bitmnp01cacheb01canrdr01cjpegconven00dither01djpegfbital00fft00idctrn01iirflt01matrix01ospfpktflowpntrch01puwmod01rgbcmy01rgbhpg01rgbyiq01rotate01routelookuprspeed01tblook01text01ttsprk01viterb00coremarkaverageBenchmarkISS JIT DBT ModeTime@DBTCycles@DBTInstructionsCPISpeed Optimised FPGASpeed Optimised ASIPISS Interpretive ModeTime@INTRPCycles@INTRPAccuracyABS(Accuracy)a2time01aifftr01aifirf01aiifft01autcor00basefp01bezier01bitmnp01cacheb01canrdr01cjpegconven00dither01djpegfbital00fft00idctrn01iirflt01matrix01ospfpktflowpntrch01puwmod01rgbcmy01rgbhpg01rgbyiq01rotate01routelookuprspeed01tblook01text01ttsprk01viterb00coremarkaverageMaximum42.7627.65166167370811823786131.40535.58249.0514.3282.5617179558643.28%3.28%44.8824.44203512748410970097311.85526.95188.6614.4276.072011085954-1.20%1.20%36.7331.82236435610611688320292.02324.72173.0215.0577.662347298145-0.73%0.73%44.0023.91193589370410519234241.84027.17190.1814.2074.061912428735-1.23%1.23%55.4321.09279740541311693626732.39220.90146.3116.9069.182797390606-0.00%0.00%35.2033.19168582334611681524091.44334.65242.5213.3087.8217037366031.05%1.05%58.9419.50225618262211490639941.96325.46178.2515.9272.192256176777-0.00%0.00%24.5146.79193813422911465990001.69029.58207.0613.9782.061921162121-0.88%0.88%34.8938.47279810320113421045422.08523.98167.8813.5599.022780017320-0.65%0.65%36.0336.50173367790513150414071.31837.93265.4813.8894.761708436543-1.48%1.48%46.43331.2535286971472153799796782.29421.79152.5513.641127.4835134308222-0.43%0.43%58.6519.75151704213811583287601.31038.18267.2414.6579.051517023038-0.00%0.00%55.3331.40290504479817372431501.67229.90209.3014.84117.092783844800-4.35%4.35%56.61235.6833033780199133406529372.47620.19141.3513.211009.7432849326961-0.56%0.56%64.5817.28158019375511157696521.41635.30247.1314.9774.531527449587-3.45%3.45%52.7319.81157786333710447596711.51033.11231.7515.1369.051558246996-1.26%1.26%28.5638.47215800499110987940301.96425.46178.2114.4576.042141915426-0.75%0.75%25.1141.71180089217410470949891.72029.07203.5012.8181.741774249285-1.50%1.50%38.7643.22227696876816752700001.35936.79257.5114.43116.1323703173843.94%3.94%58.2721.82215322833512712916911.69429.52206.6413.1496.7321634143560.47%0.47%29.6036.36289665766910764777722.69118.58130.0713.8877.542878501543-0.63%0.63%54.2419.52123283959410588359461.16442.94300.6015.0970.181231792904-0.08%0.08%34.9629.34164134434810256268491.60031.24218.7013.1078.311618582314-1.41%1.41%58.4135.50645575801620736057353.11316.06112.4215.19136.5564557580160.00%0.00%63.6520.03216281370812745627861.69729.47206.2614.7686.382070645379-4.45%4.45%20.3678.48339527838715974447402.12523.52164.6716.5696.453360334387-1.04%1.04%29.4836.94187585769310889333191.72329.02203.1713.5180.5819320461042.91%2.91%87.9612.45141190509610954483121.28938.79271.5514.3376.431401202101-0.76%0.76%39.3925.60162737076110084101971.61430.98216.8813.1376.801624267366-0.19%0.19%37.4234.98189683326113088938961.44934.50241.5113.5996.2819351028151.98%1.98%36.5931.02177679448511353468231.56531.95223.6513.2285.861745943123-1.77%1.77%33.1833.95190955239811265827321.69529.50206.4913.6982.3119119552740.13%0.13%54.4720.20149995043911005335351.36336.69256.8014.7974.401493696145-0.42%0.42%50.8323.55195165025511970451831.63030.67214.6714.5382.361928258231-1.21%1.21%44.9729.71207.9714.301.30%1.30%87.9642.94300.6016.904.45%BenchmarkMIPSTimea2time01aifftr01aifirf01aiifft01autcor00basefp01bezier01bitmnp01cacheb01canrdr01cjpegconven00dither01djpegfbital00fft00idctrn01iirflt01matrix01ospfpktflowpntrch01puwmod01rgbcmy01rgbhpg01rgbyiq01rotate01routelookuprspeed01tblook01text01ttsprk01viterb00coremarkaveragemaximum281.664.20339.523.23124.929.36342.833.07217.085.39283.534.12839.931.37196.735.83214.486.26124.2210.59341.5845.03504.582.30350.904.95377.1335.37459.322.43626.041.67203.775.39211.014.96264.706.33393.473.23233.954.60197.385.36299.913.42649.173.19689.121.8551.0431.30201.845.39349.703.13322.893.12225.545.80230.534.92243.104.63353.493.11295.034.06324.71839.93Result Graphs used in Journal for EC50102030405060708090100a2time01aifftr01aifirf01aiifft01autcor00basefp01bezier01bitmnp01cacheb01canrdr01cjpegconven00dither01djpegfbital00fft00idctrn01iirflt01matrix01ospfpktflowpntrch01puwmod01rgbcmy01rgbhpg01rgbyiq01rotate01routelookuprspeed01tblook01text01ttsprk01viterb00coremarkaverageISS Interpretive ModeSpeed Optimised FPGAISS JIT DBT ModeBenchmarkR1R2R3R4R5R6R7R8R9R10STDEVa2time01   aifftr01   aifirf01   aiifft01   autcor00   basefp01   bezier01   bitmnp01   cacheb01   canrdr01   cjpeg      conven00   dither01   djpeg      fbital00   fft00      idctrn01   iirflt01   matrix01   ospf       pktflow    pntrch01   puwmod01   rgbcmy01   rgbhpg01   rgbyiq01   rotate01   routelookuprspeed01   tblook01   text01     ttsprk01   viterb00   coremark   42.1241.7142.3342.0642.0542.7642.4342.1042.6242.580.324043.8443.5343.3543.9643.5844.8844.1144.1443.6143.620.442136.4736.4136.7336.1136.6836.1736.6436.2535.4634.330.731944.0043.5043.4243.2843.4343.5743.5343.4743.4543.470.188154.8755.3054.8854.3154.5255.1155.4355.1655.1155.410.369635.0934.8735.1535.2035.1334.8334.8435.0535.1435.110.140057.6857.4458.9457.4057.8458.0157.8058.8458.2656.600.692624.4424.5124.2124.1124.2524.2724.3724.3224.2524.490.129334.8934.6534.2634.2234.5034.3834.0434.6334.5234.690.255035.4935.6335.3435.3935.3335.4235.2935.9036.0335.540.250346.3645.2846.2745.8145.8146.3646.2946.2546.4345.880.367257.6357.4058.6558.1957.3457.2256.4958.2056.7656.920.692855.3354.7755.2053.9554.9554.9054.4954.6854.1254.570.436555.3855.5942.5555.3256.4756.6156.4956.1056.3256.514.308863.0263.0763.0563.8464.5862.9663.8663.8863.4763.370.525252.3051.9552.0552.4852.0952.7352.5351.5551.6951.860.382128.5128.3928.4828.4228.5128.5628.3728.4528.4528.430.058724.7824.9424.7925.0225.0824.9924.7724.7925.1124.830.133338.5138.6738.6538.6538.7038.6738.6838.3338.7638.600.121556.9357.0158.2357.0057.7257.1756.6356.8755.7658.270.754029.2429.4529.1029.4629.5729.4728.9328.8329.3129.600.266954.0353.8853.5453.7653.5253.4954.2454.0553.5453.850.264234.8834.4834.6334.9634.7734.2834.7834.4834.3434.760.231356.8258.4157.7858.3857.8557.3256.9257.4857.3358.330.586063.2462.4962.5362.4763.6562.4062.6162.4462.4663.370.465320.3619.9420.2920.1620.1020.0220.2220.0320.0319.590.215229.2629.1429.4428.8929.1029.0829.3129.4829.3429.050.187787.0987.1586.4787.3386.6286.0787.3387.2387.1287.960.528538.7039.2739.0238.9238.4839.3939.2038.5738.7539.210.316237.4236.7836.7835.2636.8436.7837.2436.7136.7436.800.569836.1336.0436.0836.5936.0336.1935.9936.4836.4736.150.216433.1733.1133.1532.8833.1832.8932.9232.4232.9432.870.227054.4753.0251.7552.3251.1552.6252.4852.9253.4553.500.939550.3250.7050.3650.3950.7750.1549.4350.8350.3950.190.4008Simulation rate in MIPSCycle Accurate Simulation Rate EEMBC and CoreMark - Small and Long Running Embedded BenchmarksBenchmarkMIPSTimeclustalwfasta-ssearchphylip-promlkgrappahmmer-hmmsearchhmmer-hmmpfamtcoffeeblast-blastpblast-blastnglimmerceaveragemaximum140.615.93289.2063.59518.7788.7169.837.0724.134.92253.27161.4137.968.41121.5111.2722.412.71202.2612.10395.6485.68188.69518.77EEMBC ResultsBioPerf ResultsBenchmarkISS JIT DBT ModeTime@DBTCycles@DBTInstructionsCPISpeed Optimised FPGASpeed Optimised ASIPISS Interpretive ModeTime@INTRPCycles@INTRPAccuracyABS(Accuracy)clustalwfasta-ssearchpromlkgrappahmmsearchhmmpfamtcoffeeblastpglimmerceaveragemaximumblastn27.8529.9213960665778333431821.67529.85208.9212.4467.001327371250-5.18%5.18%48.22381.431.35156E+11185952996747.2686.8848.1511.861550.521.33289E+11-1.40%1.40%30.481509.9090403057897460209311621.96425.45178.1712.443699.2590233024890-0.19%0.19%18.6426.488636495744935536411.75028.57200.0211.3443.53852371861-1.32%1.32%10.6811.122573124611187974072.16623.08161.5911.8410.032573306780.01%0.01%30.061359.9391163243813408806248402.23022.42156.9511.743482.7989982946930-1.31%1.31%12.3225.9110091003863193322493.16015.82110.7610.4730.50999011356-1.01%1.01%27.3350.09517352696413690148913.77913.2392.6211.70117.045102009595-1.40%1.40%26.1593.59492253221624474375892.01124.86174.0211.44213.954853610263-1.42%1.42%33.221020.2864293295821338974496161.89726.36184.5311.962833.96646030153250.48%0.48%26.5021.65151.5711.721.37%1.37%48.2229.85208.9212.445.18%10.106.00173940743606608852.86717.44122.0611.435.301739572940.01%BenchmarkR1R2R3R4R5R6R7R8R9R10STDEVclustalwfasta-ssearchphylip-promlkgrappahmmer-hmmsearchhmmer-hmmpfamtcoffeeblast-blastpblast-blastnglimmerce27.8327.5726.9827.1227.2327.8526.6927.8127.8527.780.43059261489254548.0448.0648.2248.1147.8748.0148.1248.0247.9946.090.6262418773037230.4430.4830.4430.4230.4530.4330.2930.4330.4530.320.06059886320899318.5818.2818.2318.4918.6018.5818.5818.4918.6418.570.1394592732265910.6810.6310.5410.6310.6410.6810.5310.3610.1210.200.2040397564746229.9830.0029.8829.8730.0630.0529.8229.8229.7329.960.10965096138809412.1612.3012.3212.0712.1312.3112.3112.2912.2512.300.09020963240019225.5427.3322.9927.2725.5525.5525.5427.2725.5725.461.2904353270634410.0810.089.689.919.9210.0910.0810.109.959.670.16540858502508325.8825.9026.1526.1325.8925.8025.9626.1126.1426.040.1294432522596533.1533.2231.7632.6032.4732.5232.0631.8532.2332.250.4912670692539170102030405060708090100clustalwfasta-ssearchpromlkgrappahmmsearchhmmpfamtcoffeeblastpglimmerceaverage26332627123011193048282226251316222329257301212111210121211121212ISS Interpretive ModeSpeed Optimised FPGAISS JIT DBT ModeCycle Accurate Simulation BioPerf - Computationally-intensive Life Science BenchmarksSimulation rate in MIPSclustalwfasta-ssearchpromlkgrappahmmsearchhmmpfamtcoffeeblastpglimmerceaverage1.3%1.37%Cycle count deviation in % - Baseline is cycle accurate ISS Interpretive ModeBioPerf BenchmarksEEMBC and CoreMark BenchmarksBenchmarkInstructions EnCoreCycles EnCore SLOWCycles EnCore FASTAccuracyMIPS SLOW ArcSimMIPS FAST ArcSimMIPS HySimdesmd5livermoredjpeg907256911146262881148247130.17%102380454171001099781451109821140.91%1027402353477943665246213748587882.27%823511334065293732849322365330381536980.57%8375BenchmarkArcSimISS JIT DBT ModeHySimMIPS HySima2time01aifftr01aifirf01aiifft01autcor00basefp01bezier01bitmnp01cacheb01canrdr01cjpegconven00dither01djpegfbital00fft00idctrn01iirflt01matrix01ospfpktflowpntrch01puwmod01rgbcmy01rgbhpg01rgbyiq01rotate01routelookuprspeed01tblook01text01ttsprk01viterb00coremarkclustalwfasta-ssearchpromlkgrappahmmsearchhmmpfamtcoffeeblastpglimmerce118237861342.769072569180109700973144.884541710040116883202936.7323534779451105192342444.00133406529375116936267355.43116815240935.20114906399458.94114659900024.51134210454234.89131504140736.031537997967846.43115832876058.65173724315055.331334065293756.61111576965264.58104475967152.73109879403028.56104709498925.11167527000038.76127129169158.27107647777229.60105883594654.24102562684934.96207360573558.41127456278663.65159744474020.36108893331929.48109544831287.96100841019739.39130889389637.42113534682336.59112658273233.18110053353554.47119704518350.8383334318227.851859529967448.224602093116230.4849355364118.6411879740710.684088062484030.0631933224912.32136901489127.33244743758926.153389744961633.221020304050607080901001E+071E+081E+091E+101E+11ArcSimTrendline ArcSimHySimTrendline HySimSimulation rate in MIPSSimulated Instructions5 Stage Pipeline5 Stage Pipeline-10%-8%-6%-4%-2%0%2%4%6%8%10%a2time01aifftr01aifirf01aiifft01autcor00basefp01bezier01bitmnp01cacheb01canrdr01cjpegconven00dither01djpegfbital00fft00idctrn01iirflt01matrix01ospfpktflowpntrch01puwmod01rgbcmy01rgbhpg01rgbyiq01rotate01routelookuprspeed01tblook01text01ttsprk01viterb00coremarkaverageBenchmarkISS JIT DBT ModeTime@DBTCycles@DBTInstructionsCPISpeed Optimised FPGASpeed Optimised ASIPISS Interpretive ModeTime@INTRPCycles@INTRPAccuracyABS(Accuracy)a2time01aifftr01aifirf01aiifft01autcor00basefp01bezier01bitmnp01cacheb01canrdr01cjpegconven00dither01djpegfbital00fft00idctrn01iirflt01matrix01ospfpktflowpntrch01puwmod01rgbcmy01rgbhpg01rgbyiq01rotate01routelookuprspeed01tblook01text01ttsprk01viterb00coremarkaverageMaximum42.7627.65166167370811823786131.40535.58249.0514.3282.5617179558643.28%3.28%44.8824.44203512748410970097311.85526.95188.6614.4276.072011085954-1.20%1.20%36.7331.82236435610611688320292.02324.72173.0215.0577.662347298145-0.73%0.73%44.0023.91193589370410519234241.84027.17190.1814.2074.061912428735-1.23%1.23%55.4321.09279740541311693626732.39220.90146.3116.9069.182797390606-0.00%0.00%35.2033.19168582334611681524091.44334.65242.5213.3087.8217037366031.05%1.05%58.9419.50225618262211490639941.96325.46178.2515.9272.192256176777-0.00%0.00%24.5146.79193813422911465990001.69029.58207.0613.9782.061921162121-0.88%0.88%34.8938.47279810320113421045422.08523.98167.8813.5599.022780017320-0.65%0.65%36.0336.50173367790513150414071.31837.93265.4813.8894.761708436543-1.48%1.48%46.43331.2535286971472153799796782.29421.79152.5513.641127.4835134308222-0.43%0.43%58.6519.75151704213811583287601.31038.18267.2414.6579.051517023038-0.00%0.00%55.3331.40290504479817372431501.67229.90209.3014.84117.092783844800-4.35%4.35%56.61235.6833033780199133406529372.47620.19141.3513.211009.7432849326961-0.56%0.56%64.5817.28158019375511157696521.41635.30247.1314.9774.531527449587-3.45%3.45%52.7319.81157786333710447596711.51033.11231.7515.1369.051558246996-1.26%1.26%28.5638.47215800499110987940301.96425.46178.2114.4576.042141915426-0.75%0.75%25.1141.71180089217410470949891.72029.07203.5012.8181.741774249285-1.50%1.50%38.7643.22227696876816752700001.35936.79257.5114.43116.1323703173843.94%3.94%58.2721.82215322833512712916911.69429.52206.6413.1496.7321634143560.47%0.47%29.6036.36289665766910764777722.69118.58130.0713.8877.542878501543-0.63%0.63%54.2419.52123283959410588359461.16442.94300.6015.0970.181231792904-0.08%0.08%34.9629.34164134434810256268491.60031.24218.7013.1078.311618582314-1.41%1.41%58.4135.50645575801620736057353.11316.06112.4215.19136.5564557580160.00%0.00%63.6520.03216281370812745627861.69729.47206.2614.7686.382070645379-4.45%4.45%20.3678.48339527838715974447402.12523.52164.6716.5696.453360334387-1.04%1.04%29.4836.94187585769310889333191.72329.02203.1713.5180.5819320461042.91%2.91%87.9612.45141190509610954483121.28938.79271.5514.3376.431401202101-0.76%0.76%39.3925.60162737076110084101971.61430.98216.8813.1376.801624267366-0.19%0.19%37.4234.98189683326113088938961.44934.50241.5113.5996.2819351028151.98%1.98%36.5931.02177679448511353468231.56531.95223.6513.2285.861745943123-1.77%1.77%33.1833.95190955239811265827321.69529.50206.4913.6982.3119119552740.13%0.13%54.4720.20149995043911005335351.36336.69256.8014.7974.401493696145-0.42%0.42%50.8323.55195165025511970451831.63030.67214.6714.5382.361928258231-1.21%1.21%44.9729.71207.9714.301.30%1.30%87.9642.94300.6016.904.45%BenchmarkMIPSTimea2time01aifftr01aifirf01aiifft01autcor00basefp01bezier01bitmnp01cacheb01canrdr01cjpegconven00dither01djpegfbital00fft00idctrn01iirflt01matrix01ospfpktflowpntrch01puwmod01rgbcmy01rgbhpg01rgbyiq01rotate01routelookuprspeed01tblook01text01ttsprk01viterb00coremarkaveragemaximum281.664.20339.523.23124.929.36342.833.07217.085.39283.534.12839.931.37196.735.83214.486.26124.2210.59341.5845.03504.582.30350.904.95377.1335.37459.322.43626.041.67203.775.39211.014.96264.706.33393.473.23233.954.60197.385.36299.913.42649.173.19689.121.8551.0431.30201.845.39349.703.13322.893.12225.545.80230.534.92243.104.63353.493.11295.034.06324.71839.93Result Graphs used in Journal for EC50102030405060708090100a2time01aifftr01aifirf01aiifft01autcor00basefp01bezier01bitmnp01cacheb01canrdr01cjpegconven00dither01djpegfbital00fft00idctrn01iirflt01matrix01ospfpktflowpntrch01puwmod01rgbcmy01rgbhpg01rgbyiq01rotate01routelookuprspeed01tblook01text01ttsprk01viterb00coremarkaverageISS Interpretive ModeSpeed Optimised FPGAISS JIT DBT ModeBenchmarkR1R2R3R4R5R6R7R8R9R10STDEVa2time01   aifftr01   aifirf01   aiifft01   autcor00   basefp01   bezier01   bitmnp01   cacheb01   canrdr01   cjpeg      conven00   dither01   djpeg      fbital00   fft00      idctrn01   iirflt01   matrix01   ospf       pktflow    pntrch01   puwmod01   rgbcmy01   rgbhpg01   rgbyiq01   rotate01   routelookuprspeed01   tblook01   text01     ttsprk01   viterb00   coremark   42.1241.7142.3342.0642.0542.7642.4342.1042.6242.580.324043.8443.5343.3543.9643.5844.8844.1144.1443.6143.620.442136.4736.4136.7336.1136.6836.1736.6436.2535.4634.330.731944.0043.5043.4243.2843.4343.5743.5343.4743.4543.470.188154.8755.3054.8854.3154.5255.1155.4355.1655.1155.410.369635.0934.8735.1535.2035.1334.8334.8435.0535.1435.110.140057.6857.4458.9457.4057.8458.0157.8058.8458.2656.600.692624.4424.5124.2124.1124.2524.2724.3724.3224.2524.490.129334.8934.6534.2634.2234.5034.3834.0434.6334.5234.690.255035.4935.6335.3435.3935.3335.4235.2935.9036.0335.540.250346.3645.2846.2745.8145.8146.3646.2946.2546.4345.880.367257.6357.4058.6558.1957.3457.2256.4958.2056.7656.920.692855.3354.7755.2053.9554.9554.9054.4954.6854.1254.570.436555.3855.5942.5555.3256.4756.6156.4956.1056.3256.514.308863.0263.0763.0563.8464.5862.9663.8663.8863.4763.370.525252.3051.9552.0552.4852.0952.7352.5351.5551.6951.860.382128.5128.3928.4828.4228.5128.5628.3728.4528.4528.430.058724.7824.9424.7925.0225.0824.9924.7724.7925.1124.830.133338.5138.6738.6538.6538.7038.6738.6838.3338.7638.600.121556.9357.0158.2357.0057.7257.1756.6356.8755.7658.270.754029.2429.4529.1029.4629.5729.4728.9328.8329.3129.600.266954.0353.8853.5453.7653.5253.4954.2454.0553.5453.850.264234.8834.4834.6334.9634.7734.2834.7834.4834.3434.760.231356.8258.4157.7858.3857.8557.3256.9257.4857.3358.330.586063.2462.4962.5362.4763.6562.4062.6162.4462.4663.370.465320.3619.9420.2920.1620.1020.0220.2220.0320.0319.590.215229.2629.1429.4428.8929.1029.0829.3129.4829.3429.050.187787.0987.1586.4787.3386.6286.0787.3387.2387.1287.960.528538.7039.2739.0238.9238.4839.3939.2038.5738.7539.210.316237.4236.7836.7835.2636.8436.7837.2436.7136.7436.800.569836.1336.0436.0836.5936.0336.1935.9936.4836.4736.150.216433.1733.1133.1532.8833.1832.8932.9232.4232.9432.870.227054.4753.0251.7552.3251.1552.6252.4852.9253.4553.500.939550.3250.7050.3650.3950.7750.1549.4350.8350.3950.190.4008Simulation rate in MIPSCycle Accurate Simulation Rate EEMBC and CoreMark - Small and Long Running Embedded BenchmarksBenchmarkMIPSTimeclustalwfasta-ssearchphylip-promlkgrappahmmer-hmmsearchhmmer-hmmpfamtcoffeeblast-blastpblast-blastnglimmerceaveragemaximum140.615.93289.2063.59518.7788.7169.837.0724.134.92253.27161.4137.968.41121.5111.2722.412.71202.2612.10395.6485.68188.69518.77EEMBC ResultsBioPerf ResultsBenchmarkISS JIT DBT ModeTime@DBTCycles@DBTInstructionsCPISpeed Optimised FPGASpeed Optimised ASIPISS Interpretive ModeTime@INTRPCycles@INTRPAccuracyABS(Accuracy)clustalwfasta-ssearchpromlkgrappahmmsearchhmmpfamtcoffeeblastpglimmerceaveragemaximumblastn27.8529.9213960665778333431821.67529.85208.9212.4467.001327371250-5.18%5.18%48.22381.431.35156E+11185952996747.2686.8848.1511.861550.521.33289E+11-1.40%1.40%30.481509.9090403057897460209311621.96425.45178.1712.443699.2590233024890-0.19%0.19%18.6426.488636495744935536411.75028.57200.0211.3443.53852371861-1.32%1.32%10.6811.122573124611187974072.16623.08161.5911.8410.032573306780.01%0.01%30.061359.9391163243813408806248402.23022.42156.9511.743482.7989982946930-1.31%1.31%12.3225.9110091003863193322493.16015.82110.7610.4730.50999011356-1.01%1.01%27.3350.09517352696413690148913.77913.2392.6211.70117.045102009595-1.40%1.40%26.1593.59492253221624474375892.01124.86174.0211.44213.954853610263-1.42%1.42%33.221020.2864293295821338974496161.89726.36184.5311.962833.96646030153250.48%0.48%26.5021.65151.5711.721.37%1.37%48.2229.85208.9212.445.18%10.106.00173940743606608852.86717.44122.0611.435.301739572940.01%BenchmarkR1R2R3R4R5R6R7R8R9R10STDEVclustalwfasta-ssearchphylip-promlkgrappahmmer-hmmsearchhmmer-hmmpfamtcoffeeblast-blastpblast-blastnglimmerce27.8327.5726.9827.1227.2327.8526.6927.8127.8527.780.43059261489254548.0448.0648.2248.1147.8748.0148.1248.0247.9946.090.6262418773037230.4430.4830.4430.4230.4530.4330.2930.4330.4530.320.06059886320899318.5818.2818.2318.4918.6018.5818.5818.4918.6418.570.1394592732265910.6810.6310.5410.6310.6410.6810.5310.3610.1210.200.2040397564746229.9830.0029.8829.8730.0630.0529.8229.8229.7329.960.10965096138809412.1612.3012.3212.0712.1312.3112.3112.2912.2512.300.09020963240019225.5427.3322.9927.2725.5525.5525.5427.2725.5725.461.2904353270634410.0810.089.689.919.9210.0910.0810.109.959.670.16540858502508325.8825.9026.1526.1325.8925.8025.9626.1126.1426.040.1294432522596533.1533.2231.7632.6032.4732.5232.0631.8532.2332.250.4912670692539170102030405060708090100clustalwfasta-ssearchpromlkgrappahmmsearchhmmpfamtcoffeeblastpglimmerceaverage26332627123011193048282226251316222329257301212111210121211121212ISS Interpretive ModeSpeed Optimised FPGAISS JIT DBT ModeCycle Accurate Simulation BioPerf - Computationally-intensive Life Science BenchmarksSimulation rate in MIPSclustalwfasta-ssearchpromlkgrappahmmsearchhmmpfamtcoffeeblastpglimmerceaverage1.3%1.37%Cycle count deviation in % - Baseline is cycle accurate ISS Interpretive ModeBioPerf BenchmarksEEMBC and CoreMark BenchmarksBenchmarkInstructions EnCoreCycles EnCore SLOWCycles EnCore FASTAccuracyMIPS SLOW ArcSimMIPS FAST ArcSimMIPS HySimdesmd5livermoredjpeg907256911146262881148247130.17%102380454171001099781451109821140.91%1027402353477943665246213748587882.27%823511334065293732849322365330381536980.57%8375BenchmarkArcSimISS JIT DBT ModeHySimMIPS HySima2time01aifftr01aifirf01aiifft01autcor00basefp01bezier01bitmnp01cacheb01canrdr01cjpegconven00dither01djpegfbital00fft00idctrn01iirflt01matrix01ospfpktflowpntrch01puwmod01rgbcmy01rgbhpg01rgbyiq01rotate01routelookuprspeed01tblook01text01ttsprk01viterb00coremarkclustalwfasta-ssearchpromlkgrappahmmsearchhmmpfamtcoffeeblastpglimmerce118237861342.769072569180109700973144.884541710040116883202936.7323534779451105192342444.00133406529375116936267355.43116815240935.20114906399458.94114659900024.51134210454234.89131504140736.031537997967846.43115832876058.65173724315055.331334065293756.61111576965264.58104475967152.73109879403028.56104709498925.11167527000038.76127129169158.27107647777229.60105883594654.24102562684934.96207360573558.41127456278663.65159744474020.36108893331929.48109544831287.96100841019739.39130889389637.42113534682336.59112658273233.18110053353554.47119704518350.8383334318227.851859529967448.224602093116230.4849355364118.6411879740710.684088062484030.0631933224912.32136901489127.33244743758926.153389744961633.221020304050607080901001E+071E+081E+091E+101E+11ArcSimTrendline ArcSimHySimTrendline HySimSimulation rate in MIPSSimulated Instructions5 Stage Pipeline5 Stage PipelineCycle-Accurate Performance Modelling in an Ultra-Fast JIT DBT ISS
+
+13
+
+Processor Microarchitecture
+
+Pipeline
+Execution Order
+Branch Prediction
+ISA
+Register Set
+Instruction Set Extensions
+Floating-Point
+
+Memory System
+
+L1-Cache
+
+Instruction
+Data
+Replacement Policy
+
+L2-Cache
+Bus Width/Latency/Clock Divisor
+
+Instruction Set Simulator
+
+Simulator
+JIT Compiler
+I/O & System Calls
+
+5-Stage and 7-Stage Interlocked
+
+ENCORE
+
+In-Order
+
+Yes
+
+ARCompact
+
+TM
+
+32 baseline registers
+
+None
+
+Hardware
+
+32k/4-way associative
+32k/4-way associative
+
+Pseudo-random
+
+None
+
+32-bit/16 cycles/2
+
+Full-system, cycle-accurate
+
+ARCSIM
+
+LLVM 2.7
+Emulated
+
+Table 2. Conﬁguration and setup of simulated target microarchitectures and the ISS. FPGA and
+ASIP implementations of the outlined microarchitectures were used for veriﬁcation.
+
+4.2 Simulation Speed
+
+We initially discuss the simulation speed-up achieved by our novel cycle-accurate JIT
+DBT simulation mode compared to a veriﬁed cycle-accurate interpretive simulation
+mode for a 5-stage processor pipeline variant as this has been the primary motivation
+of our work. Finally, we also outline results for a different pipeline variant, namely the
+7-stage pipeline version of the ENCORE. A summary of our results is shown in Figures
+5, 6, 7, and 8.
+
+For EEMBC and COREMARK benchmarks (Figure 5) our proposed cycle-accurate
+JIT DBT simulation mode for the 5-stage pipeline variant is more than three times faster
+on average (45 MIPS) than the veriﬁed cycle-accurate interpretive mode (14 MIPS). It
+even outperforms a speed-optimised FPGA implementation of the ENCORE processor
+(30 MIPS) clocked at 50 MHz. For some benchmarks (e.g. autcor00, bezier01,
+cjpeg, djpeg, rgbcmy01, rgbhpg01, routelookup) our new cycle-accurate
+JIT DBT mode is more than twice as fast as the speed-optimised FPGA implementation.
+This can be explained by the fact that those benchmarks contain sequences of instruc-
+tions that map particularly well onto the simulation host ISA. Furthermore, frequently
+executed blocks in these benchmarks contain instructions with fewer dependencies re-
+sulting in the generation and execution of simpler microarchitectural state update func-
+tions.
+
+Our cycle-accurate JIT DBT simulation achieves an average simulation rate of 26
+
+MIPS for the computationally-intensive life science application programs from the BIOP-
+
+14
+
+Igor Böhm, Björn Franke, and Nigel Topham
+
+ERF benchmark suite (Figure 6), again outperforming the previously outlined speed-
+optimised FPGA implementation (22 MIPS). For the fasta-ssearch benchmark
+our JIT DBT is more than 6 times faster than the speed-optimised FPGA which is due to
+a relatively high cycles per instruction (CPI) metric of 7. For the hmmsearch bench-
+mark our JIT DBT cycle accurate simulation is slightly slower than interpretive cycle
+accurate simulation. This is entirely due to the shorter runtime and abundance of appli-
+cation hotspots keeping the JIT DBT engine very busy, resulting in a slowdown due to
+JIT compilation overheads.
+
+For EEMBC and COREMARK benchmarks our cycle-accurate JIT DBT simulation
+mode for the 7-stage pipeline variant (Figure 7) is more than twice as fast on average
+(33 MIPS) than the veriﬁed cycle-accurate interpretive mode (13 MIPS). Again it out-
+performs the speed-optimised FPGA implementation of the 7-stage ENCORE processor
+variant (28 MIPS) clocked at 50 MHz. For some benchmarks (e.g. autcor00, djpeg,
+rgbcmy01) our new cycle-accurate JIT DBT mode is almost twice as fast as the speed-
+optimised FPGA implementation. Average BIOPERF benchmark simulation rate ﬁgures
+for the 7-stage pipeline (Figure 8) demonstrate that our cycle-accurate JIT DBT (22
+MIPS) once more outperforms a speed-optimised FPGA implementation (21 MIPS) and
+is twice as fast as cycle-accurate interpretive simulation (11 MIPS).
+
+For the introductory sample application performing AAC decoding and playback of
+Mozart’s Requiem outlined in Section 1, our cycle-accurate JIT DBT mode is capable
+of simulating at a sustained rate of 31 MIPS (7-stage pipeline) and 36 MIPS (5-stage
+pipeline), enabling real-time simulation. For the boot-up and shutdown sequence of a
+Linux kernel our fast cycle-accurate JIT DBT simulation mode achieves 12 MIPS for
+both pipeline variants resulting in a highly responsive interactive environment. These
+examples clearly demonstrate that ARCSIM is capable of simulating system-related ef-
+fects such as interrupts and virtual memory exceptions efﬁciently and still provide full
+microarchitectural observability.
+
+Our proﬁling simulation mode is orthogonal to all of the above simulation modes.
+Note that for all performance results full proﬁling was enabled (including dynamic in-
+struction execution proﬁling, per instruction latency distributions, detailed cache statis-
+tics, executed delay slot instructions, as well as various branch predictor statistics).
+
+5 Related Work
+
+Previous work on high-speed instruction set simulation has tended to focus on compiled
+and hybrid mode simulators. Whilst an interpretive simulator spends most of its time
+repeatedly fetching and decoding target instructions, a compiled simulator fetches and
+decodes each instruction once, spending most of its time performing the operations.
+
+5.1 Fast Instruction Set Simulation
+
+A statically-compiled simulator [18] which employed in-line macro expansion was
+shown to run up to three times faster than an interpretive simulator. Target code is stat-
+ically translated to host machine code which is then executed directly within a switch
+statement.
+
+Cycle-Accurate Performance Modelling in an Ultra-Fast JIT DBT ISS
+
+15
+
+Fig. 7. 7-Stage Pipeline - Simulation rate (in MIPS) using EEMBC and COREMARK benchmarks
+comparing (a) ISS interpretive cycle-accurate simulation mode, (b) speed-optimised FPGA im-
+plementation, and (c) our novel ISS JIT DBT cycle-accurate simulation mode.
+
+Fig. 8. 7-Stage Pipeline - Simulation rate (in MIPS) using the BIOPERF benchmarks comparing
+(a) ISS interpretive cycle-accurate simulation mode, (b) speed-optimised FPGA implementation,
+and (c) our novel ISS JIT DBT cycle-accurate simulation mode.
+
+BenchmarkISS JIT DBT ModeTime@DBTCycles@DBTInstructionsCPISpeed Optimised FPGASpeed Optimised ASIPISS Interpretive ModeTime@INTRPCycles@INTRPAccuracyABS(Accuracy)a2time01aifftr01aifirf01aiifft01autcor00basefp01bezier01bitmnp01cacheb01canrdr01cjpegconven00dither01djpegfbital00fft00idctrn01iirflt01matrix01ospfpktflowpntrch01puwmod01rgbcmy01rgbhpg01rgbyiq01rotate01routelookuprspeed01tblook01text01ttsprk01viterb00coremarkaverageMaximum32.3736.53178597521911823786131.51033.10231.7112.7992.4419300646697.47%7.47%31.9334.36203472693810970097311.85526.96188.7013.1883.2120368231680.10%0.10%27.8741.93237132163711688320292.02924.65172.5214.0183.4023724606630.05%0.05%30.9034.04193556566710519234241.84027.17190.2112.9481.2819359814810.02%0.02%45.3025.81279742223711693626732.39220.90146.3115.1477.2527974222370.00%0.00%26.8843.45175474495011681524091.50233.29233.0012.2795.2318576351065.54%5.54%39.3429.21225858581511490639941.96625.44178.0614.1581.2122585858150.00%0.00%21.2254.03227073305811465990001.98025.25176.7312.4292.3222826481060.52%0.52%25.1553.36285776588713421045422.12923.48164.3712.44107.8628756955650.62%0.62%27.2148.32179109472913150414071.36236.71256.9713.12100.2218576768633.58%3.58%36.36422.9436325056167153799796782.36221.17148.1912.601220.19365691790190.67%0.67%39.9928.97159902314211583287601.38036.22253.5413.2687.3815990231420.00%0.00%35.0649.55302634282817372431501.74228.70200.9113.18131.8530263467360.00%0.00%38.84343.4634151717925133406529372.56019.53136.7212.261088.48342111346490.17%0.17%44.7824.92171969689211157696521.54132.44227.0913.4483.0017248982920.30%0.30%43.1424.22158076460410447596711.51333.05231.3213.7276.1315818791900.07%0.07%20.9252.51217052939010987940301.97525.31177.1813.4381.8221707630500.01%0.01%19.9152.60186412821810470949891.78028.09196.6011.9087.9918948990711.62%1.62%30.3755.17243768265216752700001.45534.36240.5312.93129.5926701159808.70%8.70%45.4927.95233247225112712916911.83527.25190.7612.31103.2524542778694.96%4.96%20.5452.41296260475910764777722.75218.17127.1712.5086.1029626527870.00%0.00%37.3828.32124500343510588359461.17642.52297.6613.7776.91139770563310.93%10.93%25.7539.82180348110510256268491.75828.43199.0412.1984.1118684868603.48%3.48%42.5848.69670219800620736057353.23215.47108.2913.98148.2867021980060.00%0.00%43.5429.27213221275112745627861.67329.89209.2213.7792.5821322135270.00%0.00%17.7889.86348321500515974447402.18022.93160.5115.05106.1334832151830.00%0.00%24.8743.79221318795010889333192.03224.60172.2112.1789.4523877761507.31%7.31%50.1421.85144024572310954483121.31538.03266.2113.4581.48162983839511.63%11.63%29.1234.63176312097910084101971.74828.60200.1812.0283.9118136318732.79%2.79%28.8845.31200121854913088938961.52932.70228.9212.37105.8121522696617.02%7.02%27.9040.69183131187711353468231.61331.00216.9912.3691.8518799718512.59%2.59%27.9740.28212914031911265827321.89026.46185.1913.0786.1721658614071.70%1.70%33.9932.38153641165811005335351.39635.82250.7113.5381.3216319783235.86%5.86%35.9733.28201082053111970451831.68029.77208.3613.3489.7321647121037.11%7.11%32.6328.45199.1813.092.79%50.1442.52297.6615.1411.63%Result Graphs used in Journal for EC70102030405060708090100a2time01aifftr01aifirf01aiifft01autcor00basefp01bezier01bitmnp01cacheb01canrdr01cjpegconven00dither01djpegfbital00fft00idctrn01iirflt01matrix01ospfpktflowpntrch01puwmod01rgbcmy01rgbhpg01rgbyiq01rotate01routelookuprspeed01tblook01text01ttsprk01viterb00coremarkaverageISS Interpretive ModeSpeed Optimised FPGAISS JIT DBT ModeSimulation rate in MIPSCycle Accurate Simulation Rate EEMBC and CoreMark - Small and Long Running Embedded BenchmarksBenchmarkISS JIT DBT ModeTime@DBTCycles@DBTInstructionsCPISpeed Optimised FPGASpeed Optimised ASIPISS Interpretive ModeTime@INTRPCycles@INTRPAccuracyABS(Accuracy)clustalwfasta-ssearchphylip-promlkgrappahmmsearchhmmpfamtcoffeeblastpglimmerceaveragemaximumblastn23.2835.8013972833808333431821.67729.82208.7411.7670.8613997184400.17%0.17%32.58564.521.3602E+11185952996747.3156.8447.8511.111655.571.36937E+110.67%0.67%28.551611.8796286670881460209311622.09223.90167.2911.224100.35986993785632.44%2.44%16.4230.059209037474935536411.86626.80187.5810.7645.899237019800.30%0.30%9.8112.112796339891187974072.35421.24148.6910.9610.842799397150.11%0.11%23.851714.0393670881830408806248402.29121.82152.7510.773794.72981023794104.52%4.52%11.3228.2010402439853193322493.25815.35107.4410.9029.301039204174-0.10%0.10%21.7962.82527042320013690148913.85012.9990.9111.18122.5053140541500.82%0.82%22.73107.66513849915824474375892.10023.81166.7010.75227.7553000556343.05%3.05%27.651226.0266707331171338974496161.96825.41177.8511.033073.02694740303973.98%3.98%21.8020.80145.5811.041.62%1.62%32.5829.82208.7411.764.52%9.736.23180880893606608852.98216.77117.3810.865.581810931370.12%0102030405060708090100clustalwfasta-ssearchpromlkgrappahmmsearchhmmpfamtcoffeeblastpglimmerceaverage22282322112410162933232125241315222127247301111111111111111111112ISS Interpretive ModeSpeed Optimised FPGAISS JIT DBT ModeCycle Accurate Simulation BioPerf - Computationally-intensive Life Science BenchmarksSimulation rate in MIPS7 Stage Pipeline7 Stage PipelineBenchmarkISS JIT DBT ModeTime@DBTCycles@DBTInstructionsCPISpeed Optimised FPGASpeed Optimised ASIPISS Interpretive ModeTime@INTRPCycles@INTRPAccuracyABS(Accuracy)a2time01aifftr01aifirf01aiifft01autcor00basefp01bezier01bitmnp01cacheb01canrdr01cjpegconven00dither01djpegfbital00fft00idctrn01iirflt01matrix01ospfpktflowpntrch01puwmod01rgbcmy01rgbhpg01rgbyiq01rotate01routelookuprspeed01tblook01text01ttsprk01viterb00coremarkaverageMaximum32.3736.53178597521911823786131.51033.10231.7112.7992.4419300646697.47%7.47%31.9334.36203472693810970097311.85526.96188.7013.1883.2120368231680.10%0.10%27.8741.93237132163711688320292.02924.65172.5214.0183.4023724606630.05%0.05%30.9034.04193556566710519234241.84027.17190.2112.9481.2819359814810.02%0.02%45.3025.81279742223711693626732.39220.90146.3115.1477.2527974222370.00%0.00%26.8843.45175474495011681524091.50233.29233.0012.2795.2318576351065.54%5.54%39.3429.21225858581511490639941.96625.44178.0614.1581.2122585858150.00%0.00%21.2254.03227073305811465990001.98025.25176.7312.4292.3222826481060.52%0.52%25.1553.36285776588713421045422.12923.48164.3712.44107.8628756955650.62%0.62%27.2148.32179109472913150414071.36236.71256.9713.12100.2218576768633.58%3.58%36.36422.9436325056167153799796782.36221.17148.1912.601220.19365691790190.67%0.67%39.9928.97159902314211583287601.38036.22253.5413.2687.3815990231420.00%0.00%35.0649.55302634282817372431501.74228.70200.9113.18131.8530263467360.00%0.00%38.84343.4634151717925133406529372.56019.53136.7212.261088.48342111346490.17%0.17%44.7824.92171969689211157696521.54132.44227.0913.4483.0017248982920.30%0.30%43.1424.22158076460410447596711.51333.05231.3213.7276.1315818791900.07%0.07%20.9252.51217052939010987940301.97525.31177.1813.4381.8221707630500.01%0.01%19.9152.60186412821810470949891.78028.09196.6011.9087.9918948990711.62%1.62%30.3755.17243768265216752700001.45534.36240.5312.93129.5926701159808.70%8.70%45.4927.95233247225112712916911.83527.25190.7612.31103.2524542778694.96%4.96%20.5452.41296260475910764777722.75218.17127.1712.5086.1029626527870.00%0.00%37.3828.32124500343510588359461.17642.52297.6613.7776.91139770563310.93%10.93%25.7539.82180348110510256268491.75828.43199.0412.1984.1118684868603.48%3.48%42.5848.69670219800620736057353.23215.47108.2913.98148.2867021980060.00%0.00%43.5429.27213221275112745627861.67329.89209.2213.7792.5821322135270.00%0.00%17.7889.86348321500515974447402.18022.93160.5115.05106.1334832151830.00%0.00%24.8743.79221318795010889333192.03224.60172.2112.1789.4523877761507.31%7.31%50.1421.85144024572310954483121.31538.03266.2113.4581.48162983839511.63%11.63%29.1234.63176312097910084101971.74828.60200.1812.0283.9118136318732.79%2.79%28.8845.31200121854913088938961.52932.70228.9212.37105.8121522696617.02%7.02%27.9040.69183131187711353468231.61331.00216.9912.3691.8518799718512.59%2.59%27.9740.28212914031911265827321.89026.46185.1913.0786.1721658614071.70%1.70%33.9932.38153641165811005335351.39635.82250.7113.5381.3216319783235.86%5.86%35.9733.28201082053111970451831.68029.77208.3613.3489.7321647121037.11%7.11%32.6328.45199.1813.092.79%50.1442.52297.6615.1411.63%Result Graphs used in Journal for EC70102030405060708090100a2time01aifftr01aifirf01aiifft01autcor00basefp01bezier01bitmnp01cacheb01canrdr01cjpegconven00dither01djpegfbital00fft00idctrn01iirflt01matrix01ospfpktflowpntrch01puwmod01rgbcmy01rgbhpg01rgbyiq01rotate01routelookuprspeed01tblook01text01ttsprk01viterb00coremarkaverageISS Interpretive ModeSpeed Optimised FPGAISS JIT DBT ModeSimulation rate in MIPSCycle Accurate Simulation Rate EEMBC and CoreMark - Small and Long Running Embedded BenchmarksBenchmarkISS JIT DBT ModeTime@DBTCycles@DBTInstructionsCPISpeed Optimised FPGASpeed Optimised ASIPISS Interpretive ModeTime@INTRPCycles@INTRPAccuracyABS(Accuracy)clustalwfasta-ssearchphylip-promlkgrappahmmsearchhmmpfamtcoffeeblastpglimmerceaveragemaximumblastn23.2835.8013972833808333431821.67729.82208.7411.7670.8613997184400.17%0.17%32.58564.521.3602E+11185952996747.3156.8447.8511.111655.571.36937E+110.67%0.67%28.551611.8796286670881460209311622.09223.90167.2911.224100.35986993785632.44%2.44%16.4230.059209037474935536411.86626.80187.5810.7645.899237019800.30%0.30%9.8112.112796339891187974072.35421.24148.6910.9610.842799397150.11%0.11%23.851714.0393670881830408806248402.29121.82152.7510.773794.72981023794104.52%4.52%11.3228.2010402439853193322493.25815.35107.4410.9029.301039204174-0.10%0.10%21.7962.82527042320013690148913.85012.9990.9111.18122.5053140541500.82%0.82%22.73107.66513849915824474375892.10023.81166.7010.75227.7553000556343.05%3.05%27.651226.0266707331171338974496161.96825.41177.8511.033073.02694740303973.98%3.98%21.8020.80145.5811.041.62%1.62%32.5829.82208.7411.764.52%9.736.23180880893606608852.98216.77117.3810.865.581810931370.12%0102030405060708090100clustalwfasta-ssearchpromlkgrappahmmsearchhmmpfamtcoffeeblastpglimmerceaverage22282322112410162933232125241315222127247301111111111111111111112ISS Interpretive ModeSpeed Optimised FPGAISS JIT DBT ModeCycle Accurate Simulation BioPerf - Computationally-intensive Life Science BenchmarksSimulation rate in MIPS7 Stage Pipeline7 Stage Pipeline16
+
+Igor Böhm, Björn Franke, and Nigel Topham
+
+Dynamic translation techniques are used to overcome the lack of ﬂexibility inher-
+ent in statically-compiled simulators. The MIMIC simulator [17] simulates IBM SYS-
+TEM/370 instructions on the IBM RT PC and translates groups of target basic blocks
+into host instructions. SHADE [9] and EMBRA [28] use DBT with translation caching
+techniques in order to increase simulation speeds. The Ultra-fast Instruction Set Simula-
+tor [30] improves the performance of statically-compiled simulation by using low-level
+binary translation techniques to take full advantage of the host architecture.
+
+Just-In-Time Cache Compiled Simulation (JIT-CCS) [21] executes and caches pre-
+compiled instruction-operation functions for each function fetched. The Instruction Set
+Compiled Simulation (IC-CS) simulator [25] was designed to be a high performance
+and ﬂexible functional simulator. To achieve this the time-consuming instruction decode
+process is performed during the compile stage, whilst interpretation is enabled at simu-
+lation time. The SIMICS [25] full system simulator translates the target machine-code
+instructions into an intermediate format before interpretation. During simulation the in-
+termediate instructions are processed by the interpreter which calls the corresponding
+service routines. QEMU [3] is a fast simulator which uses an original dynamic transla-
+tor. Each target instruction is divided into a simple sequence of micro-operation, the set
+of micro-operations having been pre-compiled ofﬂine into an object ﬁle. During simu-
+lation the code generator accesses the object ﬁle and concatenates micro-operations to
+form a host function that emulates the target instructions within a block. More recent
+approaches to JIT DBT ISS are presented in [24,27,6,15,7]. Apart from different target
+platforms these approaches differ in the granularity of translation units (basic blocks vs
+pages or CFG regions) and their JIT code generation target language (ANSI-C vs LLVM
+IR).
+
+The commercial simulator XISS simulator [35] employs JIT DBT technology and
+targets the same ARCompactTM ISA that has been used in this paper. It achieves simula-
+tion speeds of 200+ MIPS. In contrast, ARCSIM operates at 500+ MIPS [7] in functional
+simulation mode.
+
+5.2 Performance Modelling in Fast Instruction Set Simulators
+
+A dynamic binary translation approach to architectural simulation has been introduced
+in [8]. The POWERPC ISA is dynamically mapped onto PISA in order to take advantage
+of the underlying SIMPLESCALAR [31] timing model. While this approach enables
+hardware design space exploration it does not provide a faithful performance model for
+any actual POWERPC implementation.
+
+Most relevant to our work is the performance estimation approach in the HYSIM hy-
+brid simulation environment [11,16,12,13]. HYSIM merges native host execution with
+detailed ISS. For this, an application is partitioned and operation cost annotations are
+introduced to a low-level intermediate representation (IR). HYSIM “imitates” the op-
+eration of an optimising compiler and applies generic code transformations that are
+expected to be applied in the actual compiler targeting the simulation platform. Further-
+more, calls to stub functions are inserted in the code that handle accesses to data man-
+aged in the ISS where also the cache model is located. We believe there are a number of
+short-comings in this approach: First, no executable for the target platform is ever gen-
+erated and, hence, the simulated code is only an approximation of what the actual target
+
+Cycle-Accurate Performance Modelling in an Ultra-Fast JIT DBT ISS
+
+17
+
+compiler would generate. Second, no detailed pipeline model is maintained. Hence,
+cost annotations do not reﬂect actual instruction latencies and dependencies between
+instructions, but assume ﬁxed average instruction latencies. Even for relatively simple,
+non-superscalar processors this assumption does not hold. Furthermore, HYSIM has
+only been evaluated against an ISS that does not implement a detailed pipeline model.
+Hence, accuracy ﬁgures reported in e.g. [12] only refer to how close performance es-
+timates come to those obtained by this ISS, but it is unclear if these ﬁgures accurately
+reﬂect the actual target platform. Finally, only a very few benchmarks have been evalu-
+ated. A similar hybrid approach targeting software energy estimation has been proposed
+earlier in [19,20].
+
+Statistical performance estimation methodologies such as SIMPOINT and SMARTS
+have been proposed in [14,29]. The approaches are potentially very fast, but require pre-
+processing (SIMPOINT) of an application and do not accurately model the microarchi-
+tecture (SMARTS, SIMPOINT). Unlike our accurate pipeline modelling this introduces
+a statistical error that cannot be entirely avoided.
+
+Machine learning based performance models have been proposed in [2,4,22] and,
+more recently, more mature approaches have been presented in [10,23]. After initial
+training these performance estimation methodologies can achieve very high simula-
+tion rates that are only limited by the speed of faster, functional simulators. Similar
+to SMARTS and SIMPOINT, however, these approaches suffer from inherent statistical
+errors and the reliable detection of statistical outliers is still an unsolved problem.
+
+6 Summary and Conclusions
+
+We have demonstrated that our approach to cycle-accurate ISS easily surpasses speed-
+optimised FPGA implementations whilst providing detailed architectural and microar-
+chitectural proﬁling feedback and statistics. Our main contribution is a simple yet pow-
+erful software pipeline model in conjunction with an instruction operand dependency
+and side-effect analysis pass integrated into a JIT DBT ISS enabling ultra-fast simula-
+tion speeds without compromising microarchitectural observability. Our cycle-accurate
+microarchitectural modelling approach is portable and independent of the implemen-
+tation of a functional ISS. More importantly, it is capable of capturing even complex
+interlocked processor pipelines. Because our novel pipeline modelling approach is mi-
+croarchitecture adaptable and decouples the performance model in the ISS from func-
+tional simulation it can be automatically generated from ADL speciﬁcations.
+
+In future work we plan to improve and optimise JIT generated code that performs
+microarchitectural performance model updates and show that fast cycle-accurate multi-
+core simulation is feasible with our approach.
+
+18
+
+Igor Böhm, Björn Franke, and Nigel Topham
+
+References
+
+1. David August, Jonathan Chang, Sylvain Girbal, Daniel Gracia Perez, Gilles Mouchard,
+David Penry, Olivier Temam, and Neil Vachharajani. UNISIM: An Open Simulation En-
+vironment and Library for Complex Architecture Design and Collaborative Development.
+IEEE Computer Architecture Letters, 20 Aug (2007).
+
+2. J. R. Bammi, E. Harcourt, W. Kruijtzer, L. Lavagno, and M. T. Lazarescu. Software per-
+formance estimation strategies in a system-level design tool. In Proceedings of CODES’00,
+(2000).
+
+3. F. Bellard. QEMU, a fast and portable dynamic translator. Proceedings of the Annual Con-
+ference on USENIX Annual Technical Conference. USENIX Association, Berkeley, CA, p.
+41, (2005).
+
+4. G. Bontempi and W. Kruijtzer. A data analysis method for software performance prediction.
+DATE’02: Proceedings of the Conference on Design, Automation and Test in Europe, (2002).
+5. D. Bader, Y. Li, T. Li, and V. Sachdeva. BioPerf: A Benchmark Suite to Evaluate High-
+Performance Computer Architecture on Bioinformatics Applications. In: Proceedings of the
+IEEE International Symposium on Workload Characterization (IISWC’05), pp. 163–173,
+2005.
+
+6. Florian Brandner, Andreas Fellnhofer, Andreas Krall, and David Riegler Fast and Accurate
+Simulation using the LLVM Compiler Framework. RAPIDO’09: 1st Workshop on Rapid
+Simulation and Performance Evaluation: Methods and Tools (2009) pp. 1-6.
+
+7. Igor Böhm, Björn Franke and Nigel Topham Cycle-Accurate Performance Modelling in an
+Ultra-Fast Just-In-Time Dynamic Binary Translation Instruction Set Simulator. In: Proceed-
+ings of the International Symposium on Systems, Architectures, Modeling, and Simulation
+(SAMOS’10), Samos, Greece, (2010)
+
+8. H.W. Cain, K.M. Lepak, and M.H. Lipasti. A dynamic binary translation approach to archi-
+tectural simulation. SIGARCH Computer Architecture News, Vol. 29, No. 1, March (2001).
+9. B. Cmelik, and D. Keppel. Shade: A Fast Instruction-Set Simulator for Execution Proﬁling.
+Proceedings of the 1994 ACM SIGMETRICS Conference on Measurement and Modeling of
+Computer Systems, pp. 128–137, ACM Press, New York, (1994).
+
+10. Björn Franke. Fast cycle-approximate instruction set simulation. SCOPES’08: Proceedings
+of the 11th international workshop on Software & compilers for embedded systems (2008).
+11. Lei Gao, Stefan Kraemer, Rainer Leupers, Gerd Ascheid, Heinrich Meyr. A fast and generic
+hybrid simulation approach using C virtual machine. CASES’07: Proceedings of the inter-
+national conference on Compilers, architecture, and synthesis for embedded systems (2007).
+12. Lei Gao, Stefan Kraemer, Kingshuk Karuri, Rainer Leupers, Gerd Ascheid, and Heinrich
+Meyr. An Integrated Performance Estimation Approach in a Hybrid Simulation Framework.
+MOBS’08: Annual Workshop on Modelling, Benchmarking and Simulation (2008).
+
+13. Lei Gao, Kingshuk Karuri, Stefan Kraemer, Rainer Leupers, Gerd Ascheid, and Heinrich
+Meyr. Multiprocessor performance estimation using hybrid simulation. DAC’08: Proceed-
+ings of the 45th annual Design Automation Conference (2008).
+
+14. G. Hamerly, E. Perelman, J. Lau, and B. Calder. SIMPOINT 3.0: Faster and more ﬂexible
+program analysis. MOBS’05: Proceedings of Workshop on Modelling, Benchmarking and
+Simulation, (2005).
+
+15. Daniel Jones and Nigel Topham. High Speed CPU Simulation Using LTU Dynamic Binary
+
+Translation. Lecture Notes In Computer Science (2009) vol. 5409.
+
+16. Stefan Kraemer, Lei Gao, Jan Weinstock, Rainer Leupers, Gerd Ascheid, and Hein-
+rich Meyr. HySim: a fast simulation framework for embedded software development.
+CODES+ISSS’07: Proceedings of the 5th IEEE/ACM international conference on Hard-
+ware/software codesign and system synthesis (2007).
+
+Cycle-Accurate Performance Modelling in an Ultra-Fast JIT DBT ISS
+
+19
+
+17. C. May. MIMIC: A Fast System/370 Simulator. SIGPLAN: Papers of the Symposium on
+
+Interpreters and Interpretive Techniques, pp. 1–13, ACM Press, Ney York, (1987).
+
+18. C. Mills, S.C. Ahalt, J. Fowler. Compiled Instruction Set Simulation. Software: Practice and
+
+Experience, 21(8), pp. 877 – 889, (1991).
+
+19. A. Muttreja, A. Raghunathan, S. Ravi, and N.K. Jha. Hybrid simulation for embedded soft-
+ware energy estimation. DAC’05: Proceedings of the 42nd Annual Conference on Design
+Automation, pp. 23–26, ACM Press, New York, (2005).
+
+20. A. Muttreja, A. Raghunathan, S. Ravi, and N.K. Jha. Hybrid simulation for energy estimation
+of embedded software. IEEE Transactions on Computer-Aided Design of Integrated Circuits
+and Systems, (2007).
+
+21. A. Nohl, G. Braun, O. Schliebusch, R. Leupers, H. Meyr, and A. Hoffmann. A Universal
+Technique for Fast and Flexible Instruction-Set Architecture Simulation. DAC’02: Proceed-
+ings of the 39th Conference on Design Automation, pp. 22–27, ACM Press, New York,
+(2002).
+
+22. M. S. Oyamada, F. Zschornack, and F. R. Wagner. Accurate software performance estimation
+
+using domain classiﬁcation and neural networks. In Proceedings of SBCCI’04, (2004).
+
+23. Daniel Powell and Björn Franke. Using continuous statistical machine learning to enable
+high-speed performance prediction in hybrid instruction-/cycle-accurate instruction set sim-
+ulators. CODES+ISSS’09: Proceedings of the 7th IEEE/ACM international conference on
+Hardware/software codesign and system synthesis, (2009).
+
+24. W. Qin, J. D’Errico, and X. Zhu. A Multiprocessing Approach to Accelerate Retargetable
+and Portable Dynamic-Compiled Instruction-Set Simulation. CODES-ISSS’06: Proceedings
+of the 4th International Conference on Hardware/Software Codesign and System Synthesis,
+pp. 193–198, ACM Press, New York, (2006).
+
+25. M. Reshadi, P. Mishra, and N. Dutt. Instruction Set Compiled Simulation: A Technique for
+Fast and Flexible Instruction Set Simulation. Proceedings of the 40th Conference on Design
+Automation, pp. 758–763, ACM Press, New York, (2003).
+
+26. O. Schliebusch, A. Hoffmann, A. Nohl, G. Braun, and H. Meyr. Architecture Implementation
+Using the Machine Description Language LISA. ASP-DAC’02: Proceedings of the Asia and
+South Paciﬁc Design Automation Conference, Washington, DC, USA, (2002).
+
+27. Nigel Topham and Daniel Jones. High Speed CPU Simulation using JIT Binary Translation.
+
+MOBS’07: Annual Workshop on Modelling, Benchmarking and Simulation (2007).
+
+28. E. Witchel, and M. Rosenblum. Embra: Fast and Flexibile Machine Simulation. In: Pro-
+ceedings of the 1996 ACM SIGMETRICS International Conference on Measurement and
+Modeling of Computer Systems, pp. 68–79, ACM Press, New York, (1996).
+
+29. R. E. Wunderlich, T. F. Wenisch, B. Falsaﬁ, and J. C. Hoe. SMARTS: accelerating microar-
+ISCA’03: Proceedings of the 30th
+
+chitecture simulation via rigorous statistical sampling.
+Annual International Symposium on Computer Architecture (ISCA), (2003).
+
+30. J. Zhu, and D.D. Gajski. A Retargetable, Ultra-Fast Instruction Set Simulator. DATE’99:
+Proceedings of the Conference on Design, Automation and Test in Europe, p. 62, ACM Press,
+New York, (1999).
+
+31. Doug Burger and Todd Austin. The SimpleScalar tool set, version 2.0. SIGARCH Computer
+
+Architecture News (1997) vol. 25 (3).
+
+TM
+
+32. ARCompact
+
+Instruction Set Architecture. Synopsys Inc. http://www.synopsys.
+com/IP/ConfigurableCores/ARCProcessors/, retrieved 05 November (2010).
+http://groups.inf.ed.ac.uk/pasta/hw_
+
+33. ENCORE Embedded Processor.
+
+encore.html, retrieved 05 November 2010.
+
+34. ARCSIM Instruction Set Simulator.
+
+http://groups.inf.ed.ac.uk/pasta/
+
+tools_arcsim.html, retrieved 05 November 2010.
+
+35. XISS Simulator. Synopsys Inc. http://www.synopsys.com/dw/ipdir.php?ds=
+
+sim_xiss, retrieved 10 February 2010.
+
+20
+
+Igor Böhm, Björn Franke, and Nigel Topham
+
+36. The Embedded Microprocessor Benchmark Consortium: EEMBC Benchmark Suite. http:
+
+//www.eembc.org
+
+

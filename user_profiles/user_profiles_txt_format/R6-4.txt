@@ -1,0 +1,3083 @@
+DMP: Deterministic Shared Memory Multiprocessing
+
+Joseph Devietti
+
+Brandon Lucia
+
+Luis Ceze Mark Oskin
+
+Computer Science & Engineering, University of Washington
+
+{devietti,blucia0a,luisceze,oskin}@cs.washington.edu
+
+Abstract
+Current shared memory multicore and multiprocessor sys-
+tems are nondeterministic. Each time these systems execute
+a multithreaded application, even if supplied with the same
+input, they can produce a different output. This frustrates de-
+bugging and limits the ability to properly test multithreaded
+code, becoming a major stumbling block to the much-needed
+widespread adoption of parallel programming.
+
+In this paper we make the case for fully deterministic
+shared memory multiprocessing (DMP). The behavior of an
+arbitrary multithreaded program on a DMP system is only a
+function of its inputs. The core idea is to make inter-thread
+communication fully deterministic. Previous approaches to
+coping with nondeterminism in multithreaded programs have
+focused on replay, a technique useful only for debugging. In
+contrast, while DMP systems are directly useful for debug-
+ging by offering repeatability by default, we argue that par-
+allel programs should execute deterministically in the ﬁeld
+as well. This has the potential to make testing more assuring
+and increase the reliability of deployed multithreaded soft-
+ware. We propose a range of approaches to enforcing de-
+terminism and discuss their implementation trade-offs. We
+show that determinism can be provided with little perfor-
+mance cost using our architecture proposals on future hard-
+ware, and that software-only approaches can be utilized on
+existing systems.
+
+Categories and Subject Descriptors C [0]: GENERAL
+— Hardware/software interfaces; C [1]: 2 Multiple Data
+Stream Architectures (Multiprocessors) — Multiple-instruc-
+tion-stream, multiple-data-stream processors
+
+General Terms performance, design, reliability
+
+Introduction
+
+1.
+Developing multithreaded software has proven to be much
+more difﬁcult than writing singlethreaded code. One of the
+major challenges is that current multicores execute multi-
+threaded code nondeterministically [12]: given the same in-
+put, threads can interleave their memory and I/O operations
+differently in each execution.
+
+Permission to make digital or hard copies of all or part of this work for personal or
+classroom use is granted without fee provided that copies are not made or distributed
+for proﬁt or commercial advantage and that copies bear this notice and the full citation
+on the ﬁrst page. To copy otherwise, to republish, to post on servers or to redistribute
+to lists, requires prior speciﬁc permission and/or a fee.
+ASPLOS’09, March 7–11, 2009, Washington, DC, USA.
+Copyright c(cid:2) 2009 ACM 978-1-60558-406-5/09/03. . . $5.00
+
+Nondeterminism in multithreaded execution arises from
+small perturbations in the execution environment, e.g., other
+processes executing simultaneously, differences in the oper-
+ating system resource allocation, state of caches, TLBs, buses
+and other microarchitectural structures. The ultimate conse-
+quence is a change in program behavior in each execution.
+Nondeterminism complicates the software development pro-
+cess signiﬁcantly. Defective software might execute correctly
+hundreds of times before a subtle synchronization bug ap-
+pears, and when it does, developers typically cannot repro-
+duce it during debugging. In addition, nondeterminism also
+makes it difﬁcult to test multithreaded programs, as good cov-
+erage requires both a wide range of program inputs and wide
+range of possible interleavings. Moreover, if a program might
+behave differently each time it is run with the same input, it
+becomes hard to assess test coverage. For that reason, a sig-
+niﬁcant fraction of the research on testing parallel programs
+is devoted to dealing with nondeterminism.
+
+While there were signiﬁcant efforts in addressing the prob-
+lem of nondeterminism, most of it has been on determinis-
+tically replaying multithreaded execution based on a previ-
+ously generated log [8, 14, 15, 18, 22]. In contrast, this paper
+makes the case for fully deterministic shared memory mul-
+tiprocessing (DMP). We show that, with hardware support,
+arbitrary shared memory parallel programs can be executed
+deterministically with very little performance penalty. In ad-
+dition to the obvious beneﬁts deterministic multiprocessing
+has for debugging, i.e., repeatability, we argue that parallel
+programs should always execute deterministically in the ﬁeld.
+This has the potential to make testing more assuring, to allow
+a more meaningful collection of crash information, and to in-
+crease the reliability of multithreaded software deployed in
+the ﬁeld, since execution in the ﬁeld will better resemble in-
+house testing. Moreover, the same techniques we propose to
+enable efﬁcient deterministic execution can also be used to
+directly manipulate thread interleavings and allow better test-
+ing of multithreaded programs. Overall, deterministic multi-
+processing positively impacts both development and deploy-
+ment of parallel programs.
+
+This paper is organized as follows. We begin by providing
+a precise deﬁnition of what it means to execute deterministi-
+cally (Section 2). A key insight of this deﬁnition is that multi-
+threaded execution is deterministic if the communication be-
+tween threads is deterministic. We then discuss what gives
+rise to nondeterminism and provide experimental data that
+shows, as one would expect, that current shared memory mul-
+tiprocessors are indeed highly nondeterministic. After that we
+describe how to build an efﬁcient deterministic multiproces-
+
+85sor. We propose three basic mechanisms (Section 3) for doing
+so: (1) using serialization to transform multithreaded execu-
+tion into single-threaded execution; (2) restricting accesses to
+shared data to guarantee deterministic communication; and
+(3) using transactions to speculatively communicate between
+threads, rolling back if determinism has been violated. More-
+over, we propose a series of optimizations to further reduce
+the performance overheads to a negligible amount. We dis-
+cuss the trade-offs of hardware implementations and contrast
+them to software implementations (Section 4). We then move
+on to describe our experimental infrastructure (Section 5),
+composed of a simulator for the hardware implementation
+and a fully functional software-based implementation using
+the LLVM [10] compiler infrastructure. We present perfor-
+mance and characterization results (Section 6) for both the
+hardware and compiler-based implementations. We then dis-
+cuss trade-offs and system issues such as interaction with the
+operating system and debugger (Section 7). Finally, we dis-
+cuss related work (Section 8) and then conclude (Section 9).
+
+2. Background
+2.1 A Deﬁnition of Deterministic Parallel Execution
+We deﬁne a deterministic shared memory multiprocessor sys-
+tem as a computer system that: (1) executes multiple threads
+that communicate via shared memory, and (2) will produce
+the same program output if given the same program input.
+This deﬁnition implies that a parallel program running on a
+DMP system is as deterministic as a single-threaded program.
+The most direct way to guarantee deterministic behavior is
+to preserve the same global interleaving of instructions in ev-
+ery execution of a parallel program. However, several aspects
+of this interleaving are irrelevant for ensuring deterministic
+behavior. It is not important which global interleaving is cho-
+sen, as long as it is always the same. Also, if two instructions
+do not communicate, their order can be swapped with no ob-
+servable effect on program behavior. What turns out to be
+the key to deterministic execution is that all communication
+between threads must be precisely the same for every exe-
+cution. This guarantees that the program always behaves the
+same way if given the same input.
+
+Guaranteeing deterministic inter-thread communication
+requires that each dynamic instance of an instruction (con-
+sumer) read data produced from the same dynamic instance
+of another instruction (producer). Producer and consumer
+need not be in the same thread, so this communication hap-
+pens via shared memory. Interestingly, there are multiple
+global interleavings that lead to the same communication be-
+tween instructions, they are called communication-equivalent
+interleavings (Figure 1). In summary, any communication-
+equivalent interleaving will yield the same program behavior.
+To guarantee deterministic behavior, then, we need to care-
+fully control only the behavior of load and store operations
+that cause communication between threads. This insight is
+key to efﬁcient deterministic execution.
+
+2.2 Nondeterminism in existing systems
+Current generation software and hardware systems are not
+built to behave deterministically. Multiprocessor systems ex-
+ecute programs nondeterministically because the software
+environment and the non-ISA microarchitectural state change
+from execution to execution. These effects manifest them-
+selves as perturbations in the timing between events in dif-
+ferent threads of execution, causing the ﬁnal global interleav-
+ing of memory operations in the system to be different. Ul-
+timately, the effect on the application is a change in which
+dynamic instance of a store instruction produces data for a
+dynamic instance of a load instruction. At this point, pro-
+gram execution behavior may diverge from previous execu-
+tions, and, consequently, program output may vary.
+
+ﬂow of data
+
+P0
+
+P1
+
+st A
+ld Z
+st B
+ld T
+st A
+
+ld A
+st W
+ld B
+st P
+ld A
+ld Q
+ld A
+
+(a)
+
+Parallel execution
+
+st A
+
+ld Z
+st B
+
+st A
+ld T
+
+ld A
+
+st W
+ld B
+
+st P
+
+ld A
+ld Q
+ld A
+
+st A
+
+ld Z
+
+st B
+
+st A
+
+ld T
+
+...
+
+(b)
+
+ld A
+
+st W
+
+ld B
+
+st P
+
+ld A
+ld Q
+ld A
+
+Examples of communication-
+equivalent global interleavings
+
+Figure 1. A parallel execution (a) and two of its multiple
+communication-equivalent interleavings (b). Solid mark-
+ers represent communicating instructions, hollow markers
+represent instructions that do not communicate.
+
+2.2.1 Sources of nondeterminism
+The following are some of the software and hardware sources
+of nondeterminism.
+
+Software Sources. Several aspects of the software environ-
+ment create nondeterminism: other processes executing con-
+currently and competing for resources; the state of memory
+pages, power savings mode, disk and I/O buffers; and the
+state of global data structures in the OS. In addition, several
+operating system calls have interfaces with legitimate nonde-
+terministic behavior. For example, the read system call can
+legitimately take a variable amount of time to complete and
+return a variable amount of data.
+
+Hardware Sources. A number of non-ISA-visible compo-
+nents vary from program run to program run. Among them
+are the state of any caches, predictor tables and bus prior-
+ity controllers, in short, any microarchitectural structure. In
+fact, certain hardware components, such as bus arbiters, can
+change their outcome with each execution purely due to en-
+vironmental factors; e.g., if the choice of priority is based on
+which signal is detected ﬁrst, the outcome could vary with
+differing temperature and load characteristics.
+
+Collectively, current generation software and hardware
+systems are not built to behave deterministically. In the next
+section, we measure how nondeterministically they behave.
+
+862.2.2 Quantifying nondeterminism
+We ﬁrst show a simple experiment that illustrates how simple
+changes to the initial conditions of a multiprocessor system
+can lead to different program outcomes for a simple toy
+example. Then we measure how much nondeterminism exists
+in the execution of real applications.
+A simple illustration of nondeterministic behavior. Fig-
+ure 2 depicts a simple program with a data-race where two
+threads synchronize on a barrier and then write different val-
+ues to the same shared variable. The table inside the ﬁgure
+also shows the frequency of the outcome of 1000 runs on a
+Intel Core 2 Duo machine. For the “clear cache” runs we had
+each thread set a 2MB buffer to zero before entering the bar-
+rier. As expected, the behavior is nondeterministic and varies
+signiﬁcantly depending on the conﬁguration being run.
+
+int race = -1; // global variable
+
+void thread0() {
+  if ( doClearCache )
+    clearCache();
+  barrier_wait();
+  race = 0;
+}
+
+void thread1() {
+  if ( doClearCache )
+    clearCache();
+  barrier_wait();
+  race = 1;
+}
+
+clear 
+cache?
+
+no
+yes
+
+thread 0 
+
+wins
+83.2%
+33.9%
+
+Figure 2. Simple program with a data race between two
+threads and the outcome of the race with 1000 runs.
+
+Measuring nondeterminism in real applications. As men-
+tioned previously, nondeterminism in program execution oc-
+curs when a particular dynamic instance of a load reads data
+created from a different dynamic instance of a store. To mea-
+sure this degree of nondeterminism, we start by building a
+set containing all pairs of communicating dynamic instruc-
+tions (dynamic store → dynamic load) that occurred in an
+execution. We call this the communication set, or C. A dy-
+namic memory operation is uniquely identiﬁed by its instruc-
+tion address, its instance number1, and the id of the thread
+that executed it. Assume there are two executions, ex1 and
+ex2, whose communicating sets are Cex1 and Cex2, respec-
+tively. The symmetric difference between the communication
+sets, Cex1 (cid:3) Cex2 = (Cex1 ∪ Cex2) − (Cex1 ∩ Cex2), yields
+the communicating pairs that were not present in both ex-
+ecutions, which quantiﬁes the execution difference between
+ex1 and ex2. Finally, we deﬁne the amount of nondetermin-
+ism between ex1 and ex2 as: N Dex1,ex2 = |Cex1(cid:3)Cex2|
+|Cex1|+|Cex2|
+(Eq. 1), which represents the proportion of all communicat-
+ing pairs that were not in common between the two execu-
+tions. Note that this number correctly accounts for extra in-
+structions spent in synchronization, as they will form some
+communicating pair.
+
+We developed a tool using PIN [13] that collects the com-
+munication sets for multithreaded program executions. The
+tool takes a single sample at a speciﬁed point in the exe-
+cution. We cover the whole application by running the tool
+twice at a number of different points in each execution, and
+then computing the nondeterminism between corresponding
+points in each run. Figure 3 shows the results for barnes and
+
+1 The instance number is obtained by keeping a per-thread counter of the
+number of dynamic memory operations executed by each instruction pointer.
+
+ocean-contig from the SPLASH-2 suite [21] running on an
+Intel Core 2 Duo machine. The plots show that programs have
+signiﬁcant nondeterministic behavior. Moreover, they reveal
+two interesting properties. First, both plots depict phases of
+execution where nondeterminism drops to nearly zero. These
+are created by barrier operations that synchronize the threads
+and then make subsequent execution more deterministic. Sec-
+ond, ocean-contig never shows 100% nondeterminism, and,
+in fact, a signiﬁcant fraction of pairs are the same, i.e., typi-
+cally those from private data accesses. These aspects of pro-
+gram execution can be exploited in designing a system that is
+actually deterministic.
+
+barnes
+
+ocean-contig
+
+i
+
+i
+
+m
+s
+n
+m
+r
+e
+t
+e
+D
+-
+n
+o
+N
+
+1.0
+0.9
+0.8
+0.7
+0.6
+0.5
+0.4
+0.3
+0.2
+0.1
+0
+
+i
+
+i
+
+m
+s
+n
+m
+r
+e
+t
+e
+D
+-
+n
+o
+N
+
+1.0
+0.9
+0.8
+0.7
+0.6
+0.5
+0.4
+0.3
+0.2
+0.1
+0
+
+0 1
+
+2
+
+3
+
+4
+
+5
+
+2
+
+3
+
+4
+
+5
+
+M
+
+M
+
+M
+
+M
+
+M
+
+M
+
+M
+
+M
+
+M
+
+M
+
+0 1
+
+Time (Insns.)
+
+Time (Insns.)
+
+Figure 3. Amount of nondeterminism over the execution
+of barnes and ocean-contig. The x axis is the position in
+the execution where each sample of 100,000 instructions
+was taken. The y axis is N D (Eq. 1) computed for each
+sample in the execution.
+
+3. Enforcing Deterministic Shared Memory
+
+Multiprocessing
+
+In this section we describe how to build a deterministic mul-
+tiprocessor system. We focus on the key mechanisms with-
+out discussing speciﬁc implementations, which we address
+in Section 4. We begin with a basic naive approach, and then
+reﬁne this simple technique into progressively more efﬁcient
+organizations.
+
+3.1 Basic Idea — DMP-Serial
+As seen earlier, making multiprocessors deterministic de-
+pends upon ensuring that the communication between threads
+is deterministic. The easiest way to accomplish this is to al-
+low only one processor at a time to access memory in a deter-
+ministic order. This process can be thought of as a memory
+access token being deterministically passed among proces-
+sors. We call this deterministic serialization of a parallel ex-
+ecution (Figure 4(b)). Deterministic serialization guarantees
+that inter-thread communication is deterministic by preserv-
+ing all pairs of communicating memory instructions.
+
+The simplest way to implement such serialization is to
+have each processor obtain the memory access token (hence-
+forth called deterministic token) and, when the memory op-
+eration is completed, pass it to the next processor in the de-
+terministic order. A processor blocks whenever it needs to
+access memory but does not have the deterministic token.
+
+Waiting for the token at every memory operation is likely
+to be expensive and will cause signiﬁcant performance degra-
+
+87P0
+
+P1
+
+P0
+
+P1
+
+P0
+
+P1
+
+(a) 
+
+(b) 
+
+(c) 
+
+Parallel
+execution
+
+Deterministic serialized
+execution at a ﬁne-grain
+
+Deterministic serialized
+
+execution at a coarse-grain
+
+Figure 4. Deterministic serialization of memory opera-
+tions. Dots are memory operations and dashed arrows are
+happens-before synchronization.
+
+dation compared to the original parallel execution (Fig-
+ure 4(a)). Performance degradation stems from overhead in-
+troduced by waiting and passing the deterministic token and
+from the serialization itself, which removes the beneﬁts of
+parallel execution. Synchronization overhead can be miti-
+gated by synchronizing at a coarser granularity (Figure 4(c)),
+allowing each processor to execute a ﬁnite, deterministic
+number of instructions, or a quantum, before passing the to-
+ken to the next processor. A system with serialization at the
+granularity of quanta is called DMP-Serial. The process of di-
+viding the execution into quanta is called quantum building:
+the simplest way to build a quantum is to break execution up
+into ﬁxed instruction counts (e.g. 10,000). We call this simple
+quantum building policy QB-Count.
+
+Note that DMP does not interfere (e.g., introduce dead-
+locks) with application-level synchronization. DMP offers
+the same memory access semantics as traditional nondeter-
+ministic systems. Hence, the extra synchronization imposed
+by a DMP system resides below application-level synchro-
+nization and the two do not interact.
+
+3.2 Recovering Parallelism
+Reducing the impact of serialization requires enabling paral-
+lel execution while preserving the same execution behavior
+as deterministic serialization. We propose two techniques to
+recover parallelism. The ﬁrst technique exploits the fact that
+threads do not communicate all the time, allowing concurrent
+execution of communication-free periods. The second tech-
+nique uses speculation to allow parallel execution of quanta
+from different processors, re-executing quanta when deter-
+minism might have been violated.
+
+3.2.1 Leveraging Communication-Free Execution —
+
+DMP-ShTab
+
+The performance of deterministic parallel execution can be
+improved by leveraging the observation that threads do not
+communicate all the time. Periods of the execution that do
+not communicate can execute in parallel with other threads.
+Thread communication, however, must happen deterministi-
+cally. With DMP-ShTab, we achieve this by falling back to
+deterministic serialization only while threads communicate.
+Each quantum is broken into two parts: a communication-
+free preﬁx that executes in parallel with other quanta, and a
+sufﬁx, from the ﬁrst point of communication onwards, that
+
+executes serially. The execution of the serial sufﬁx is deter-
+ministic because each thread runs serially in an order deter-
+mined by the deterministic token, just as in DMP-Serial. The
+transition from parallel execution to serial execution is deter-
+ministic because it occurs only when all threads are blocked
+– each thread will block either at its ﬁrst point of inter-thread
+communication or, if it does not communicate with other
+threads, at the end of its current quantum. Thus, each thread
+blocks during each of its quanta (though possibly not until the
+end), and each thread blocks at a deterministic point within
+each quantum because communication is detected determin-
+istically (described later).
+
+Inter-thread communication occurs when a thread writes
+to shared (or non-private) pieces of data. In this case, the sys-
+tem must guarantee that all threads observe such writes at
+a deterministic point in their execution. Figure 5 illustrates
+how this is enforced in DMP-ShTab. There are two impor-
+tant cases: (1) reading data held private by a remote proces-
+sor, and (2) writing to shared data (privatizing it). Case (1)
+is shown in Figure 5(a): when quantum 2 attempts to read
+data that is held private by a remote processor P0, it must
+ﬁrst wait for the deterministic token and for all other threads
+to be blocked waiting for the deterministic token. In this ex-
+ample, the read cannot execute until quantum 1 ﬁnishes exe-
+cuting. This is necessary to guarantee that quantum 2 always
+gets the same data, since quantum 1 might still write to A be-
+fore it completes executing. Case (2) is shown in Figure 5(b):
+when quantum 1, which already holds the deterministic to-
+ken, attempts to write to a piece of shared data, it must also
+wait for all other threads to be blocked waiting for the de-
+terministic token. In this example, the store cannot execute
+until quantum 2 ﬁnishes executing. This is necessary to guar-
+antee that all processors observe the change of the state of
+A (from shared to privately held by a remote processor) at a
+deterministic point in their execution. Note that each thread
+waits to receive the token when it reaches the end of a quan-
+tum before starting its next quantum. This periodically (and
+deterministically) allows a thread waiting for all other threads
+to be blocked to make progress.
+
+memory operation
+
+N deterministic order
+
+deterministic token passing
+
+Initially A is private in P0
+
+P0
+
+...
+st A
+...
+
+1
+
+P1
+
+ld A
+
+(blocked)
+
+atomic quantum
+
+Initially A is shared
+P0
+P1
+
+st A
+
+(blocked)
+
+...
+
+ld A
+...
+
+parallel
+preﬁx
+
+ld A
+
+1
+
+st A
+
+2
+
+(a) 
+
+(blocked)
+
+2
+
+serial
+sufﬁx
+
+(b) 
+
+P1 deterministically reading
+ another thread's private data
+
+P0 deterministically 
+writing to shared data 
+
+Figure
+communication-free execution.
+
+5. Recovering
+
+parallelism by
+
+overlapping
+
+To detect writes that cause communication, DMP-ShTab
+needs a global data-structure to keep track of the sharing state
+
+88of memory positions. A sharing table is a conceptual data
+structure that contains sharing information for each memory
+position; it can be kept at different granularities, e.g., line
+or page. Figure 6 shows a ﬂowchart of how the sharing
+table is used. Some accesses can freely proceed in parallel:
+a thread can access its own private data without holding
+the deterministic token (1) and it can also read shared data
+without holding the token (2). However, in order to write
+to shared data or read data regarded as private by another
+thread, a thread needs to wait for its turn in the deterministic
+total order, when it holds the token and all other threads
+are blocked also waiting for the token (3). This guarantees
+that the sharing information is kept consistent and its state
+transitions are deterministic. When a thread writes to a piece
+of data, it becomes the owner of the data (4). Similarly, when
+a thread reads data not yet read by any thread, it becomes the
+owner of the data. Finally, when a thread reads data owned
+by another thread, the data becomes shared (5).
+
+thread t about to 
+access address A
+
+Y
+
+1
+
+A owned by t?
+
+N
+
+Y
+
+2
+
+is A shared ?
+
+N
+
+3
+
+t waits for token 
+
+and 
+
+for all other threads 
+
+to be blocked 
+
+Y
+
+is read ?
+
+N
+
+proceed
+
+with
+
+access
+
+4
+
+5
+
+set A private and 
+owned by thread t
+
+Y
+
+is write ?
+
+set A shared
+
+N
+
+Figure 6. Deterministic serialization of shared memory
+communication only.
+
+In summary, DMP-ShTab lets threads run concurrently
+as long as they are not communicating. As soon as they at-
+tempt to communicate, DMP-ShTab deterministically serial-
+izes communication.
+3.2.2 Leveraging Support for Transactional Memory —
+
+DMP-TM and DMP-TMFwd
+
+Executing quanta atomically and in isolation in a determin-
+istic total order is equivalent to deterministic serialization.
+To see why, consider a quantum executed atomically and in
+isolation as a single instruction in the deterministic total or-
+der, which is the same as DMP-Serial. Transactional Mem-
+ory [5, 6] can be leveraged to make quanta appear to execute
+atomically and in isolation. This, coupled with a determinis-
+tic commit order, makes execution equivalent to deterministic
+serialization while recovering parallelism.
+
+We use TM support by encapsulating each quantum in-
+side a transaction, making it appear to execute atomically
+
+and in isolation. In addition, we need a mechanism to form
+quanta deterministically and another to enforce a determin-
+istic commit order. As Figure 7(a) illustrates, speculation al-
+lows a quantum to run concurrently with other quanta in the
+system as long as there are no overlapping memory accesses
+that would violate the original deterministic serialization of
+memory operations. In case of conﬂict, the quantum later in
+the deterministic total order gets squashed and re-executed
+(2). Note that the deterministic total order of quantum com-
+mits is a key component in guaranteeing deterministic serial-
+ization of memory operations. We call this system DMP-TM.
+
+memory operation
+
+atomic quantum
+
+deterministic token passing
+
+uncommitted value ﬂow
+
+N deterministic order
+
+P0
+
+P1
+
+P0
+
+P1
+
+st A
+
+ld B
+
+st A
+
+ld T
+
+1
+
+3
+
+st A
+
+ld B
+
+st A
+
+ld B
+
+1
+
+3
+
+ld A
+
+st C
+
+ld A
+
+st C
+
+st A
+
+ld B
+
+(squash)
+
+2
+
+4
+
+st C
+
+ld A
+
+st A
+
+ld B
+
+2
+
+4
+
+(a) 
+
+Pure TM
+
+(b)
+
+TM w/ uncommitted value ﬂow
+
+Figure 7. Recovering parallelism by executing quanta as
+memory transactions (a). Avoiding unnecessary squashes
+with un-committed data forwarding (b).
+
+Having a deterministic commit order also allows isolation
+to be selectively relaxed, further improving performance by
+allowing uncommitted (or speculative) data to be forwarded
+between quanta. This can potentially save a large number of
+squashes in applications that have more inter-thread commu-
+nication. To do so, we allow a quantum to fetch speculative
+data from another uncommitted quantum earlier in the deter-
+ministic order. This is illustrated in Figure 7(b), where quan-
+tum 2 fetches an uncommitted version of A from quantum 1.
+Note that without support for forwarding, quantum 2 would
+have been squashed. To guarantee correctness, if a quantum
+that provided data to other quanta is squashed, all subsequent
+quanta must also be squashed since they might have con-
+sumed incorrect data. We call a DMP system that leverages
+support for TM with forwarding DMP-TMFwd.
+
+Another interesting effect of pre-deﬁned commit ordering
+is that memory renaming can be employed to avoid squashes
+on write-after-write and write-after-read conﬂicts. For exam-
+ple, in Figure 7(a), if quanta 3 and 4 execute concurrently,
+the store to A in (3) need not squash quantum 4 despite their
+write-after-write conﬂict.
+
+3.3 Exploiting the Critical Path — QB-SyncFollow,
+
+QB-Sharing and QB-SyncSharing
+
+The most basic quantum building policy, QB-Count, pro-
+duces quanta based on counting instructions and breaking a
+quantum when a deterministic, target number of instructions
+is reached. However, instruction-count based quantum build-
+ing does not capture the fact that threads do not have the same
+rate of progress. It also does not capture the fact that multi-
+threaded programs have a critical path. Intuitively, the critical
+
+89thread changes as threads communicate with each other via
+synchronization operations and data sharing.
+
+We now describe how to exploit typical program behavior
+to adapt the size of quanta and lead to more efﬁcient progress
+on the critical path of execution. We devised three heuristics
+to do so. The ﬁrst heuristic, called QB-SyncFollow simply
+ends a quantum when an unlock operation is performed. As
+Figure 8 shows, the rationale is that when a thread releases
+a lock (P0), other threads might be spinning waiting for
+that lock (P1), so the deterministic token should be sent
+forward as early as possible to allow the waiting thread to
+make progress. In addition, QB-SyncFollow passes the token
+forward immediately if a thread starts spinning on a lock.
+
+memory operation
+
+N deterministic order
+
+deterministic token passing
+
+atomic quantum
+
+P0
+
+lock L
+
+1
+
+unlock L
+
+P1
+
+lock L
+(grab)
+
+P0
+
+lock L
+
+P1
+
+1
+
+3
+
+unlock L
+
+lock L
+
+...
+
+spin
+
+...
+
+(wasted
+
+work)
+
+2
+
+4
+
+grab
+
+ lock L
+
+3
+
+2
+
+4
+
+(a) 
+
+(b) 
+
+Regular quantum break
+
+Better quantum break
+
+Figure 8. Example of a situation when better quantum
+breaking policies leads to better performance.
+
+The second heuristic relies on information about data shar-
+ing to identify when a thread has potentially completed work
+on shared data, and consequently ends a quantum at that time.
+It does so by determining when a thread hasn’t issued mem-
+ory operations to shared locations in some time — e.g. in
+the last 30 memory operations. The rationale is that when
+a thread is working on shared data, it is expected that other
+threads will access that data soon. By ending a quantum early
+and passing the deterministic token, the consumer thread po-
+tentially consumes the data earlier than if the quantum in the
+producer thread ran longer. This not only has an effect on per-
+formance in all DMP techniques, but also reduces the amount
+of work wasted by squashes in DMP-TM and DMP-TMFwd.
+We call this quantum building heuristic QB-Sharing.
+
+In addition, we explore a combination of QB-SyncFollow
+and QB-Sharing, which we refer to as QB-SyncSharing. This
+quantum building strategy monitors synchronization events
+and sharing behavior. QB-SyncSharing determines the end of
+a quantum whenever either of the other two techniques would
+have decided to do so.
+
+Implementation Issues
+
+4.
+As seen in the previous section, implementing a DMP sys-
+tem requires a mechanism to deterministically break the exe-
+cution into quanta and mechanisms to guarantee the proper-
+
+ties of deterministic serialization. A DMP system could have
+all these mechanisms completely in hardware, completely in
+software or even as a mix of hardware and software compo-
+nents. The trade-off is one of complexity versus performance.
+A hardware-only implementation offers better performance
+but requires changes to the multiprocessor hardware. Con-
+versely, a software-only implementation performs worse but
+does not require special hardware. In this section, we discuss
+the relevant points in each implementation.
+
+4.1 Hardware-Only Implementation
+Quantum Building: The simplest quantum building policy,
+QB-Count, is implemented by counting dynamic instructions
+as they retire and placing a quantum boundary when the de-
+sired quantum size is reached. QB-SyncFollow requires ac-
+cess to information about synchronization, which is obtained
+by a compiler or annotations in the synchronization libraries.
+QB-Sharing requires monitoring memory accesses and de-
+termining whether they are to shared data or not, which is
+done using the sharing table (Section 3.2.1), discussed later
+in this section. Finally, QB-SyncSharing is exactly a logi-
+cal OR of the decision made by QB-SyncFollow and QB-
+Sharing. Regardless of the quantum building policy used, de-
+pending upon the consistency model of the underlying hard-
+ware, threads must perform a memory fence at the edge of a
+quantum, which is where inter-thread communication occurs.
+
+Hw-DMP-Serial: DMP-Serial is implemented in hardware
+with a token that is passed between processors in the deter-
+ministic order. The hardware supports multiple tokens, allow-
+ing multiple deterministic processes at the same time — each
+process has its own token.
+
+Hw-DMP-ShTab: The sharing table data-structure used by
+DMP-ShTab keeps track of the sharing state of data in mem-
+ory. Our hardware implementation of the sharing table lever-
+ages the cache line state maintained by a MESI cache coher-
+ence protocol. A line in exclusive or modiﬁed state is con-
+sidered private by the local processor so, as the ﬂowchart
+in Figure 6 shows, it can be freely read or written by its
+owner thread without holding the deterministic token. The
+same applies for a read operation on a line in shared state.
+Conversely, a thread needs to acquire the deterministic to-
+ken before writing to a line in shared state, and moreover, all
+other threads must be at a deterministic point in their exe-
+cution, e.g., blocked. The state of the entries in the sharing
+table corresponding to lines that are not cached by any pro-
+cessor is kept in memory and managed by the memory con-
+troller, much like a directory in directory-based cache coher-
+ence. Note, however, that we do not require directory-based
+coherence per se. This state is transferred when cache misses
+are serviced. Nevertheless, directory-based systems can sim-
+plify the implementation of Hw-DMP-ShTab even further.
+
+We now address how the state changes of the sharing
+table happen deterministically. There are three requirements:
+(1) speculative instructions cannot change the state of the
+sharing table; (2) a coherence request that changes the state
+of a cache line can only be performed if the issuer holds the
+
+90deterministic token; and (3) all nodes need to know when the
+other nodes are blocked waiting for the deterministic token
+— this is necessary to implement step 3 in Figure 6. To
+guarantee (1), speculative instructions that need to change the
+sharing table can only do so when they are not speculative
+anymore. To guarantee (2), a coherence request carries a
+bit that indicates whether the issuer holds the deterministic
+token: if it does, the servicing node processes the request; if
+it does not, the servicing node nacks the request if it implies
+a change in its cache lines, e.g., a downgrade. Finally, (3)
+is guaranteed by having all processors broadcast when they
+block or when they unblock.
+
+Alternatively, sharing table implementations can use mem-
+ory tagging, where the tags represent the sharing information.
+Moreover, our evaluation (Section 6.2) shows that tracking
+sharing information at a page granularity does not degrade
+performance excessively. This suggests a page-level imple-
+mentation, which is simpler than a line-level implementation.
+
+Hw-DMP-TM and Hw-DMP-TMFwd: On top of standard
+TM support, a hardware implementation of DMP-TM needs
+a mechanism to enforce a speciﬁc transaction commit or-
+der — the deterministic commit order of quanta encapsu-
+lated inside transactions. Hw-DMP-TM does that by allow-
+ing a transaction to commit only when the processor receives
+the deterministic token. After a single commit, the processor
+passes the token to the next processor in the deterministic or-
+der. DMP-TMFwd requires more elaborate TM support to
+allow speculative data to ﬂow from uncommitted quanta ear-
+lier in the deterministic order. This is implemented by mak-
+ing the coherence protocol be aware of the data version of
+quanta, very similarly to versioning protocols used in Thread-
+Level Speculation (TLS) systems [3]. One interesting aspect
+of Hw-DMP-TM is that, if a transaction overﬂow event is
+made deterministic, it can be used as a quantum boundary,
+making a bounded TM implementation perfectly suitable for
+a DMP-TM system. Making transaction overﬂow determinis-
+tic requires making sure that updates to the speculative state
+of cache lines happen strictly as a function of memory in-
+struction retirement, i.e., updates from speculative instruc-
+tions cannot be permitted. In addition, it also requires all
+non-speculative lines to be displaced before an overﬂow is
+triggered, i.e., the state of non-speculative lines cannot affect
+the overﬂow decision.
+
+The implementation choices in a hardware-only DMP
+system also have performance versus complexity trade-offs.
+DMP-TMFwd is likely to offer better performance, but it re-
+quires mechanisms for speculative execution, conﬂict detec-
+tion and memory versioning, whereas DMP-ShTab performs
+a little worse but does not require speculation.
+
+4.2 Software-Only Implementation
+A DMP system can also be implemented using a compiler
+or a binary rewriting infrastructure. The implementation de-
+tails are largely similar to the hardware implementations. The
+compiler builds quanta by sparsely inserting code to track dy-
+namic instruction count in the control-ﬂow-graph — quanta
+
+need not be of uniform size as long as the size is deter-
+ministic. This is done at the beginning and end of function
+calls, and at the tail end of CFG back edges. The inserted
+code tracks quantum size and, when the target size has been
+reached, it calls back to a runtime system, which implements
+the various DMP techniques. Sw-DMP-Serial is supported in
+software by implementing the deterministic token as a queu-
+ing lock. For Sw-DMP-ShTab, the compiler instruments ev-
+ery load and store to call back to the runtime system, and the
+runtime system implements the logic shown in Figure 6 and
+the table itself is kept in memory. It is also possible to imple-
+ment a DMP system using software TM techniques, but we
+did not evaluate such a scheme in this paper.
+
+5. Experimental Setup
+We evaluate both hardware and software implementations of
+a DMP system. We use the SPLASH2 [21] and PARSEC [2]
+benchmark suites and run the benchmarks to completion.
+Some benchmarks were not included due to infrastructure
+problems such as out of memory errors and other system is-
+sues (e.g., lack of 64-bit compatibility). Note that the input
+sizes for the software implementation experiments are typi-
+cally larger than the ones used in the simulation runs due to
+simulation time constraints. We ran our native experiments
+on a machine with dual Intel Xeon quad-core 64-bit proces-
+sors (8 cores total) clocked at 2.8 GHz, with 8GB of memory
+running Linux 2.6.24. In the sections below we describe the
+evaluation environment for each implementation category.
+
+5.1 Hw-DMP
+We assess the performance trade-offs of the different hard-
+ware implementations of a DMP systems with a simulator
+written using PIN [13]. The model includes the effects of
+serialized execution2, quantum building, memory conﬂicts,
+speculative execution squashes and buffering for a single out-
+standing transaction per thread in the transactional memory
+support. Note that even if execution behavior is determinis-
+tic, performance may not be deterministic. Therefore we run
+our simulator multiple times, average the results and provide
+error bars showing the 90% conﬁdence interval for the mean.
+While the model simpliﬁes some microarchitectural details,
+the speciﬁcs of the various Hw-DMP system implementa-
+tions are modeled in detail. To reduce simulation time, our
+model assumes that the IPCs (including squashed instruc-
+tions) of all the different DMP modes are the same. This rea-
+sonable assumption allows us to compare performance be-
+tween different Hw-DMP schemes using our infrastructure.
+Note that the comparison baseline (nondeterministic parallel
+execution) also runs on our simulator.
+
+5.2 Sw-DMP
+We evaluate the performance impact of a software-based
+DMP system by using a compiler pass written for LLVM
+v2.2 [10]. Its main transformations are described in Sec-
+
+2 Note that the simulation actually serializes quanta execution functionally,
+which affects how the system executes the program. This accurately models
+the effects of quanta serialization on application behavior.
+
+91tion 4.2. The pass is executed after all other compiler op-
+timizations. Once the object ﬁles are linked to the runtime
+environment, LLVM does another complete link-time op-
+timization pass to inline the runtime library with the main
+object code.
+
+The runtime system provides a custom pthread-compatible
+thread management and synchronization API. Finally, the
+runtime system allows the user to control the maximum quan-
+tum size and the granularity of entries in the sharing table. We
+conﬁgured these parameters on a per-application basis, with
+quantum sizes varying from 10,000 to 200,000 instructions,
+and sharing table entries from 64B to 4KB. Our Sw-DMP ex-
+periments run on real hardware, so we took multiple runs, av-
+eraged their running time and provided error bars in the per-
+formance plot showing the 90% conﬁdence interval for the
+mean. The focus of this paper is on the DMP ideas and their
+hardware implementations, so we omit a detailed description
+and evaluation of our software-only implementation.
+6. Evaluation
+We ﬁrst show the scalability of our hardware proposals: in
+the best case, Hw-DMP-ShTab has negligible overhead com-
+pared to nondeterministic parallel execution with 16 threads,
+while the more aggressive Hw-DMP-TMFwd reduces Hw-
+DMP-ShTab’s overheads by 20% on average. We then ex-
+amine the sensitivity of our hardware proposals to changes
+in quantum size, conﬂict detection granularity, and quantum
+building strategy, presenting only a subset of benchmarks
+(and averages) for space reasons. Finally, we show the scal-
+ability of our software-only Sw-DMP-ShTab proposal and
+demonstrate that it does not unduly limit performance scal-
+ability. We believe that Hw-DMP-ShTab represents a good
+trade-off between performance and complexity, and that Sw-
+DMP-ShTab is fast enough to be useful for debugging and,
+depending on the application, deployment purposes.
+
+6.1 Hw-DMP: Performance and Scalability
+Figure 9 shows the scalability of our techniques compared to
+the nondeterministic, parallel baseline. We ran each bench-
+mark with 4, 8 and 16 threads, and QB-SyncSharing pro-
+ducing 1,000-instruction quanta. As one would expect, Hw-
+DMP-Serial exhibits slowdown nearly linear with the number
+of threads. The degradation can be sublinear because DMP
+affects only the parallel behavior of an application’s execu-
+tion. Hw-DMP-ShTab has 38% overhead on average with
+16 threads, and in the few cases where Hw-DMP-ShTab has
+larger overheads (e.g. lu-nc), Hw-DMP-TM provides much
+better performance. For an additional cost in hardware com-
+plexity, Hw-DMP-TMFwd, with an average overhead of only
+21%, provides a consistent performance improvement over
+Hw-DMP-TM. Hw-DMP-ShTab and the TM-based schemes
+all scale sub-linearly with the number of processors. The
+overhead for TM-based schemes is ﬂat for most benchmarks,
+suggesting that a TM-based system would be ideal for larger
+DMP systems. Thus, with the right hardware support, the per-
+formance of deterministic execution can be very competitive
+with nondeterministic parallel execution.
+
+6.2 Hw-DMP: Sensitivity Analysis
+Figure 10 shows the effects of changing the maximum num-
+ber of instructions included in a quantum. Again, we use the
+QB-SyncSharing scheme, with line-granularity conﬂict de-
+tection. Increasing the size of quanta consistently degrades
+performance for the TM-based schemes, as larger quanta in-
+crease the likelihood and cost of aborts since more work is
+lost. The ability of Hw-DMP-TMFwd to avoid conﬂicts helps
+increasingly as the quanta size gets larger. With Hw-DMP-
+ShTab, the effect is more application dependent: most ap-
+plications (e.g. vlrend) do worse with larger quanta, since
+each quantum holds the deterministic token for longer, po-
+tentially excluding other threads from making progress. For
+lu-nc, however, the effect is reversed: lu-nc has rela-
+tively large communication-free regions per quantum, allow-
+ing each thread to make progress without holding the deter-
+ministic token. Smaller quanta force a thread to wait for the
+deterministic token sooner, lessening this effect. On average,
+however, Hw-DMP-Serial is less affected by quantum size.
+
+Hw-DMP-TMFwd
+Hw-DMP-TM
+Hw-DMP-ShTab
+Hw-DMP-Serial
+
+t
+
+a
+n
+a
+u
+q
+
+ 
+
+n
+s
+n
+i
+-
+0
+0
+0
+1
+
+,
+
+ 
+r
+e
+v
+o
+
+ 
+
+p
+u
+d
+e
+e
+p
+s
+ 
+%
+
+40%
+
+20%
+
+0%
+
+-20%
+
+-40%
+
+-60%
+
+-80%
+
+-100%
+
+2 X
+
+  C         2    X
+
+     C           
+
+      2      X
+
+lu-nc
+
+vlrend
+
+            2            
+            
+           C           
+         2         X
+         
+        C        
+strmcl
+PARSEC
+
+              C             
+               
+
+X
+
+SPLASH
+gmean
+
+gmean
+
+Figure 10. Performance of 2,000 (2), 10,000 (X) and
+100,000 (C) instruction quanta, relative to 1,000 instruc-
+tion quanta.
+
+Figure 11 compares conﬂict detection at cache line (32-
+byte) and page (4096-byte) granularity. Increasing the con-
+ﬂict detection granularity decreases the performance of the
+TM-based schemes, as they suffer more (likely false) con-
+ﬂicts. The gap between Hw-DMP-TMFwd and Hw-DMP-
+TM grows as the former can avoid some of the conﬂicts
+by forwarding values. Hw-DMP-Serial is unaffected, be-
+cause it does no conﬂict detection. With Hw-DMP-ShTab,
+a coarser granularity can lead to more blocking (e.g. lu-nc
+and streamcluster) but can also, surprisingly, improve
+performance by making it faster to privatize or share large
+regions of memory (e.g. radix, ocean-c). This suggests a
+pro-active privatization/sharing mechanism to improve the
+performance of Hw-DMP-ShTab. On average, our results
+show that exploiting existing virtual memory support to im-
+plement Hw-DMP-ShTab could be quite effective.
+
+Figure 12 shows the performance effect of different quan-
+tum building strategies. Smarter quantum builders gener-
+ally do not improve performance much over the QB-Count
+1,000-instruction baseline, as QB-Count produces such small
+quanta that heuristic breaking cannot substantially accel-
+
+92 
+
+3
+
+.
+
+7
+
+ 
+
+6
+
+.
+
+2
+
+1
+0
+7
+
+.
+
+ 
+
+3
+
+.
+
+4
+
+ 
+
+3
+
+.
+
+6
+
+ 
+
+6
+
+.
+
+1
+
+1
+0
+2
+
+.
+
+ 
+
+3
+
+.
+
+1
+
+ 
+
+3
+
+.
+
+8
+
+ 
+
+3
+
+.
+
+6
+
+ 
+
+6
+
+.
+
+8
+
+1
+0
+3
+
+.
+
+ 
+
+3
+
+.
+
+8
+
+ 
+
+7
+
+.
+
+0
+
+1
+1
+0
+
+.
+
+ 
+
+3
+
+.
+
+1
+
+ 
+
+5
+
+.
+
+2
+
+ 
+
+8
+
+.
+
+4
+
+ 
+
+3
+
+.
+
+2
+
+ 
+
+5
+
+.
+
+6
+
+ 
+
+4
+
+.
+
+3
+
+ 
+
+6
+
+.
+
+4
+
+ 
+
+3
+
+.
+
+8
+
+ 
+
+7
+
+.
+
+0
+
+1
+2
+1
+
+.
+
+ 
+
+3
+
+.
+
+2
+
+ 
+
+3
+
+.
+
+3
+
+ 
+
+4
+
+.
+
+4
+
+ 
+
+3
+
+.
+
+8
+
+ 
+
+6
+
+.
+
+9
+
+1
+1
+8
+
+.
+
+ 
+
+4
+
+.
+
+6
+
+ 
+
+6
+
+.
+
+7
+
+Hw-DMP-TMFwd
+
+Hw-DMP-TM
+
+Hw-DMP-ShTab
+
+Hw-DMP-Serial
+
+ 
+o
+t
+ 
+d
+e
+z
+
+i
+l
+
+a
+m
+r
+o
+n
+ 
+e
+m
+
+i
+t
+n
+u
+r
+
+n
+o
+i
+t
+u
+c
+e
+x
+e
+ 
+l
+e
+
+l
+l
+
+i
+
+i
+
+a
+r
+a
+p
+ 
+c
+i
+t
+s
+n
+m
+r
+e
+t
+e
+d
+-
+n
+o
+n
+
+3.0
+
+2.5
+
+2.0
+
+1.5
+
+1.0
+
+l
+
+y
+t
+i
+r
+a
+u
+n
+a
+r
+g
+-
+d
+r
+o
+w
+
+ 
+r
+e
+v
+o
+
+ 
+
+p
+u
+d
+e
+e
+p
+s
+ 
+%
+
+500%
+450%
+400%
+350%
+300%
+250%
+200%
+150%
+100%
+50%
+0%
+-50%
+-100%
+
+4 8
+barnes
+
+  16        4   8
+
+         
+        16        
+      4      8
+      
+     16     
+         4         8
+fft(P)
+
+fmm
+
+cholesky
+
+           16           
+8
+
+            4            
+
+              16              
+
+            
+
+                  4                  
+
+               4               
+lu-nc
+
+                 16                 
+               
+radix(P)
+
+                     
+8
+8
+                  
+                    16                    
+8
+                       16                       
+
+                        4                        
+                           
+
+                              4                              
+                           4                           
+                              
+                                 
+8
+                     4                     
+                                    4                                    
+blacksch
+SPLASH
+gmean
+
+                                   16                                   
+strmcl
+
+                                16                                
+fluid
+
+                        
+                          16                          
+vlrend
+
+                                         16                                         
+                                             
+bodytr
+
+8
+                                      16                                      
+
+                                    
+                                       4                                       
+
+                                 4                                 
+
+                             16                             
+8
+
+                                       
+                                          4                                          
+
+                                            16                                           
+
+                                          
+
+ocean-c(P)
+
+PARSEC
+
+water-sp
+
+gmean
+
+8
+
+8
+
+8
+
+8
+
+Figure 9. Runtime overheads with 4, 8 and 16 threads. (P) indicates page-level conﬂict detection; line-level otherwise.
+
+Hw-DMP-TMFwd
+Hw-DMP-TM
+Hw-DMP-ShTab
+
+Hw-DMP-TMFwd
+Hw-DMP-TM
+Hw-DMP-ShTab
+Hw-DMP-Serial
+
+t
+
+n
+u
+o
+C
+B
+Q
+
+-
+
+ 
+r
+e
+v
+o
+ 
+p
+u
+d
+e
+e
+p
+s
+ 
+%
+
+180%
+
+160%
+
+140%
+
+120%
+
+100%
+
+80%
+
+60%
+
+40%
+
+20%
+
+0%
+
+-20%
+
+-40%
+
+t
+n
+u
+o
+C
+B
+Q
+
+-
+
+ 
+r
+e
+v
+o
+ 
+p
+u
+d
+e
+e
+p
+s
+ 
+%
+
+180%
+
+160%
+
+140%
+
+120%
+
+100%
+
+80%
+
+60%
+
+40%
+
+20%
+
+0%
+
+-20%
+
+-40%
+
+fft
+
+ lu
+-
+n
+
+  o
+
+c
+
+   
+
+r
+a
+
+c
+
+e
+
+a
+
+    
+
+vlr
+
+e
+
+     
+
+S
+
+P
+
+n
+
+d
+
+g
+
+L
+
+m
+
+A
+
+b
+
+      
+
+o
+
+d
+
+       
+
+fluid
+
+        
+
+s
+
+tr
+
+m
+
+dix
+
+y
+
+tr
+
+n
+-
+c
+
+e
+
+S
+
+a
+
+H
+
+n
+
+P
+
+A
+
+         
+
+g
+
+cl
+
+          
+
+S
+
+E
+
+R
+
+m
+
+e
+
+a
+
+C
+
+n
+
+Figure 11. Performance of page-granularity conﬂict de-
+tection, relative to line-granularity.
+
+  ss        s   sf
+
+      
+     ss     
+      s      sf
+
+            
+           ss           
+            s            
+
+              ss              
+
+               s               
+
+                 ss                
+
+                  
+
+               
+
+sf
+
+sf
+
+s sf
+barnes
+
+radix(P)
+
+         s         sf
+         
+        ss        
+bodytr
+
+SPLASH
+gmean
+
+strmcl
+
+PARSEC
+
+gmean
+
+Figure 12. Performance of QB-Sharing (s), QB-
+SyncFollow (sf) and QB-SyncSharing (ss) quantum
+builders, relative to QB-Count, with 1,000-insn quanta.
+
+Hw-DMP-TMFwd
+Hw-DMP-TM
+Hw-DMP-ShTab
+Hw-DMP-Serial
+
+erate progress along the application’s critical path. With
+10,000-instruction quanta (Figure 13), the effects of the dif-
+ferent quantum builders are more pronounced. In general,
+the quantum builders that take program synchronization into
+account (QB-SyncFollow and QB-SyncSharing) outperform
+those that do not. Hw-DMP-Serial and Hw-DMP-ShTab per-
+form better with smarter quantum building, while the TM-
+based schemes are less affected, as TM-based schemes re-
+cover more parallelism. QB-Sharing works well with Hw-
+DMP-ShTab and PARSEC, and works synergistically with
+synchronization-aware quantum building: QB-SyncSharing
+often outperforms QB-SyncFollow (as with barnes).
+
+6.3 Hw-DMP: Characterization
+Table 1 provides more insight into our sensitivity results. For
+Hw-DMP-TM, with both line- and page-level conﬂict detec-
+tion, we give the average read- and write-set sizes (which
+show that our TM buffering requirements are modest), and
+the percentage of quanta that suffer conﬂicts. The percent-
+age of conﬂicts is only roughly correlated with performance,
+as not all conﬂicts are equally expensive. For the Hw-DMP-
+ShTab scheme, we show the amount of execution overlap of
+a quantum with other quanta (parallel preﬁx), as a percent-
+age of the average quantum size. This metric is highly corre-
+lated with performance: the more communication-free work
+exists at the beginning of each quantum, the more progress
+
+s
+
+      barnes
+
+ sf   ss      s
+
+    sf    
+      radix(P)
+
+     ss     
+
+       sf       
+
+        ss        
+
+         s
+
+          sf          
+
+           ss           
+            s
+
+      bodytr
+
+              ss              
+
+             sf             
+      strmcl
+
+                 ss                
+
+               s
+                sf                
+      PARSEC
+
+                  
+
+       s
+      SPLASH
+      gmean
+
+      gmean
+
+Figure 13. Performance of quantum building schemes,
+relative to QB-Count, with 10,000-insn quanta.
+
+a thread can make before needing to acquire the determinis-
+tic token. Finally, we give the average quantum size and the
+percentage of quanta breaks caused by the heuristic of each
+of the quantum builders, with a 10,000-instruction maximum
+quanta size. The average quantum size for QB-Count is uni-
+formly very close to 10,000 instructions, so we omit those
+results. Since the average quantum size for QB-SyncFollow
+is generally larger than that for QB-Sharing, and the former
+outperforms the latter, we see that smaller quanta are not al-
+ways better: it is important to choose quantum boundaries
+well, as QB-SyncFollow does.
+
+93Hw-DMP Implementation – 1,000-insn quanta
+
+QB Strategy – 10,000-insn quanta†
+
+TM
+
+ShTab
+
+Line
+% Q
+
+Page
+% Q
+
+SyncFollow Sharing
+Avg. % Avg. % Avg. %
+
+SyncSharing
+
+conf. overlap
+
+overlap
+
+Line
+
+Page
+
+conf.
+
+R/W % R/W %
+set
+sz.
+27/9
+14/6
+22/16
+30/6
+47/33
+46/15
+16/20
+27/8
+32/19
+
+set
+sz.
+9/2
+3/1
+3/4
+7/1
+6/4
+5/2
+3/7
+7/1
+5/1
+
+37
+23
+25
+51
+71
+28
+7
+38
+19
+
+64
+39
+26
+69
+77
+34
+13
+50
+45
+
+31
+
+8
+16
+76
+28
+
+5/2
+
+14/1
+3/2
+8/2
+10/2
+
+44
+
+10
+28
+75
+91
+
+28/9
+11/4
+41/8
+36/5
+
+Benchmark
+
+barnes
+cholesky
+
+fft
+fmm
+lu-nc
+
+ocean-c
+
+radix
+vlrend
+water-sp
+
+blacksch
+bodytr
+ﬂuid
+strmcl
+
+SPLASH amean 30/16
+
+47
+31
+19
+33
+14
+5
+31
+41
+40
+
+29
+
+48
+39
+43
+60
+
+Q sync
+brk.
+sz.
+42
+5929
+30
+6972
+9822
+1
+15
+8677
+24
+7616
+49
+5396
+15
+8808
+28
+7506
+7198
+5
+
+7209
+27
+10006 <1
+25
+7979
+98
+871
+9893
+1
+
+Q shr.
+sz.
+brk.
+4658 67
+3189 94
+3640 62
+4465 65
+6822 37
+3398 73
+3346 71
+7005 45
+5617 30
+
+4987 57
+
+9163 10
+7235 31
+2481 95
+1747 79
+
+Q
+sz.
+5288
+6788
+4677
+5615
+6060
+3255
+4837
+6934
+6336
+
+5363
+
+9488
+6519
+832
+2998
+
+sync
+brk.
+54
+35
+49
+50
+42
+73
+57
+38
+20
+
+48
+
+7
+37
+99
+77
+
+46
+38
+39
+29
+16
+46
+42
+39
+37
+
+35
+
+48
+19
+40
+12
+
+ 
+
+o
+
+t
+ 
+
+d
+e
+z
+
+i
+l
+
+a
+m
+r
+o
+n
+
+ 
+
+e
+m
+
+i
+t
+
+n
+u
+r
+ 
+
+-
+
+b
+a
+T
+h
+S
+P
+M
+D
+w
+S
+
+-
+
+n
+o
+
+i
+t
+
+u
+c
+e
+x
+e
+
+ 
+l
+
+e
+
+l
+l
+
+a
+r
+a
+p
+
+i
+
+i
+
+ 
+c
+i
+t
+s
+n
+m
+r
+e
+e
+d
+n
+o
+n
+
+t
+
+8.5
+
+8.0
+
+7.5
+
+7.0
+
+6.5
+
+6.0
+
+5.5
+
+5.0
+
+4.5
+
+4.0
+
+3.5
+
+3.0
+
+2.5
+
+2.0
+
+1.5
+
+1.0
+
+2 threads
+4 threads
+8 threads
+
+36
+
+29/6
+
+PARSEC amean
+64
+Table 1. Characterization of hardware-DMP results. † Same granularity as
+used in Figure 9
+
+5156 54
+
+3880
+
+7228
+
+9/1
+
+30
+
+45
+
+19
+
+51
+
+barnes
+
+fft
+
+fmm
+
+lu-c
+
+radix water-sp SPLASH
+gmean
+
+Figure 14. Runtime of Sw-DMP-ShTab
+relative to nondeterministic execution.
+
+6.4 Sw-DMP: Performance and Scalability
+Figure 14 shows the performance and scalability of Sw-
+DMP-ShTab compared to the parallel baseline. We see two
+classes of trends, slowdowns that increase with the number
+of threads (e.g. barnes) and slowdowns that don’t increase
+much with the number of threads (e.g. fft). For benchmarks
+in the latter class, adding more threads substantially improves
+raw performance. Even for benchmarks in the former class,
+while adding threads does decrease raw performance com-
+pared to the corresponding parallel baseline, the slowdown is
+sublinear in the number of threads. Thus, adding threads still
+results in an improvement in raw performance. In summary,
+this data shows that Sw-DMP-ShTab does not unduly limit
+performance scalability for multithreaded applications.
+
+7. Discussion
+Our evaluation of the various DMP schemes leads to several
+conclusions. At the highest level, the conclusion is that deter-
+ministic execution in a multiprocessor environment is achiev-
+able on future systems with little, if any, performance degra-
+dation. The simplistic Hw-DMP-Serial has a geometric mean
+slowdown of 6.5X on 16 threads. By orchestrating commu-
+nication with Hw-DMP-ShTab, this slowdown reduces to a
+geometric mean of 37% and often less than 15%. By using
+speculation with Hw-DMP-TM, we were able to reduce the
+overhead to a geometric mean of 21% and often less than
+10%. Through the addition of forwarding with Hw-DMP-
+TMFwd, the overhead of deterministic execution is less than
+15% and often less than 8%. Finally, software solutions can
+provide deterministic execution with a performance cost suit-
+able for debugging on current generation hardware, and de-
+pending upon the application, deployment.
+
+Now that we have deﬁned what deterministic shared mem-
+ory multiprocessing is, shown how to build efﬁcient hardware
+support for it, and demonstrated that software solutions can
+be built for current generation hardware, we now discuss sev-
+eral additional points. These are: (1) performance, complex-
+
+ity and energy trade-offs; (2) support for debugging; (3) in-
+teraction with operating system and I/O nondeterminism; and
+(4) making deterministic execution portable for deployment.
+
+Implementation Trade-offs. Our evaluation showed that us-
+ing speculation in the hardware-based implementation pays
+off in terms of performance. However, speculation potentially
+wastes energy, requires complex hardware and has implica-
+tions in system design, since some code, such as I/O and parts
+of an operating system, cannot execute speculatively. Fortu-
+nately, DMP-TM, DMP-ShTab and DMP-Serial can coexist
+in the same system. One easy way to co-exist is to switch
+modes at a deterministic boundary in the program (e.g., the
+edge of a quanta). More interestingly, a DMP system can
+be designed to support multiple modes co-existing simulta-
+neously. This allows a DMP system to use the most conve-
+nient approach depending on what code is running, e.g., using
+speculation (DMP-TM) in user code and avoiding it (DMP-
+ShTab) in kernel code.
+
+DMP systems could also be built in a hybrid hardware-
+software fashion, instead of a purely hardware or software
+implementation. A hybrid DMP-TM system, for example,
+could leverage modest hardware TM support while doing
+quantum building and deterministic ordering more ﬂexibly in
+software with low performance cost. A hybrid DMP-ShTab
+system could efﬁciently implement the sharing table by lever-
+aging modern cache coherence protocols; exposing coher-
+ence state transitions could enable a simple high performance
+hybrid DMP-ShTab implementation in the near future.
+
+Supporting Debugging Instrumentation. In order to enable
+a debugging environment in a DMP system, we need a way of
+allowing the user to instrument code for debugging while pre-
+serving the interleaving of the original execution. To accom-
+plish this, implementations must support a mechanism that
+allows a compiler to mark code as being inserted for instru-
+mentation purposes only; such code will not affect quantum
+building, and thus preserves the original behavior.
+
+94Dealing with nondeterminism from the OS and I/O. There
+are many sources of nondeterminism in today’s systems, as
+we discussed in Section 2.2.1. A DMP system hides most of
+them, allowing many multithreaded programs to run deter-
+ministically. Besides hiding the nondeterminism of the mi-
+croarchitecture, a DMP system also hides the nondetermin-
+ism of OS thread scheduling by using the deterministic token
+to provide low-level deterministic thread scheduling, causing
+threads to run in the same order on every execution. Never-
+theless, challenging sources of nondeterminism remain.
+
+One challenge is that parallel programs can use the operat-
+ing system to communicate between threads. A DMP system
+needs to make that communication deterministic. One way to
+address the problem is to execute OS code deterministically,
+which was discussed earlier in this section. Alternatively, a
+layer between the operating system and the application can
+be utilized to detect communication and synchronization via
+the kernel and provide it within the application itself. This is
+the solution employed by our software implementation.
+
+Another challenge is that many operating system API calls
+allow nondeterministic outcomes. System calls such as read
+may lead to variations in program execution from run to run,
+as their API speciﬁcation itself permits such variation. There
+are two ways to handle nondeterministic API speciﬁcations:
+ignore them — any variation in outcome could also have oc-
+curred to sequential code; or ﬁx them, by providing alterna-
+tive, deterministic APIs. With read, a solution is to always
+return the maximum amount of data requested until EOF.
+
+The ﬁnal, and perhaps most difﬁcult challenge is that the
+real world is simply nondeterministic. Ultimately, programs
+interact with remote systems and users, which are all nonde-
+terministic and might affect thread interleaving. It may ap-
+pear, then, that there is no hope for building a deterministic
+multiprocessor system because of this, but that is not the case.
+When multithreaded code synchronizes, that is an opportu-
+nity to be deterministic from that point on, since threads are
+in a known state. Once the system is deterministic and the
+interaction with the external world is considered part of the
+input, it is much easier to write, debug and deploy reliable
+software. This will likely encourage programmers to insert
+synchronization around I/O, in order to make their applica-
+tions more deterministic, and hence more reliable.
+
+Support for deployment. We contend that deterministic sys-
+tems should not just be used for development, but for deploy-
+ment as well. We believe systems in the ﬁeld should behave
+like systems used for testing. The reason is twofold. First,
+developers can have a higher conﬁdence their programs will
+work correctly once deployed. Second, if the program does
+crash in the ﬁeld, then deterministic execution provides a
+meaningful way to collect and replay crash history data. Sup-
+porting deterministic execution across different physical ma-
+chines places additional constraints on the implementation.
+Quanta must be built the same across all systems. This means
+machine-speciﬁc effects cannot be used to end quanta (e.g.,
+micro-op count, or a full cache-set for bounded TM-based
+
+implementations). Furthermore, passing the deterministic to-
+ken across processors must be the same for all systems. This
+suggests that DMP hardware should provide the core mecha-
+nisms, and leave the quanta building and scheduling control
+up to software.
+
+8. Related Work
+One way to obtain a deterministic parallel program is to write
+it using a deterministic parallel programming model, like
+stream programming languages such as StreamIt [20] and
+implicitly parallel languages such as Jade [17]. In fact, the
+need to improve multiprocessor programmability due to the
+shift to multicore architectures is causing renewed interest in
+deterministic implicitly parallel programming models How-
+ever, several of these models tend to be domain-speciﬁc. For
+generality, our focus is on dealing with nondeterminism in
+arbitrary shared memory parallel programs.
+
+Past work on dealing with nondeterminism in shared
+memory multiprocessors has focused primarily on deter-
+ministically replaying an execution for debugging. The idea
+is to record a log of the ordering of events that happened
+in a parallel execution and later replay the execution based
+on the log. There are several previously proposed software-
+based systems [8, 11, 18] for recording and replaying a mul-
+tithreaded execution. The software-based approaches typi-
+cally suffer from high overheads or limitations on the types
+of events recorded — e.g., synchronization events only,
+which is not enough to reproduce the outcome of races. Sev-
+eral researchers have addressed these limitations and over-
+heads by devising hardware-based record and replay mecha-
+nisms [1, 16, 22]. Hardware based approaches actually record
+memory events at the level of memory operations more efﬁ-
+ciently, allowing more accurate and faster record and replay.
+Most of the follow-up research has been on further reduc-
+ing the log size and performance impact of deterministic re-
+play. Examples of such efforts are Strata [15] and FDR2 [23],
+which exploit redundancy in the memory race log. Very re-
+cent advances are ReRun [7] and DeLorean [14], which aim
+at reducing log size and hardware complexity. ReRun is a
+hardware memory race recording mechanism that records
+periods of the execution without memory communication
+(the same phenomenon leveraged by DMP-ShTab). This new
+strategy requires little hardware state and produces a small
+race log. In DeLorean, instructions are executed as blocks
+(or chunks), and the commit order of blocks of instructions
+is recorded, as opposed to each instruction. In addition, De-
+Lorean uses pre-deﬁned commit ordering (albeit with chunk
+size logging in special cases) to further reduce the memory
+ordering log.
+
+DMP makes memory communication deterministic, there-
+fore it completely eliminates memory communication log-
+ging, and consequently does not need to provide hardware
+to record and replay execution at all — execution will always
+be the same as long as the inputs are the same. Since De-
+Lorean attempts to control nondeterminism to reduce log size
+to a minimum, it is similar in spirit to our work. However,
+
+95DeLorean still has a log and requires speculation, whereas
+DMP-ShTab, for example, has no need for speculation. Fi-
+nally, while a chunk in DeLorean and a quantum in DMP are
+a similar concept, in DeLorean chunks are created blindly,
+whereas in DMP we propose to create quanta more intelli-
+gently to better match application sharing and synchroniza-
+tion characteristics.
+
+Some of the mechanisms used in DMP-TM (and DMP-
+TMFwd) are similar to mechanisms employed in Thread-
+Level Speculation [4, 9, 19] systems, though DMP employs
+them for almost the opposite purpose. These mechanisms are:
+ordered quantum commits in DMP-TM, and the speculative
+value forwarding optimization in DMP-TMFwd. TLS starts
+with a (deterministic) sequential program and then specula-
+tively executes it in parallel while guaranteeing the original
+sequential semantics of the program. DMP-TM does the op-
+posite: it starts with a (nondeterministic) explicitly parallel
+program, effectively serializes (making it deterministic) and
+then uses speculative execution to efﬁciently recover paral-
+lelism while preserving deterministic behavior.
+
+In summary, DMP is not a record and replay system, it
+provides fully deterministic shared memory communication.
+As such, it can be used for debugging because it offers re-
+peatability by default. We argue, however, that deterministic
+execution is useful for more than just debugging: it can be
+deployed as well.
+
+9. Conclusion
+In this paper we made the case for fully deterministic shared
+memory multiprocessing. After quantitatively showing how
+nondeterministic current systems are, we have shown that
+the key requirement to support deterministic execution is de-
+terministic communication via shared memory. Fortunately,
+this requirement still leaves room for efﬁcient implementa-
+tions. We described a range of implementation alternatives,
+in both hardware and software, with varying degrees of com-
+plexity and performance cost. Our simulations show that a
+hardware implementation of a DMP system can have negligi-
+ble performance degradation over nondeterministic systems.
+We also brieﬂy described our compiler-based software-only
+DMP system and show that while the performance impact is
+signiﬁcant, it is quite tolerable for debugging.
+
+While the beneﬁts for debugging are obvious, we suggest
+that parallel programs should always run deterministically.
+Deterministic execution in the ﬁeld has the potential to in-
+crease reliability of parallel code, as the system in the ﬁeld
+would behave similarly to in-house testing environments, and
+to allow a more meaningful collection of crash information.
+In conclusion, we have shown that, perhaps contrary to
+popular belief, a shared memory multiprocessor system can
+execute programs deterministically with little performance
+cost. We believe that deterministic multiprocessor systems
+are a valuable goal, as they, besides yielding several inter-
+esting research questions, abstract away several difﬁculties in
+writing, debugging and deploying parallel code.
+
+Acknowledgments
+We thank the anonymous reviewers for their invaluable com-
+ments. We also thank Karin Strauss, Dan Grossman, Su-
+san Eggers, Martha Kim, Andrew Putnam, Tom Bergan and
+Owen Anderson from the University of Washington for their
+feedback on the manuscript. Finally, we thank Jim Larus and
+Shaz Qadeer from Microsoft Research for very helpful dis-
+cussions.
+References
+[1] D. Bacon and S. Goldstein. Hardware-Assisted Replay of Multipro-
+cessor Programs. In Workshop on Parallel and Distributed Debugging,
+1991.
+
+[2] C. Bienia, S. Kumar, J. Singh, and K. Li. The PARSEC Benchmark
+Suite: Characterization and Architectural Implications. In PACT, 2008.
+[3] S. Gopal, T. N. Vijaykumar, J. E. Smith, and G. S. Sohi. Speculative
+
+Versioning Cache. In HPCA, 1998.
+
+[4] L. Hammond, M. Willey, and K. Olukotun. Data Speculation Support
+
+for a Chip Multiprocessor. In ASPLOS, 1998.
+
+[5] L. Hammond, V. Wong, M. Chen, B. D. Carlstrom, J. D. Davis,
+
+B. Hertzberg, M. K. Prabhu, H. Wijaya, C. Kozyrakis, and K. Olukotun.
+Transactional Memory Coherence and Consistency. In ISCA, 2004.
+
+[6] M. Herlihy and J. E. B. Moss. Transactional Memory: Architectural
+
+Support for Lock-Free Data Structures. In ISCA, 1993.
+
+[7] D. Hower and M. Hill. Rerun: Exploiting Episodes for Lightweight
+
+Memory Race Recording. In ISCA, 2008.
+
+[8] J. Choi and H. Srinivasan. Deterministic Replay of Java Multithreaded
+
+Applications. In SIGMETRICS SPDT, 1998.
+
+[9] V. Krishnan and J. Torrellas. A Chip-Multiprocessor Architecture with
+
+Speculative Multithreading. IEEE TC, 1999.
+
+[10] C. Lattner and V. Adve. LLVM: A Compilation Framework for
+
+Lifelong Program Analysis & Transformation. In CGO, 2004.
+
+[11] T.J. Leblanc and J.M. Mellor-Crummey. Debugging Parallel Programs
+
+with Instant Replay. IEEE TC, April 1987.
+
+[12] E. A. Lee. The problem with threads. IEEE Computer, 2006.
+[13] C. K. Luk, R. Cohn, R. Muth, H. Patil, A. Klauser, G. Lowney,
+S. Wallace, V. Janapa Reddi, and K. Hazelwood. PIN: Building
+Customized Program Analysis Tools with Dynamic Instrumentation.
+In PLDI, 2005.
+
+[14] P. Montesinos, L. Ceze, and J. Torrellas. DeLorean: Recording
+and Deterministically Replaying Shared-Memory Multiprocessor
+Execution Efﬁciently. In ISCA, 2008.
+
+[15] S. Narayanasamy, C. Pereira, and B. Calder. Recording Shared Memory
+
+Dependencies Using Strata. In ASPLOS, 2006.
+
+[16] S. Narayanasamy, G. Pokam, and B. Calder. BugNet: Continuously
+
+Recording Program Execution for Deterministic Replay Debugging. In
+ISCA, 2005.
+
+[17] M. Rinard and M. Lam. The design, implementation, and evaluation of
+
+Jade. ACM TOPLAS, 1988.
+
+[18] M. Ronsee and K. De Bosschere. RecPlay: A Fully Integrated Practical
+
+Record/Replay System. ACM TOCS, 1999.
+
+[19] G. S. Sohi, S. E. Breach, and T. N. Vijayakumar. Multiscalar
+
+Processors. In ISCA, 1995.
+
+[20] W. Thies, M. Karczmarek, and S. Amarasinghe. StreamIt: A Language
+
+for Streaming Applications. In CC, 2002.
+
+[21] S. Woo, M. Ohara, E. Torrie, J. Singh, and A. Gupta. The SPLASH-2
+
+Programs: Characterization and Methodological Considerations. In
+ISCA, 1995.
+
+[22] M. Xu, R. Bodik, and M. Hill. A ”Flight Data Recorder” for Enabling
+
+Full-System Multiprocessor Deterministic Replay. In ISCA, 2003.
+
+[23] M. Xu, M. Hill, and R. Bodik. A Regulated Transitive Reduction
+
+(RTR) for Longer Memory Race Recording. In ASPLOS, 2006.
+
+96

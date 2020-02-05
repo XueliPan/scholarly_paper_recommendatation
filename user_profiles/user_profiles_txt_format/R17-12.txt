@@ -1,0 +1,1436 @@
+Load Balancing on Stateful Clustered Web Servers
+
+G. Teodoro
+
+T. Tavares B. Coutinho W. Meira Jr. D.Guedes
+
+Department of Computer Science
+
+Universidade Federal de Minas Gerais
+Belo Horizonte MG Brazil 31270-010
+
+george,ttavares,coutinho,meira,dorgival
+
+@dcc.ufmg.br
+
+(cid:0)
+
+(cid:1)
+
+Abstract
+
+One of the main challenges to the wide use of the In-
+ternet is the scalability of the servers, that is, their ability
+to handle the increasing demand. Scalability in state-
+ful
+servers, which comprise e-Commerce and other
+transaction-oriented servers, is even more difﬁcult, since it
+is necessary to keep transaction data across requests from
+the same user. One common strategy for achieving scal-
+ability is to employ clustered servers, where the load is
+distributed among the various servers. However, as a con-
+sequence of the workload characteristics and the need of
+maintaining data coherent among the servers that com-
+pose the cluster,
+load imbalance arise among servers,
+reducing the efﬁciency of the server as a whole. In this pa-
+per we propose and evaluate a strategy for load balanc-
+ing in stateful clustered servers. Our strategy is based on
+control theory and allowed signiﬁcant gains over conﬁg-
+urations that do not employ the load balancing strategy,
+reducing the response time in up to 50% and increas-
+ing the throughput in up to 16%.
+
+1. Introduction
+
+The growth of the Internet in the recent past has been
+widely linked to the growth of the World Wide Web
+(WWW). A lot of that growth can be credited to the ex-
+pansion of electronic commerce (e-commerce) services.
+E-commerce is deﬁnitely one of the driving forces be-
+hind the expansion of the network and the increase in the
+number of users and companies that use it on a daily ba-
+sis.
+
+In the WWW in general and in e-commerce sites in par-
+ticular, success is measured by the number of users access-
+ing the site and the ability of the site to satisfy users re-
+quests promptly. That means that a store, to be successful,
+must be able to get the attention of a large number of In-
+ternet users and keep them satisﬁed. The problem is that
+
+increasing success is directly related to increasing number
+of concurrent users and, therefore, increasing demands over
+the company’s server(s). To be able to continue to be a suc-
+cess a popular e-commerce site must be able to accommo-
+date the increasing load gracefully.
+
+Because of that, scalability has become a major concern
+of every e-commerce site in the WWW nowadays. How-
+ever, improving the capacity of an individual server is not
+always effective, given technological limitations related to
+CPU and memory speed, among other factors [15]. Distri-
+bution of the users requests over a group of servers is a
+strategy to achieve scalability that is not limited by indi-
+vidual machine limits. There has been a lot of work in this
+direction for static WWW content, deﬁning different dis-
+tribution techniques and identifying the main performance
+bottlenecks of such systems. A good survey of the work in
+the area of distributed web servers has been compiled by
+Cardellini et al. [4].
+
+One challenge faced by distributed servers, however, is
+that speed-up (the increase in performance due to the in-
+crease in the number of servers) is not linear. The distri-
+bution of requests over a number of servers impose new
+processing demands to guarantee the consistency of infor-
+mation among them. For example, if two clients, access-
+ing different servers, try to purchase a certain product, the
+two servers must guarantee they are not selling the same
+item twice. This extra overhead may grow to a point where
+adding servers may in fact make overall performance even
+worse.
+
+Designing and implementing scalable and efﬁcient dis-
+tributed services is quite a complex task, specially if we
+consider that the architecture of such a system is orga-
+nized in multiple layers of software and servers. Service
+distribution brings in a new dimension to the problem,
+which has not been extensively addressed in the literature
+so far. Most work in the area of performance analysis for
+e-commerce servers has been done in the context of indi-
+vidual servers [1, 5].
+
+Another source of overhead, besides consistency prob-
+
+Proceedings of the 15th Symposium on Computer Architecture and High Performance Computing (SBAC-PAD’03) 
+0-7695-2046-4/03 $17.00 © 2003 IEEE
+
+lems, is the management of the distribution of requests in
+the presence of session state. HTTP is a stateless protocol,
+so each request for a page is independent of all others and
+may be directed to any host in a distributed server cluster.
+On the other hand, in e-commerce sites, the interaction of
+the client with the site creates a certain amount of state in-
+formation: the products added to a shopping cart, the user
+identiﬁcation, for example. In this case request distribution
+must consider that information also, what adds more com-
+plexity to the distributed server. All these characteristics
+may result in load imbalance among the servers are respon-
+sible for handling requests. Devise, implement, and evalu-
+ate load balancing strategies is the subject of this paper. We
+divide the load balancing problem into two sub-problems:
+(1) load migration, and (2) balancing strategies. In order to
+solve the ﬁrst sub-problem we have to deﬁne units of work
+and how they are exchanged among servers. Solutions to
+the second sub-problem demand the design of load balanc-
+ing strategies that also include the deﬁnition of imbalance
+metrics.
+
+This paper proposes and evaluates experimentally a load
+balancing strategy for transaction clustered servers. The
+strategy is evaluated through an actual e-store under real-
+ist workload.
+
+The rest of this paper is organized as follows: Section 2
+introduces the architecture and major components of state-
+ful Web servers, and is followed by a discussion of the is-
+sues faced when balancing the load in such servers in Sec-
+tions 3 and 4. After that, Section 5 discusses a common
+stateful server architecture, which is an e-store. Section 6
+characterizes the workload that is submitted to e-stores and
+Section 7 presents our major results. After that, Section 8
+concludes with some ﬁnal thoughts and suggestions for fu-
+ture work.
+
+2. Stateful Clustered Web Servers
+
+In order to understand the details of an stateful server we
+must understand the relations between the various entities
+involved and the architecture of the server site as a whole.
+In this section we address these issues. Without loss of gen-
+erality, we may discuss the details of stateful servers by ana-
+lyzing a typical architecture: e-commerce servers. There are
+basically three main entities to be considered in e-business
+services: products, clients and sessions.
+
+The ﬁrst entity represents the commercialized products.
+There are basically two types of data about them: static and
+dynamic. Static data comprises information that is not af-
+fected by the services provided by the e-Business server,
+such as the description of a book, or the characteristics of a
+TV. Dynamic data, on the other hand, contains all pieces of
+information that are affected by the operations performed
+
+while providing services, such as the number of books in
+stock, or the address of a buyer.
+
+The second entity represents the customers. Again, the
+server records static and dynamic data. In this case, infor-
+mation such as name and address are static, while other el-
+ements, such as the content of the shopping cart, are dy-
+namic.
+
+The identiﬁcation of static and dynamic elements is cru-
+cial for the distribution of the e-business service. While
+static data can be easily replicated among the elements of
+a server cluster, each dynamic piece of data must be prop-
+erly identiﬁed and any access to it must be properly con-
+trolled to avoid inconsistencies.
+
+The third entity is the relation between the ﬁrst two and
+represents the interaction between customers and products.
+That interaction is usually represented as the user session,
+built by the server in response to user requests. Each session
+combines references to static, as well as dynamic, data of a
+client (or group of clients, in some cases) and some number
+of products.
+
+As we aforementioned, we distinguish three entities and
+also types of data that are usually handled by e-Business
+servers. Product-related data is the ﬁrst type of data. We
+further divide product-related data into two categories: dy-
+namic and static. Dynamic data comprise all information
+that may change as a consequence of performing transac-
+tions, such as inventory. Static data are usually attributes
+of the good or service being marketed, such as description
+and manufacturer. The second type of data is the customer-
+related data, which may be also divided into static and dy-
+namic. Interaction-related data is the last type, being al-
+most always dynamic. Although all data may be stored in
+a database, it is better to maintain replicas, or even the data
+themselves in an application server, in order to improve the
+response time of the server.
+
+Distributing static data may be viewed as a caching prob-
+lem. Each server has a limited amount of storage space and
+managing the overall storage space should take into account
+factors such as inter-server communication costs, reference
+locality, storage costs in the server. Considering those fac-
+tors, there are several caching management strategies that
+may be employed. If storage is cheap, a totally replicated
+cache may reduce access times overall, since all hosts will
+have local copies of the cached data. On the other hand, if
+storage is expensive, mutually exclusive caches will make
+the best use of it, since every cached object will occupy
+space in only one server’s cache. However, such solution
+may have to handle a lot of inter-server communication in
+case requests reach servers which do not hold the copy to
+some required data. Many intermediary solutions are also
+possible, where some level of replication is allowed to han-
+dle very popular elements, or to reduce inter-server commu-
+nication in some cases [16].
+
+Proceedings of the 15th Symposium on Computer Architecture and High Performance Computing (SBAC-PAD’03) 
+0-7695-2046-4/03 $17.00 © 2003 IEEE
+
+Distributing dynamic data is quite more complicated in
+the sense that coherence becomes an issue, that is, if a piece
+of dynamic data is stored in two servers, there must be a way
+to guarantee that either server will be notiﬁed of changes
+performed by the other one. This problem is not novel and
+distributed databases have been working on addressing it ef-
+ﬁciently for some time. However, it is interesting to notice
+that in most e-Business services, most of the workload im-
+posed by customers involves static data[13]. That is due to
+access to information such as product descriptions and im-
+ages, for example. For that kind of data, replicated caches
+certainly improve response times [9].
+
+We may distinguish some essential operations in this
+scenario during the interaction of a client with the server
+site: user requests have to be received and parsed to de-
+termine which session they refer to and which operations
+are needed; session data must be retrieved, as well as cus-
+tomer data, if it is the case, so that operations are performed
+in the right context; if the operation involves some prod-
+ucts (the common case) product data must also be retrieved;
+once all information needed is available the request must be
+processed, which may affect dynamic data; the request re-
+sults must be saved and session state updated; ﬁnally, the re-
+sponse page must be built based on the request results and
+site presentation rules and sent back to the user’s browser
+for presentation. Those operations require different capabil-
+ities to be performed, and may in fact be executed by differ-
+ent processing elements in an e-commerce server.
+
+In the next two sections we discuss how we migrate data
+(and thus the associated load) and how we decide what to
+migrate, which is deﬁned by a load balancing strategy.
+
+3. Load Migration
+
+When it becomes necessary for a cluster to migrate load
+among its machines (for example, in order to improve load
+balancing) that is achieved by moving some of the data be-
+tween two servers, transferring the associated processing
+demands with them. Considering the types of entities repre-
+sented in e-business services the likely candidates are ses-
+sions and products, since they concentrate the dynamic el-
+ements which demand processing. Between them, sessions
+are the best candidates for migration, since they concentrate
+most of the processing due to their representation of the ap-
+plication logic. Accesses to products are usually simple and
+are included in the processing of session requests.
+
+Therefore, this work uses sessions to migrate load from
+one server to another. Using devices like client-aware level-
+7 switches [4], session migration may be done in a way
+transparent to the clients.
+
+In most commercial solutions the servers in the clus-
+ter rely on stable storage (managed by a database server,
+for example) to maintain session data consistent as it mi-
+
+grates among servers. That obviously introduces consider-
+able overhead, since most of a session’s data is not per-
+sistent in nature, being usually limited to the duration of
+the session itself. To reduce this overhead, solutions include
+some caching scheme to take advantage of temporal/spatial
+locality of accesses [10].
+
+In this work we present a solution where session data
+is kept solely in memory, and migration is handled by the
+application itself, avoiding the stable storage and cache
+consistency overheads. We use a central session directory
+to keep track of the assignment of sessions to servers in
+the cluster. The directory communicates with the front-end
+switch and controls it, maintaining a routing table of ses-
+sions and servers. Whenever a new session is identiﬁed by
+the front-end switch, the directory is notiﬁed and assigns it
+to a server. The front-end switch is programmed with the
+appropriate routing association and the assigned server ini-
+tializes the session data upon receipt of the ﬁrst request.
+Following requests are routed to the same server until the
+switch is notiﬁed to behave otherwise by the directory.
+
+When a session must be migrated, the server currently
+processing it (the original server) and the newly assigned
+server (the receiving server) are notiﬁed and the session in-
+formation is transfered between them. The original server
+keeps track of the migration so that any pending requests
+that may be received after the session is moved can be
+re-routed to the receiving server transparently. The receiv-
+ing server instantiates the session-related internal structures
+upon receipt of a migrated session and notiﬁes the direc-
+tory when the operation is completed. The directory records
+the new location of the session and notiﬁes the cluster’s
+front-end to update its tables. Any further communication
+belonging to the migrated session is directed to the receiv-
+ing server, which starts processing requests as soon as the
+transfer of session state is complete.
+
+It should be clear that not all processing is migrated with
+the session. As mentioned before, requests that alter prod-
+uct dynamic data, for example, cause processing that is re-
+lated to the product data entity, besides the session. We
+chose to distributed product information evenly (and stat-
+ically) among all servers. However, as discussed earlier and
+veriﬁed in the experiments discussed later, the load due to
+product manipulation is low compared to other session re-
+lated processing costs, so the vast majority of the load is mi-
+grated with the session.
+
+4. Load Balancing Mechanisms
+
+The problem of load balancing in distributed servers has
+been discussed in the literature, specially considering the in-
+crease in scalability that it may provide [2, 3]. The proposed
+solutions do not consider an integration with data replica-
+tion techniques and service parallelization, however. In this
+
+Proceedings of the 15th Symposium on Computer Architecture and High Performance Computing (SBAC-PAD’03) 
+0-7695-2046-4/03 $17.00 © 2003 IEEE
+
+work we consider all these aspects, making the proposed ap-
+proach more realistic.
+
+As discussed previously, interaction between clients and
+the e-business server is based on sessions, whose duration
+and processing demands cannot be predicted beforehand.
+Since most processing is session-dependent, service distri-
+bution must take sessions into consideration when assign-
+ing requests to servers. As discussed later in Section 6, Ses-
+sions vary widely in terms of number of requests, dura-
+tion and generated load, so a static allocation of sessions to
+servers would lead to serious load imbalance. That means
+that cluster-based dynamic servers must rely on some dy-
+namic load balancing scheme to improve scalability.
+
+Most solutions nowadays rely on “sticky” load balanc-
+ing: connections from a certain client are assigned tem-
+porarily to a server the ﬁrst time they are seen by the clus-
+ter’s front-end switch. (This assignment can be done using
+a hash function based on the connection identiﬁers, such as
+IP addresses and port numbers, for example.) Other pack-
+ets from the same client are routed to the selected server for
+some time (a few minutes). After that time the switch clears
+the entry for that session from its tables and computes a new
+association if a new request arrives for it. Commercial prod-
+ucts like Cisco’s LocalDirector [6] and IBM’s Network Dis-
+patcher [11] are examples of systems offering that solution.
+With sticky load balancing, session migration is always
+present, since periodically the cluster front-end may de-
+cide to route all trafﬁc from a speciﬁc session to a differ-
+ent server. However, the decision of migrating sessions do
+not take into consideration the load due to each session nor
+the cost of migration: what is considered is simply each
+server’s overall load. The reasoning behind this approach
+is that given a large number of sessions, a periodic redistri-
+bution of their data is bound to reduce load imbalance over
+time, although possibly at the cost of some extra migration
+overhead.
+
+Our solution proposes a session-based load balancing
+scheme. It might be implemented by a separate load bal-
+ancer process, but we decided to implement it in the ses-
+sion directory described in Section 3, considering its role in
+the process described below:
+
+1. each server keeps track of how much load is caused by
+each of the sessions assigned to it and periodically (ev-
+ery 10 seconds, in our implementation) reports its total
+load to the session directory;
+
+2. the directory computes a measure of the overall imbal-
+ance in the cluster and what would be an ideal balanced
+load for all servers;
+
+3. the directory computes how much each server deviates
+from that ideal load and matches overloaded servers to
+underloaded ones to facilitate load transfers between
+them; this matching uses a greedy algorithm to try to
+
+minimize the number of exchanges necessary between
+servers;
+
+4. based on the information from the directory, each over-
+loaded server selects from its more demanding ses-
+sions a set that would account for its excess load and
+migrates those sessions to the underloaded server spec-
+iﬁed.
+
+To keep track of load on a per session basis, each server
+keeps track of the ratio between the cpu time for each ses-
+sion and its duration (which has a lower bound of one
+minute, to avoid peaks during the beginning of each ses-
+sion). Total load is computed as the aggregate CPU time of
+all sessions.
+
+The matching of overloaded to underloaded servers is
+not performed just by a direct pairing of instantaneous load
+differences, because that could lead to instabilities [18]. The
+solution is to consider the server cluster as a closed loop
+controller as illustrated in Figure 1. That means that the de-
+veloper will determine the performance levels acceptable
+for the system (in terms of latency/throughput) and the con-
+troller will take care of ﬁnding the right load distribution
+pattern that honors such levels. The behavior of a closed
+loop controller is as follows: the user deﬁnes the expected
+behavior for the system in terms of a measurable quantity
+(the set point, SP) — for example, the maximum accept-
+able latency; the controller measures the actual measured
+value for that variable (the process variable, PV) and com-
+(cid:2) (cid:3) . Given that error, the con-
+putes the error, (cid:0)
+troller must compute an actuation value (controller output,
+CO) to input to the system that should minimize the error
+and bring PV to the value deﬁned for SP.
+
+(cid:1)(cid:2)
+
+(cid:0)
+
+(cid:0)
+
+SP
+
+e
+
+Controller
+
+CO
+
+Target
+
+PV
+
+System
+
+Figure 1. PID controller
+
+This closed loop controller approach is used in control
+theory when the relation between the measurable process
+variable (PV) do not have a clear, straightforward relation
+to the input variable (CO). In this case, the controller in-
+ternal behavior is responsible for adjusting the input dy-
+namically, based on the feedback loop, until the desired
+value is achieved in PV. The traditional form to achieve this
+goal is to implement what is called a Proportional-Integral-
+Derivative (PID) controller [17]. In that case, the controller
+output and the measured error are related by the equation
+
+(cid:4)(cid:5)
+
+(cid:6)
+
+(cid:0)
+
+(cid:6)
+
+(cid:0)(cid:7)(cid:8)(cid:9)
+
+(cid:6)
+
+(cid:10)(cid:11)(cid:12)(cid:13)
+
+(cid:0)
+
+(cid:1)
+
+(cid:1)
+
+(cid:1)
+
+(cid:0)
+
+(cid:1)
+
+(cid:3)
+
+(cid:2)
+
+(cid:0)
+
+(cid:0)
+
+(cid:8)(cid:0)
+
+(cid:8)(cid:9)
+
+Proceedings of the 15th Symposium on Computer Architecture and High Performance Computing (SBAC-PAD’03) 
+0-7695-2046-4/03 $17.00 © 2003 IEEE
+
+deﬁne the weight of the
+The PID constants (cid:0)
+three components of the error and must be deﬁned by a tun-
+ing process for each server.
+
+, and (cid:0)
+
+, (cid:0)
+
+(cid:2)
+
+(cid:0)
+
+(cid:1)
+
+The directory implements a PID controller for each
+server based on the information from all servers about
+their overall load. The controller set point is deﬁned on
+each iteration as the average load computed by the di-
+rectory, and the process variable for each server is the
+actual load reported by that server. Therefore, the con-
+troller error is a measure of how much each server load de-
+viates from the average; that error is fed into the PID
+controller. Since the PID controller tries to cancel the er-
+ror,
+it computes how much load should be transfered
+to/from that server in order to bring it closer to the load av-
+erage.
+
+5. Case Study: e-Store
+
+In this section we discuss a popular stateful server archi-
+tecture: an e-store. Considering the operations performed by
+an e-store and the different types of information that must
+be handled, the structure of a server is usually divided into
+three major components, the WWW server, the transaction
+server and the database [19, 12]. That organization is illus-
+trated in Figure 2.
+
+Requests
+
+Services
+
+Web
+server
+
+Transaction
+
+server
+
+Data
+
+DBMS
+
+Figure 2. E-business server architecture
+
+The WWW server is responsible for the service presenta-
+tion, receiving user requests and parsing them. Once that is
+done, that server must manage all operations. Requests for
+static data are served directly, while requests involving dy-
+namic data are forwarded to the next level, the transaction
+server. It is also the responsibility of the WWW server to
+deliver the page composed by the transaction server as a re-
+sult of a dynamic request.
+
+The transaction server (also known as the application
+server, or virtual store) is the heart of the e-commerce ser-
+vice. It is this component that must implement the logic
+of the business: how to handle client searches for prod-
+ucts, how to present the products, how to complete a sale.
+It must keep track of the user sessions, so it can control the
+shopping cart, and provide site personalization, for exam-
+ple. Once it receives a command for a certain service from
+the WWW server, it must implement the logic of the op-
+eration. That may include accessing the database server to
+complete the request and build the response page, which
+will be handled back to the WWW server.
+
+Most of the information related to the store operation
+must be kept consistent across sessions and in stable stor-
+age to guarantee proper operation over time. That is the re-
+sponsibility of the database management system, the third
+element of the server. It holds product and client informa-
+tion, number of items available and other data. It receives
+commands from the transaction server and returns data as a
+result.
+
+In centralized, custom-built e-business sites the three el-
+ements may be implemented as a monolithic application for
+performance reasons. However, in most cases the service is
+implemented using separate processes for each of the three
+elements. A ﬁrst approach to improve performance by dis-
+tribution in this case is simply to use separate machines for
+each of the three elements. That, although simple to imple-
+ment, has limited gains, given its intrinsically limited na-
+ture. Really scalable solutions must distribute functionali-
+ties over a larger number of machines, which will require
+replicating processing elements and distributing requests
+properly.
+
+In this paper we analyze and propose a solution for the
+load balancing problem in a very common approach em-
+ployed by many servers: replicated caches for static data
+and non-replicated dynamic data. Although restrictive, this
+approach is simple in terms of implementation and does not
+impose severe coherence and management requirements on
+the system. Although replicated caches are very simple to
+implement, since they do not demand cache cooperation
+mechanisms, their efﬁciency tends to be smaller as we in-
+crease the number of distributed servers for a given work-
+load. The decrease in terms of efﬁciency comes as a result
+of the smaller number of requests that a server receives, and
+thus amount of information embedded in the system. As
+a result, we may have a larger number of requests to the
+database, causing an impact on the overall performance of
+the server. On the other hand, not replicating dynamic data
+may result in load imbalance as a consequence of the char-
+acteristics of the workload. The problem arises because the
+session data does not migrate among servers, that is, once a
+given server starts answering requests for a session, it keeps
+doing it until the session ends. This last argument is one of
+the main motivations of this paper.
+
+6. Workload Characterization
+
+In this section we present a workload characterization of
+the behavior of customers while using an e-commerce store.
+Understanding the workload associated with customers is
+important because they allow us to estimate the amount of
+work to be performed by the servers and also the impact that
+the distribution may have on the load on each server.
+
+Our workload is based on 3344 logged sessions compris-
+ing 23965 requests to an actual e-store. The most frequent
+
+Proceedings of the 15th Symposium on Computer Architecture and High Performance Computing (SBAC-PAD’03) 
+0-7695-2046-4/03 $17.00 © 2003 IEEE
+
+Frequency Distribution of Session Size
+
+Think Time Histogram
+
+s
+t
+s
+e
+u
+q
+e
+r
+ 
+f
+
+o
+
+ 
+r
+e
+b
+m
+u
+N
+
+)
+e
+m
+
+i
+t
+ 
+/
+ 
+
+e
+m
+
+i
+t
+ 
+s
+s
+e
+c
+o
+r
+p
+(
+ 
+
+d
+a
+o
+L
+
+ 500
+
+ 450
+
+ 400
+
+ 350
+
+ 300
+
+ 250
+
+ 200
+
+ 150
+
+ 100
+
+ 50
+
+ 0
+
+ 1
+
+ 0.8
+
+ 0.6
+
+ 0.4
+
+ 0.2
+
+ 0
+
+ 0
+
+y
+c
+n
+e
+u
+q
+e
+r
+F
+
+ 10000
+
+ 1000
+
+ 100
+
+ 10
+
+ 1
+
+ 1000
+
+l
+
+y
+t
+i
+r
+a
+u
+p
+o
+P
+
+ 100
+
+ 10
+
+ 1
+
+ 1
+
+ 10
+
+ 20
+
+ 30
+
+ 40
+
+ 50
+
+ 60
+
+ 70
+
+ 10
+
+ 20
+
+ 30
+
+ 40
+
+ 50
+
+ 60
+
+ 70
+
+ 80
+
+ 90
+
+ 100
+
+Session size (requests)
+
+Think time (s)
+
+Figure 3. Frequency distribution of session
+sizes
+
+Figure 5. Think time probability distribution
+
+7. Experimental Results
+
+Search: Term Popularity
+
+Servers Load: All Clients on Server 1 - No Load Balancing
+
+Server 1
+Server 2
+Server 3
+Server 4
+
+ 10
+
+ 1000
+
+ 10000
+
+ 100
+
+Term
+
+Figure 4. Search: term popularity
+
+requests are select (29.8%) and search (29.4%), followed by
+home 23.5%, browse (9.9%), add (7.2%), and pay (0.2%).
+The frequency distribution of requests per session is pre-
+sented in Figure 3.
+
+We also characterized the popularity of the parameters
+for each type of request. Figures 4 presents the frequency
+distribution of parameters for search requests in the work-
+load, which are the query terms. In this case and for all
+types of requests [7] we can clearly see that the distributions
+are very concentrated, that is, very few terms account for
+most of the occurrences, indicating that replication strate-
+gies should perform well.
+
+Another evidence of the high variability of this workload
+is the arrival process of the requests, which may be visual-
+ized by the probability distribution of think times, that is,
+the time between consecutive requests from the same user.
+This probability distribution is shown in Figure 5 where we
+can conﬁrm the high variability.
+
+ 50
+
+ 100
+
+ 150
+
+ 200
+
+ 250
+
+ 300
+
+ 350
+
+Time (Sec)
+
+Figure 6. Servers Load Without Load Balanc-
+ing
+
+7.1. Experimental Setup
+
+In this section we describe the experimental setup we
+
+used to evaluate the proposed load balancing strategy.
+
+We distinguish four integrated components in our trans-
+action server: (1) Web server (Apache 1.3.20 [8]), (2) par-
+allelized application server implemented by the authors, (3)
+database management system (MySQL 3.23.51), and a ses-
+sion directory, described in Section 3.
+
+The workload is submitted by Httperf clients [14] we
+modiﬁed so that they parse server responses and redirect
+the requests associated with a given session, which was mi-
+grated, to a speciﬁc server, being the basis of load migra-
+tion.
+
+Proceedings of the 15th Symposium on Computer Architecture and High Performance Computing (SBAC-PAD’03) 
+0-7695-2046-4/03 $17.00 © 2003 IEEE
+
+Servers Load: All Clients on Server 1 - Load Balancing
+
+Throughtput vs. Workload Imbalance Factor
+
+Server 1
+Server 2
+Server 3
+Server 4
+
+server without balance
+server with balance
+
+ 50
+
+ 100
+
+ 150
+
+ 200
+
+ 250
+
+ 300
+
+ 350
+
+ 0.3
+
+ 0.4
+
+ 0.5
+
+ 0.6
+
+ 0.7
+
+ 0.8
+
+ 0.9
+
+ 1
+
+Time (Sec)
+
+Workload imbalance factor
+
+Figure 7. Servers Load With Load Balancing
+
+Figure 9. Servers Throughput
+
+Cluster without load balancing
+Cluster with load balancing
+
+Response Time vs. Workload Imbalance
+
+Cluster without load balancing
+Cluster with load balancing
+
+)
+c
+e
+s
+/
+s
+t
+s
+e
+u
+q
+e
+r
+(
+ 
+t
+
+u
+p
+h
+g
+u
+o
+r
+h
+T
+
+)
+s
+(
+ 
+
+e
+m
+
+i
+t
+ 
+
+e
+s
+n
+o
+p
+s
+e
+R
+
+ 55
+
+ 50
+
+ 45
+
+ 40
+
+ 35
+
+ 30
+
+ 0.2
+
+0.65
+
+0.6
+
+0.55
+
+0.5
+
+0.45
+
+0.4
+
+0.35
+
+0.3
+
+0.25
+
+0.2
+
+0.15
+
+0.2
+
+)
+e
+m
+
+i
+t
+ 
+/
+ 
+
+e
+m
+
+i
+t
+ 
+s
+s
+e
+c
+o
+r
+p
+(
+ 
+
+d
+a
+o
+L
+
+i
+
+g
+n
+c
+n
+a
+a
+b
+m
+
+l
+
+i
+ 
+
+e
+g
+a
+r
+e
+v
+A
+
+ 1
+
+ 0.8
+
+ 0.6
+
+ 0.4
+
+ 0.2
+
+ 0
+
+ 0
+
+ 1.4
+
+ 1.2
+
+ 1
+
+ 0.8
+
+ 0.6
+
+ 0.4
+
+ 0.2
+
+ 0
+
+ 0
+
+ 50
+
+ 100
+
+ 150
+
+ 200
+
+ 250
+
+ 300
+
+ 350
+
+Time (sec)
+
+Figure 8. Average Imbalance
+
+0.3
+
+0.4
+
+0.5
+
+0.6
+
+0.7
+
+0.8
+
+0.9
+
+1
+
+Workload imbalance factor
+
+Figure 10. Servers Response Time
+
+The results were gathered in a 10-processor cluster of
+PCs running Linux 2.4, being six 750 Mhz AMD Duron
+with 256 Mb RAM and four 1Ghz AMD Athlon with 256
+Mb RAM. The machines communicate through a Fast Eth-
+ernet Switch. The cluster was organized as follows. The four
+Athlon machines run the Httperf clients. One of the Duron
+machines runs the DBMS and other the directory. The re-
+maining four machines run, each, a WWW server and an
+application server. Putting the Web and application server
+together is justiﬁed by the fact that the load on the Web
+server is usually low, since all pages are generated dynami-
+cally by the application server. Further, the placement of the
+two servers on the same machine reduces the communica-
+tion latency between them.
+
+The implementation of
+
+the application servers is
+thread-based and comprises two sets of threads: work-
+ers and slaves. Workers are responsible for answering
+requests submitted by clients. While answering these re-
+quests,
+the worker may query the database server or
+another application server. Slaves are responsible for han-
+
+dling other servers data requests, and may also query the
+database server whenever necessary.
+
+The workloads generated by each Httperf client are
+based on the characterizations shown in Section 6, be-
+ing the sessions equally distributed among the clients. We
+should note that distributing sessions equally among clients
+does not guarantee that the load is the same, since there are
+signiﬁcant variations among the load imposed by each ses-
+sion both in terms of request complexity and in terms of
+number of requests and arrival process. In order to evalu-
+ate the effectiveness of the load balancing strategies pro-
+posed,
+the workloads generated by the Httperf clients
+are deliberately imbalanced, that is, a fraction of the re-
+quests (that is a parameter and may reach 100%) is submit-
+ted to a single server.
+
+7.2. Metrics
+
+In this section we discuss the metrics we used to evalu-
+ate our load balancing strategy. We may divide these met-
+
+Proceedings of the 15th Symposium on Computer Architecture and High Performance Computing (SBAC-PAD’03) 
+0-7695-2046-4/03 $17.00 © 2003 IEEE
+
+rics into two groups: overall performance metrics and load-
+related metrics.
+
+The overall performance metrics are response time and
+throughput. Response time is the server response time for an
+individual request, that is, the time elapsed between the re-
+quest arrives and the corresponding response is sent com-
+pletely. Throughput is the number of requests completed
+within a period of time. Both metrics allow us to evaluate
+how well the server is handling requests.
+
+The load-related metrics quantify the operation condi-
+tions of the server. We also distinguish two metrics: server
+load and average imbalance. The server load metric quan-
+tiﬁes the amount of processing performed per elapsed time
+and quantiﬁes the processor usage. The average imbalance
+is the average of the server imbalances. The server imbal-
+ance is deﬁned as the absolute value of the difference be-
+tween the respective server load and the average server load.
+These metrics allow us to quantify the effectiveness of the
+load balancing strategy.
+
+7.3. Results
+
+In this section we present the experimental results gath-
+ered in the experimental setup described. All tests employed
+four servers and the Httperf clients generated the same
+workload.
+
+Our starting point
+
+is, as mentioned, a conﬁgura-
+tion where the workload is completely imbalanced
+(i.e., one server receives the whole workload) and there
+is no load balancing strategy being employed. Fig-
+ure 6 shows the load of each server during the experi-
+ment that lasted about 350 seconds. We can see clearly
+that the load of server 1 is signiﬁcantly higher than the
+load of the other servers, although the loads of the lat-
+ter are not negligible, and are associated with slave threads
+activity. Further, it is remarkable the impact of the varia-
+tion of the workload on the load, since there are signiﬁcant
+variations (in some cases more than 30%) within few sec-
+onds.
+
+We then performed the same experiment employing the
+load balancing mechanism described in Sections 3 and 4
+and the results are shown in Figure 7. We can see that our
+load balancing strategy was able to divide the load among
+the servers effectively and consistently. Even under load
+peaks, as the peak around the experiment time 220, the strat-
+egy has shown to be robust, handling the burst and mak-
+ing the load equal again. We can conﬁrm this evaluation by
+checking the average imbalance across time for the same ex-
+periment, which is shown in Figure 8. We can see that the
+average imbalance decreases consistently across time, al-
+though workload characteristics result in quite signiﬁcant
+variation.
+
+We then evaluated the effectiveness of load balancing
+strategies as a function of the degree of imbalance imposed
+by the clients, which we call “workload imbalance factor”.
+For four processors, the workload imbalance factor ranges
+from 0.25 to 1, which is the fraction of load that is directed
+to a single server, in our case server 1. For instance, a work-
+load imbalance factor of 0.7 would direct 70% of the ses-
+sions to Server 1, while the remaining servers would re-
+ceive each 10% of the sessions. Figures 9 and 10 show the
+throughput and response time for various workload imbal-
+ance factors. These graphs show again the effectiveness of
+our load balancing strategy. For instance, for a workload
+imbalance factor of 1, the throughput of the conﬁguration
+that employs load balancing is 16% higher and the response
+time is less than half. The gains reduce as the imbalance de-
+creases, till the point that there is no imbalance and the load
+balanced conﬁguration gets slightly worse than the other
+conﬁguration, as a consequence of the load balancing over-
+head.
+
+8. Conclusions and Future Work
+
+In this paper we presented and evaluated a strategy for
+load balancing of stateful clustered servers. This strategy
+is based on migrating user sessions among the servers ac-
+cording to a PID controller, which deﬁnes the sessions that
+should be migrated considering the overall server load and
+the load associated with the sessions. The strategy was val-
+idated using an e-store application and showed that the
+proposed strategy allows signiﬁcant performance improve-
+ments (up to 50% for response time and 16% for through-
+put). We should emphasize the effectiveness of the proposed
+approach even under workloads that present high variabil-
+ity both in terms of user behavior and in terms of request
+load.
+
+We see several future work efforts to be pursued. Evalu-
+ating the proposed solution for larger conﬁgurations is the
+ﬁrst one. Devising new load balancing strategies and im-
+prove its responsiveness is another area of research. We
+also intend to evaluate the problem of power management in
+stateful clustered servers, which would also demand prod-
+uct data migration, since individual servers would be turned
+off.
+
+References
+
+[1] C. Amza, E. Cecchet, A. Chanda, A. Cox, S. Elnikety, R. Gil,
+J. Marguerite, K. Rajamani, and W. Zwaenepoel. Bottleneck
+characterization of dynamic web site benchmarks. In Third
+IBM CAS Conference. IBM, feb 2002.
+
+[2] L. Aversa and A. Bestavros. Load balancing a cluster of web
+servers using distributed packet rewriting. Technical Report
+1999-001, 6, 1999.
+
+Proceedings of the 15th Symposium on Computer Architecture and High Performance Computing (SBAC-PAD’03) 
+0-7695-2046-4/03 $17.00 © 2003 IEEE
+
+[3] A. Bestavros, M. Crovella, J. Liu, and D. Martin. Distributed
+packet rewriting and its application to scalable server archi-
+tectures. In Proceedings of the International Conference on
+Network Protocols, October 1998.
+
+[4] V. Cardellini, E. Casalicchio, M. Colajanni, and P. Yu. The
+state of the art in locally distributed web-server systems.
+ACM Computing Surveys, 34(2):1–49, jun 2002.
+
+[5] E. Cecchet, A. Chanda, S. Elnikety, J. Marguerite, and
+W. Zwaenepoel. A comparison of software architectures for
+e-business applications. Technical Report TR02-389, Rice
+University, jan 2002.
+Systems.
+
+series.
+http://www.cisco.com/warp/public/cc/pd/cxsr/400/index.htm,
+visited on June 6, 2003.
+
+[6] I. Cisco
+
+localdirector
+
+Cisco
+
+[7] B. Coutinho, G. Teodoro, T. Tavares, R. Pinto, W. Meira Jr.,
+and D. Guedes. Assessing the impact of distribution on e-
+business services. In First Seminar on Advanced Research
+in Electronic Business, Rio de Janeiro, RJ, november 2002.
+EBR.
+
+[8] T. A. S. Foundation.
+
+http://www.apache.org/, 1999.
+
+[9] S. Gadde, J. S. Chase, and M. Rabinovich. Web caching
+and content distribution: a view from the interior. Computer
+Communications, 24(2):222–231, 2001.
+
+[10] P. Harkins. Building a large-scale e-commerce site with
+Apache and mod perl. In Proceedings of ApacheCon 2001,
+Santa Clara, CA, April 2001.
+
+[11] G. D. H. Hunt, G. S. Goldszmidt, R. P. King, and R. Mukher-
+jee. Network Dispatcher: a connection router for scalable
+Internet services. Computer Networks and ISDN Systems,
+30(1–7):347–357, Apr. 1998.
+
+[12] D. McDavid. A standard for business architecture descrip-
+
+tion. IBM Systems Journal, 38(1), 1999.
+
+[13] W. Meira Jr., D. Menasc´e, V. Almeida, and R. Fonseca. E-
+representative: a scalability scheme for e-commerce. In Pro-
+ceedings of the Second International Workshop on Advanced
+Issues of E-Commerce and Web-based Information Systems
+(WECWIS’00), pages 168–175, June 2000.
+
+[14] D. Mosberger and T. Jin. httperf: A tool for measuring web
+In First Workshop on Internet Server
+
+server performance.
+Performance, pages 59—67. ACM, June 1998.
+
+[15] E. Nahum, T. Barzilai, and D. D. Kandlur. Performance is-
+sues in www servers. IEEE/ACM Transactions on Network-
+ing (TON), 10(1):2–11, 2002.
+
+[16] G. Pierre, I. Kuz, M. van Steen, and A. S. Tanenbaum. Dif-
+ferentiated strategies for replicating Web documents. In Pro-
+ceedings of the 5th International Web Caching and Content
+Delivery Workshop, 2000.
+
+[17] W. J. Rugh. Linear System Theory. Prentice Hall, second
+
+edition edition, 1996.
+
+[18] E. Sontag. A notion of input to output stability, 1997.
+[19] C. Wrigley. Design criteria for electronic market servers.
+
+Electronic Markets, 7(4), Dec 1997.
+
+Proceedings of the 15th Symposium on Computer Architecture and High Performance Computing (SBAC-PAD’03) 
+0-7695-2046-4/03 $17.00 © 2003 IEEE
+
+

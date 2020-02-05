@@ -1,0 +1,1609 @@
+28th IEEE International Real-Time Systems Symposium
+28th IEEE International Real-Time Systems Symposium
+
+Chronos: Feedback Control of a Real Database System Performance∗
+
+Kyoung-Don Kang and Jisu Oh
+Department of Computer Science
+
+Sang H. Son
+
+Department of Computer Science
+
+State University of New York at Binghamton
+
+{kang,joh}@cs.binghamton.edu
+
+University of Virginia
+son@cs.virginia.edu
+
+Abstract
+
+It is challenging to process transactions in a timely
+fashion using fresh data, e.g., current stock prices,
+since database workloads may considerably vary due to
+dynamic data/resource contention. Further, transac-
+tion timeliness and data freshness requirements may
+compete for system resources. In this paper, we pro-
+pose a novel feedback control model to support the de-
+sired data service delay by managing the size of the
+ready queue, which indicates the amount of the backlog
+in the database. We also propose a new self-adaptive
+update policy to adapt the freshness of cold data in
+a diﬀerentiated manner based on temporal data ac-
+cess and update patterns. Unlike most existing work
+on feedback control of real-time database (RTDB) per-
+formance, we actually implement and evaluate feed-
+back control and database workload adaptation tech-
+niques in a real database testbed modeling stock trades.
+For performance evaluation, we undertake experiments
+in the testbed, which consists of thousands of client
+threads concurrently requesting database services for
+stock quotes, trades, and portfolio updates in a bursty
+manner.
+In these experiments, our database system
+supports the desired response time bound and data
+freshness, while processing a signiﬁcantly larger number
+of transactions in time compared to the tested baselines.
+
+1 Introduction
+
+Real-time databases (RTDBs) aim to process trans-
+actions in a timely manner using fresh temporal data,
+e.g., current stock prices or traﬃc sensor data, rep-
+resenting the real world status. RTDBs can reduce
+the diﬃculty of developing data-intensive real-time ap-
+plications such as stock trading, agile manufacturing,
+
+∗This work was supported,
+
+in part, by NSF grants CNS-
+
+0614771 and CNS-0614886.
+
+and traﬃc control, by supporting the logical and tem-
+poral consistency of data via transactions. Existing
+non-real-time databases are unaware of timing and
+data freshness (i.e., data temporal consistency) require-
+ments, showing poor performance in these applications
+[18, 19].
+
+It is challenging to provide real-time data services,
+since database workloads may dynamically vary due to
+data/resource contention. Also, transaction timeliness
+and data freshness may pose conﬂicting requirements:
+If user transactions are given a higher priority than
+temporal data updates, the transaction timeliness can
+be improved at the cost of the potential freshness re-
+duction [1]. In contrast, the transaction timeliness can
+be reduced, if temporal data updates always have a
+higher priority than user transactions. Feedback con-
+trol has recently been applied to manage RTDB perfor-
+mance in the presence of dynamic workloads [2, 8, 13],
+producing promising initial results. However, the exist-
+ing work on feedback control of RTDB performance is
+based on simulations. Generally, most existing RTDB
+work is based on simulations [19]. Hence, there are
+limitations in modeling real system behaviors. Very
+little prior work such as [1, 9, 14] has evaluated real-
+time data management techniques in a real database
+system.
+
+To address the problem, we have designed and im-
+plemented a soft real-time database testbed, called
+Chronos [7], in which thousands of clients can send
+the database server requests for stock quotes, trades,
+and user portfolio updates. We have found consider-
+able diﬀerences between simulation-based results and
+experimental results in a real database system [7].
+The Chronos server processes data service requests
+from clients, while periodically pulling and updating
+3,000 stock prices from Yahoo! Finance [25]1. Chronos
+
+1We consider a pull model, because free-of-charge stock quote
+services such as Yahoo! Finance [25] do not usually provide push
+services, in which the data source multicasts data to the sub-
+scribers.
+
+1052-8725/07 $25.00 © 2007 IEEE
+1052-8725/07 $25.00 © 2007 IEEE
+DOI 10.1109/RTSS.2007.16
+DOI 10.1109/RTSS.2007.16
+
+267
+267
+
+directly measures the achieved transaction timeliness
+and data freshness unlike existing non-RTDB bench-
+marks such as TPC (Transaction Processing Perfor-
+mance Council) benchmarks [21].
+In this paper, we
+extend Chronos to generate bursty workloads. We also
+develop novel approaches for feedback control of RTDB
+performance and adaptive temporal data updates. We
+implement and evaluate these approaches in the ex-
+tended Chronos testbed. To our knowledge, this work
+is the ﬁrst to design, implement, and evaluate RTDB
+feedback control and adaptive update schemes in a real
+database testbed.
+
+Although most online transactions are not associ-
+ated with individual deadlines, excessive service delays
+may cause many clients to leave [22]. Thus, a database
+needs to control the response time. To support the
+desired service delay bound such as 2s, we develop a
+novel database feedback control model managing the
+size of the ready queue for data service requests. Gen-
+erally, the size of the ready queue increases as the
+load increases. In this case, transaction processing is
+slower than transaction arrivals due to data/resource
+contention inside the database. On the other hand, the
+ready queue size decreases when the database is under-
+utilized. Based on this observation, we model the rela-
+tion between the ready queue length and response time.
+Note that the control model developed in this paper is
+diﬀerent from our previous work [13] in that the feed-
+back control model of [13] aims to support the desired
+CPU utilization, while the feedback control scheme of
+this paper intends to support the desired delay bound
+for real-time data services.
+
+In addition, we develop a new self-adaptive up-
+date policy [8] to eﬃciently manage the freshness of
+temporal data. Our approach balances update and
+user transaction workloads considering user data needs
+and the current service delay by diﬀerentiating the
+freshness among temporal data. This approach can
+signiﬁcantly improve the transaction timeliness un-
+der overload compared to the existing approach for
+adaptive temporal data updates [8] and the other ap-
+proaches [19], in which a temporal data in a RTDB is
+updated at a ﬁxed rate regardless of data access pat-
+terns. When the system is severely overloaded, admis-
+sion control is also applied to incoming transactions.
+We apply admission control after freshness adaptation
+to improve the success ratio, i.e., the fraction of the
+submitted transactions ﬁnishing within the desired de-
+lay bound for data services.
+
+For performance evaluation, we create thousands of
+client threads, which send data service requests to the
+Chronos server. As soon as a client thread ﬁnishes
+sending a data service request to the database server,
+
+it starts to measure the response time, while waiting
+for the transaction or query processing result from the
+server. After receiving the service, a client waits for an
+inter-request time that exists between most trade or
+quote requests. In this paper, we ﬁx the number of the
+client threads and shorten the range of the inter-request
+time in the middle of an experiment to randomly create
+additional workloads ranging between 25% and 100%.
+In the stock market, this may happen especially when
+the market status is volatile. Given the bursty work-
+loads, our approach can support the desired response
+time and data freshness, while signiﬁcantly improv-
+ing the success ratio compared to the tested baselines.
+Overall, our performance analysis shows the feasibility
+of feedback control in a real database system.
+
+The remainder of this paper is organized as follows.
+Section 2 describes the Chronos architecture and feed-
+back control system. It also gives a detailed description
+of the adaptive update policy. Our control modeling
+and tuning process is discussed in Section 3. Perfor-
+mance evaluation results are presented in Section 4.
+Related work is discussed in Section 5. Finally, Sec-
+tion 6 concludes the paper and discusses future work.
+
+2 RTDB Architecture and Feedback
+
+Control Overview
+
+In this section, the architecture of Chronos and feed-
+back control procedure are discussed. Moreover, fresh-
+ness adaptation and admission control in the feedback
+loop are discussed. Figure 1 shows the architecture of
+
+Feedback
+Control
+
+δ
+q
+
+Response Time Error
+
+Perf.
+
+Monitor
+
+Block Queue
+
+Blocked
+
+...
+
+Transaction
+
+Handler
+
+TS
+
+CC
+
+Committed
+
+User
+Transactions
+
+AC
+
+Update
+
+Streams
+
+Dispatched
+
+Q1
+
+...
+
+Q0
+
+...
+
+Ready Queue
+
+AU
+
+Aborted/Restarted
+
+Figure 1. Chronos Architecture
+
+Chronos that consists of the feedback control, adap-
+tive update (AU), admission control (AC), transaction
+scheduling (TS), concurrency control (CC), and per-
+formance monitoring components. The performance
+monitor computes the response time error, i.e., the dif-
+ference between the desired response time bound and
+
+268268
+
+Transactions
+
+Queries, Updates
+
+D
+
+s
+
+e(k)
+
++ _
+
+Response
+
+Time 
+
+Controller
+
+δ q (k)
+
+Chronos
+
+d(k)
+
+Figure 2. Response Time Control Loop
+
+the response time measured at every sampling period.
+Based on the error, the feedback controller computes
+the required ready queue size adjustment δq.
+If the
+measured delay is longer than the desired bound, the
+ready queue size needs to be reduced and vice versa.
+According to δq, the AU and AC modules adjust work-
+loads, if necessary, to meet the desired delay bound.
+One can conﬁgure Chronos to selectively turn on or oﬀ
+these components for performance evaluation purposes.
+To support the data freshness, periodic temporal
+data updates scheduled in Q0 in Figure 1 receive a
+higher priority than user transactions in Q1, similar
+to [18, 8, 24]. Transactions in each queue is sched-
+uled in a FCFS manner. As a user transaction arrives,
+it is required to ﬁnish by the time equal to the sum
+of the current time and relative deadline, i.e., the de-
+sired service delay such as 2s. For concurrency control,
+we currently apply 2PL (two phase locking) provided
+by Berkeley DB [3] underlying Chronos. A transaction
+can be blocked, aborted, and restarted due to data con-
+ﬂicts. Once blocked, it waits in the block queue for the
+conﬂicting transaction(s) to ﬁnish. It is reinserted into
+the ready queue when the data conﬂict is resolved.
+
+FCFS and 2PL are the most commonly used
+scheduling and concurrency control algorithms in com-
+mercial databases. The theme of this work is to show
+that feedback control can support the desired delay
+bound in a database system without special instrumen-
+tation for real-time transaction processing. We take
+this approach, since most existing commercial database
+systems do not support real-time scheduling or concur-
+rency control. Neither do popular operating systems,
+e.g., Linux, underlying database systems. Ideally, how-
+ever, one can replace FCFS and 2PL with real-time
+transaction scheduling and concurrency control mech-
+anisms and provide them as a library to address both
+performance and deployment issues. A through inves-
+tigation is reserved for future work.
+
+2.1 Feedback Control Procedure
+
+that the database system started to operate at time
+0 and let SP represent the sampling period, e.g.,
+1s, for feedback control. The kth (k ≥ 1) sampling
+period is the time interval [(k − 1)SP , kSP ] and the
+kth sampling instant is equal to kSP in the time
+domain.
+The performance monitor computes the
+error e(k) = Ds − d(k) where d(k) is the average
+response time of the transactions and queries ﬁnished
+in [(k − 1)SP , kSP ]. At the kth sampling instant,
+the controller computes δq(k), which is the queue size
+adjustment needed to support Ds in [kSP , (k + 1)SP ],
+based on e(k). A description of the overall feedback
+control procedure follows.
+
+Step 1. At the kth sampling instant, the delay con-
+troller computes the service delay error e(k) = Ds −
+d(k).
+Step 2. After computing e(k), the controller computes
+the control signal δq(k) based on e(k). δq(k) will be ap-
+plied to existing transactions and transactions arriving
+at the RTDB in the time period [kSP , (k + 1)SP ].
+Under overload, δq(k) < 0 and Chronos needs to re-
+duce the backlog due to data/resource contention. If
+δq(k) ≥ 0, jump to Step 4. A detailed discussion of the
+controller design is given in Section 3.
+Step 3. If δq(k) < 0, apply the adaptive update policy
+to a subset of cold data whose update frequencies are
+higher than their access frequencies. As a result, the
+period p[i] of a cold data item i can be increased to
+the new period p[i]new. Accordingly, increase δq(k) by
+(p[i]new − p[i])/p[i], since the update period extension
+has a similar eﬀect to reducing the service request rate.
+Repeat this step until δq(k) ≥ 0 or no more freshness
+adaptation is possible. A detailed discussion of the
+adaptive update policy is given in Section 2.2.
+Step 4. The new ready queue size to support Ds
+in the time interval [kSP , (k + 1)SP ]
+q(k) =
+q(k − 1) + δq(k). Thus, the ready queue size will de-
+crease when δq(k) < 0 and vice versa. We apply the
+anti-windup technique [23] to bound the queue size be-
+tween 0 and the max qsize deﬁned by the database
+system; that is, if q(k) < 0 we set q(k) = 0. Also, we
+make q(k) = max qsize if q(k) > max qsize. Chronos
+applies admission control to transactions arriving in
+[kSP , (k + 1)SP ]. Hence, incoming transactions will
+be dropped upon their arrivals, if the queue length is
+already equal to or larger than q(k) due to the backlog.
+
+is:
+
+2.2 Freshness Adaptation
+
+Our feedback controller shown in Figure 2 aims to
+support the desired response time bound Ds. Suppose
+
+Under overload, update workloads can be reduced
+based on the notion of ﬂexible validity intervals [8] to
+gracefully relax absolute validity intervals [18] designed
+
+269269
+
+to maintain the temporal consistency of data. If data
+di’s absolute validity interval is avi[i], its update period
+p[i] = 0.5avi[i] to support the freshness of di [18]. For
+cost-eﬀective temporal data updates, the access update
+ratio AU R[i] is computed for each temporal data di
+based on the update frequency, i.e., 1/p[i], and access
+frequency [8]:
+
+AU R[i] =
+
+Access F requency[i]
+U pdate F requency[i]
+
+(1)
+
+di is hot if AU R[i] ≥ 1; otherwise, it is cold.
+
+In this paper, we develop a novel self-adaptive fresh-
+ness management policy activated by temporal data
+update and access patterns as well as the system sta-
+tus. Our adaptive update policy can converge to the
+balance where AU R[i] = 1 for an arbitrary temporal
+data di in the database; that is, di is updated just as
+often as it is accessed. By achieving the balance, tem-
+poral data updates are optimized by naturally diﬀer-
+entiating the freshness of temporal data according to
+user transaction needs. If a data is frequently accessed,
+it will be updated frequently and vice versa. Also, this
+approach is not speciﬁc to a single application but ap-
+plicable to general real-time data services. A detailed
+description of the adaptive update policy follows.
+
+Under overload, we increase the update period of a
+
+cold data di:
+
+p[i]new = min
+
+, Pmax
+
+(2)
+
+(cid:1)
+
+p[i]
+
+AU R[i]
+
+(cid:2)
+
+where Pmax is the update period relaxation bound that
+can be determined by an administrator of an applica-
+tion such as stock trading. As AU R[i] < 1 for cold
+data di, its update period will increase to p[i]/AU R[i]
+as long as p[i]/AU R[i] ≤ Pmax according to Eq 2. We
+consider Pmax, since an application administrator may
+want the update period of cold data di to be below
+Pmax to avoid that the update period of di increases
+with no bound when it is rarely accessed. This ap-
+proach can quickly react to time-varying freshness re-
+quirements, for example, when previously cold stock
+items become popular due to market status changes. In
+Eq 2, we take the minimum between p[i]/AU R[i] and
+Pmax to ensure that p[i]new ≤ Pmax. In this paper, we
+set Pmax = 5s to ensure that every stock price is up-
+dated at least every 5s. After the update period of di
+increases, Chronos adjusts the f vi (ﬂexible validity in-
+terval) for di: f vi[i]new = 2p[i]new where f vi[i] = avi[i]
+initially. Further, avi[i] ≤ f vi[i]new ≤ 2Pmax. Sim-
+ilarly, when the system is underutilized the freshness
+can be upgraded for hot data. In this paper, we only
+evaluate the freshness degradation, since we mainly
+consider overload conditions.
+In the future, we will
+
+analyze the performance impact of freshness upgrades
+too.
+
+By increasing the update period under overload, one
+can reduce potential data/resource contention between
+temporal data updates and user transactions too, expe-
+diting overload management. This phenomenon is ob-
+served in our performance evaluation in Section 4. To
+degrade the freshness under overload, Chronos needs to
+linearly search the ﬁrst cold data item in the database
+and increase its update period according to Eq 2. Thus,
+the worst case time complexity is O(N ) where N is the
+number of the temporal data in the database.
+
+Our approach contrasts to the previous work [8] in
+which data are sorted in descending order of AU R and
+the update period of the cold data with the lowest AU R
+is increased ﬁrst by a ﬁxed, systemwide amount. This
+is repeated to the next lowest AU R data and so on.
+Hence, the time complexity of the approach proposed
+in [8] is O(N logN ) for sorting AU R values. Further,
+freshness degradation is not diﬀerentiated considering
+update and access patterns.
+
+In this paper, we consider an example RTDB
+QoS speciﬁcation QoS-SPEC = {Ds = 2s, Do =
+2.5s, Dt = 100s, Pmax = 5s} that can be speciﬁed by
+an administrator of a real-time data service applica-
+tion such as e-commerce. According to the QoS-SPEC,
+the service delay needs to be smaller than or equal to
+Ds = 2s. An overshoot, if any, is the transient re-
+sponse time longer than Ds. It is desired that Do is
+smaller than or equal to 2.5s. Supporting Do ≤ 2.5s
+is challenging in a database, potentially involving se-
+vere data and resource contention. The settling time
+Dt is the time taken for Chronos to handle an over-
+shoot, if any, and decrease the delay back to Ds. In
+this paper, the settling time Dt is desired to be shorter
+than or equal to 100s. In general, an overshoot and
+settling time have trade-oﬀ relations [15]. In this pa-
+per, we aim to support a small overshoot. If an over-
+shoot is small, a relatively long settling time can be
+acceptable. In Section 4, we show Chronos can closely
+support this stringent QoS speciﬁcation given bursty
+workloads. In the future, we will also consider other
+QoS speciﬁcations to further evaluate the performance
+of our database QoS management scheme consisted of
+feedback control, adaptive updates, and admission con-
+trol.
+
+3 RTDB Modeling and System Identi-
+
+ﬁcation
+
+In this section, we take a systematic approach to
+designing and tuning the data service delay controller.
+Due to the systematic modeling and tuning described
+
+270270
+
+in this section, we can meet QoS-SPEC via feedback
+control. Section 3.1 discusses our open-loop database
+model via the relation between the ready queue size
+and service delay.
+In Section 3.2, system identiﬁca-
+tion (SYSID) techniques [15, 6] are applied to derive
+the model parameters. Using the SYSID results, the
+closed-loop transfer function is derived in Section 3.3.
+Using the closed-loop transfer function, the controller
+is tuned via the Root Locus method [15] to support
+the desired average and transient service delay speci-
+ﬁed in QoS-SPEC, while supporting the stability of the
+closed-loop system.
+
+3.1 Queue Length vs. Response Time
+
+In this paper, we derive a RTDB model in the dis-
+crete time domain using the ARX (Auto Regressive
+eXternal) model [15, 6], which is widely used to iden-
+tify computational system dynamics [6, 10, 11]. Specif-
+ically, we model the relationship between the data ser-
+vice delay d(k) and the delay d(k − i) and queue size
+q(k − i) measured in the kth and previous sampling
+periods:
+
+d(k) =
+
+{aid(k − i) + biq(k − i)}
+
+(3)
+
+n(cid:3)
+
+i=1
+
+where n(≥ 1) is the system order determining the size
+of the historical system dynamics data used for SYSID.
+The unknown model parameters ai’s and bi’s in Eq 3
+can be derived via system identiﬁcation [15, 6].
+
+3.2 System Identiﬁcation
+
+The objective of our SYSID is to minimize the sum
+of the squared errors for the data service delay predic-
+tion based on the ready queue size. For SYSID, 2,400
+client threads concurrently send data service requests
+to Chronos for one hour. Each client sends a service
+request and waits for the response from Chronos. After
+receiving the transaction or query processing result, it
+waits for an inter-request time. The inter-request time
+is randomly selected in a range [1s, 3s]. Note that this
+is a large operating range: If every client has a 3s inter-
+request time, the clients submit 800 tps (transactions
+per second) in total. They submit 2,400 tps if all of
+them have a 1s inter-request time. In this way, we can
+model high performance real-time data services dealing
+with widely varying workloads. Our control modeling
+and tuning are valid in this operating range. Beyond
+the operating range, a feedback controller may or may
+not support the desired performance [15, 6]. Analyzing
+the robustness of our feedback controller for workloads
+outside the operating range is reserved for future work.
+
+For SYSID, no feedback control, admission control,
+or freshness adaptation is applied. Thus, Chronos ac-
+cepts all incoming data service requests and updates
+each temporal data at the highest frequency. Specif-
+ically, each stock price is updated at every 0.5s for
+SYSID, which is equal to 6,000 stock price updates per
+second in total. The least square estimator predicts the
+response time at every 10s based on the queue length
+vs. response time statistics data observed in the SYSID
+window whose size is determined by the system order
+deﬁned in Eq 3. In 10s, approximately 8, 000 − 24, 000
+transactions arrive at the database. By using a large
+number of data for SYSID, we aim to moderate the
+stochastic nature of a database as recommended in [6].
+We have performed SYSID for the ﬁrst order to
+fourth order system models. To analyze the accuracy
+of the SYSID results, we use the root mean square er-
+ror (RMSE), which is a common accuracy metric for
+SYSID [15, 6]. Unfortunately, in our one hour SYSID,
+i=1 e2(i)/360 > 5s for the ﬁrst or-
+the RM SE =
+der to fourth order system models. The large RMSEs
+are unacceptable, since the desired delay bound is 2s in
+QoS-SPEC. The large prediction errors are mainly due
+to the wide operating range expressed by the range of
+the inter-request time as described before.
+
+(cid:5)360
+
+(cid:4)
+
+Since a large number of clients with varying inter-
+request times are prevalent in transaction processing,
+we consider an alternative approach for more accurate
+SYSID. Speciﬁcally, we use the square root values of
+the performance data, similar to [5]. The correspond-
+ing RM SE = 0.66s for the second order model, which
+is nearly an order of magnitude better than the RMSE
+values of the previous SYSID results using the raw
+queue size and response time values. Another accuracy
+metric R2 = 1 − variance(response time prediction error)
+=
+0.79. Usually, a model with R2 ≥ 0.8 is considered
+acceptable [6]. Considering the RM SE and R2, the
+SYSID results using the square root values of the ready
+queue size and response time can be considered accept-
+able.
+
+variance(actual response time)
+
+We rejected the ﬁrst order model due to its poor
+RM SE and R2 values. The third and fourth order
+models can only improve the RM SE and R2 by ap-
+proximately 0.02 compared to the second order model.
+Thus, we choose the second order model due to the
+relatively low complexity. The derived second order
+model is:
+
+d(k) = 0.507d(k − 1) − 0.089d(k − 2) +
+0.115q(k − 1) + 0.009q(k − 2)
+
+(4)
+
+where d(k) is the delay predicted to be observed in the
+kth SYSID period based on the actual delay and queue
+
+271271
+
+(5)
+
+(6)
+
+length values measured in the (k − 1)th and (k − 2)th
+SYSID periods.
+
+3.3 Data Service Delay Controller
+
+To design the response time controller, we derive the
+transfer function of the open-loop Chronos database
+by taking the z-transform [15, 6] of Eq 4 to represent
+the relationship between the ready queue length and
+service delay in an algebraic manner:
+
+D(z) = 0.507z−1D(z) − 0.089z−2D(z) +
+0.115z−1Q(z) + 0.009z−2Q(z)
+
+where D(z) is the z-transform of d(k) andQ (z) is the
+z-transform of q(k) in Eq 4. After some algebraic ma-
+nipulation, we get the following transfer function:
+
+G(z) =
+
+D(z)
+Q(z)
+
+=
+
+0.115z + 0.009
+
+z2 − 0.507z + 0.089
+
+Given the transfer function in Eq 6, we design the
+data service delay controller using a PI (proportional
+and integral) controller. We select a PI controller, since
+a P controller by itself cannot remove the steady state
+error [15, 6]. An I controller can eliminate the non-zero
+steady-state error when combined with a P controller
+[15, 6]. We do not use a derivative controller, because
+it is sensitive to noise [15, 6] and real-time data ser-
+vice workloads potentially involve bursty transaction
+arrivals and data conﬂicts. An eﬃcient PI control law
+used by our response time controller to compute the
+control signal q(k) at the kth sampling instant is:
+
+q(k) = q(k − 1) + KP [(KI + 1)e(k) − e(k − 1)]
+
+(7)
+
+where the error e(k) = Ds − d(k) at the kth sampling
+period as shown in Figure 2. Given that, δq(k) =
+q(k) − q(k − 1) is the queue length adjustment needed
+to support the desired response time Ds in [kSP ,
+(k + 1)SP ]. The transfer function of a PI controller
+can be obtained by taking the z-transform of Eq 7 to
+describe the relation between the controller input e(k)
+and the controller output δq(k):
+
+C(z) =
+
+α(z − β)
+
+z − 1
+
+(8)
+
+where α = KP (KI + 1) and β = 1/(KI + 1). We
+need to carefully choose KP and KI to support the
+desired average and transient performance speciﬁed in
+QoS-SPEC.
+
+To tune KP and KI, we need to derive the closed-
+loop transfer function. One can derive the closed
+loop transfer function using the transfer functions of
+
+the controller and the controlled system such as the
+database [15, 6]. Given the Chronos transfer function
+G(z) (Eq 6) and PI controller transfer function C(z)
+(Eq 8), the closed loop transfer function F(z) can be
+obtained in a standard way [15, 6]:
+
+F(z) =
+
+C(z)G(z)
+
+1 + C(z)G(z)
+
+(9)
+
+In this paper, we set the sampling period SP = 1s,
+because several hundreds to thousands of transactions
+per second arrive at Chronos in our experiments. Thus,
+Chronos has to quickly react to support the desired
+response time bound. Given F(z) and SP = 1s, via
+the Root Locus method in MATLAB [15], we locate
+the closed-loop poles−the roots of the denominator in
+Eq 9−inside the unit circle to support the stability of
+the closed loop system, while supporting Ds, Do, and
+Dt of QoS-SPEC. The selected closed loop poles are
+0.496 and 0.282±0.354i. The corresponding KP = 1.29
+and KI = 2.01.
+
+4 Performance Evaluation
+
+In this section, we evaluate our approach and several
+baselines to see whether they can support QoS-SPEC
+described in Section 2. We describe experimental en-
+vironments and settings followed by the average and
+transient performance results.
+
+A Chronos server runs in a Dell laptop with the 1.66
+GHz dual core CPU and 1 GB memory. Clients run in
+two Dell desktop PCs. One PC has the 3 GHz CPU and
+2GB memory, while the other one has the same CPU
+and 4 GB memory. Every machine runs Linux with
+the 2.6.15 kernel. The clients and server are connected
+via a 100 Mbps Ethernet switch and they communicate
+using the TCP protocol. Each client machine runs 900
+client threads. Therefore, 1800 client threads continu-
+ously send service requests to the Chronos server. For
+60% of time, a client thread issues a query about stock
+prices, because a large fraction of requests can be stock
+quotes in stock trading. For the other 40% of time, a
+client uniformly requests a portfolio update, purchase,
+or sale transaction at a time. A transaction accesses
+between 50 and 100 data. Initially, each temporal data,
+i.e., stock price, is updated at every 0.5s.
+
+One experiment runs for 15 minutes. To generate
+bursty workloads, we vary the load described in Sec-
+tion 3.2 as follows. At the beginning of an experi-
+ment, the inter-request time is uniformly distributed
+in [2.5s, 3s]. Thus, approximately 600 − 720 trans-
+actions per second arrive at the Chronos server. At 5
+minutes, the range of the inter-request time is suddenly
+reduced to [1.5s, 2s] to model bursty workload changes.
+
+272272
+
+Table 1. Tested Approaches
+
+Open
+AC
+FC-C
+FC-CU Feedback Control AC + AUP
+
+Pure Berkeley DB
+Ad-hoc Admission Control
+Feedback Control AC
+
+Hence, 900 − 1, 200 transactions per second arrive at
+the database server. As a result, the workload ran-
+domly increases by 25% − 100% at 5 minutes and it is
+maintained until the end of an experiment at 15 min-
+utes. An alternative approach for generating bursty
+workloads is to increase the number of client threads,
+while using a ﬁxed range of inter-request time. In this
+paper, we choose to change the inter-request time, be-
+cause it has less overhead than creating a larger num-
+ber of client threads on the ﬂy. As a result, it can give
+more immediate impacts to the workload applied to the
+database server.
+
+For performance comparisons, we consider the four
+approaches shown in Table 1. Open is the basic Berke-
+ley DB [3] without any special performance control fa-
+cility. Thus, it represents a state-of-the-art database
+system. Under overload, AC applies admission control
+to incoming transactions in proportion to the response
+time error. FC-C applies admission control to incom-
+ing transactions according to the control signal com-
+puted in our feedback loop. However, it does not apply
+adaptive temporal data updates. FC-CU applies both
+adaptive temporal data updates and admission control
+according to the control signal computed in our feed-
+back loop. Except Open, the tested approaches close
+the connection with a client thread after sending a busy
+message to the client thread, if the TCP connection es-
+tablishment itself takes longer than Ds. This approach
+is reasonable, because it is impossible to support Ds
+in this case. Five experimental runs are performed for
+each tested approach with diﬀerent seeds for uniform
+random number generation. In this section, the average
+of 5 runs is presented with 90% conﬁdence intervals.
+
+4.1 Average Performance
+
+The average response time for each approach is
+shown in Figure 3. Open’s average response time is
+4.02 ± 0.53s. The average response time of AC is
+3.56 ± 0.83s. FC-C and FC-CU achieve 3.22 ± 0.87s
+and 1.26 ± 0.42s, respectively. From these results, we
+observe that only FC-CU can support the desired re-
+sponse time bound Ds = 2s speciﬁed in QoS-SPEC.
+By accepting all incoming transactions (and queries),
+Open becomes overloaded, failing to support Ds. AC
+
+i
+
+)
+c
+e
+s
+(
+ 
+e
+m
+T
+ 
+e
+s
+n
+o
+p
+s
+e
+R
+ 
+e
+g
+a
+r
+e
+v
+A
+
+ 5
+
+ 4
+
+ 3
+
+ 2
+
+ 1
+
+ 0
+
+ Open      AC     FC-C     FC-CU 
+
+Figure 3. Average Response Time
+
+shows the better response time than Open. Via sys-
+tematic feedback control, FC-C provides a shorter re-
+sponse time than AC and Open; however, it cannot
+support Ds. From this, we observe that admission
+control by itself is insuﬃcient for managing database
+overloads, involving not only physical resource but also
+data contention.
+In FC-CU, adaptive temporal data
+updates can reduce data/resource contention between
+user transactions and stock price updates, resulting in
+more eﬀective overload management as discussed be-
+fore. The cost of the adaptive update policy in FC-CU
+is the freshness reduction. In average, 60% − 84% of
+the update periods are extended to 1s − 4.3s in our
+experiments, while the remaining stock price data are
+updated at every 0.5s. Thus, Pmax = 5s in QoS-SPEC
+is supported.
+
+Timely
+Total
+
+s
+n
+o
+
+i
+t
+c
+a
+s
+n
+a
+r
+T
+
+ 
+f
+
+o
+
+ 
+r
+e
+b
+m
+u
+N
+
+ 1
+
+ 0.8
+
+ 0.6
+
+ 0.4
+
+ 0.2
+
+ 0
+
+  Open      AC     FC-C     FC-CU
+
+Figure 4. Normalized Number of the Commit-
+ted Transactions and Queries
+
+As shown in Figure 4, FC-CU processes the largest
+number of transactions among the tested approaches.
+It has processed more than 434,000 transactions in 15
+minutes. Out of the committed transactions, more
+than 366,000 transactions are processed within Ds.
+Thus, in FC-CU, approximately 84% of the committed
+
+273273
+
+ 0
+
+ 100
+
+ 200
+
+ 300
+
+ 400
+
+ 500
+
+ 600
+
+ 700
+
+ 800
+
+ 900
+
+(a) Open
+
+Time (sec)
+
+(b) AC
+
+ 400
+ 500
+Time (sec)
+
+(c) FC-C
+
+transactions ﬁnish within the desired delay bound. Fig-
+ure 4 shows the total number of the committed trans-
+actions and the number of timely transactions ﬁnishing
+within Ds normalized to the corresponding numbers for
+FC-CU. In the ﬁgure, FC-CU signiﬁcantly outperforms
+Open, AC, and FC-C. AC processes fewer transactions
+in time than Open does. FC-C’s performance is close
+to Open, but much worse than FC-CU’s. From these
+results, we observe that admission control is insuﬃcient
+for overload management in Chronos as discussed be-
+fore. Ad hoc admission control is even less eﬀective.
+We have observed that it admits either too many or
+two few transactions, showing oscillating performance.
+
+(a) Transient Response Time
+
+)
+c
+e
+s
+(
+ 
+
+i
+
+ 
+
+e
+m
+T
+e
+s
+n
+o
+p
+s
+e
+R
+
+i
+
+)
+c
+e
+s
+(
+ 
+e
+m
+T
+e
+s
+n
+o
+p
+s
+e
+R
+
+ 
+
+i
+
+)
+c
+e
+s
+(
+ 
+e
+m
+T
+ 
+e
+s
+n
+o
+p
+s
+e
+R
+
+ 30
+ 25
+ 20
+ 15
+ 10
+ 5
+ 0
+
+ 30
+ 25
+ 20
+ 15
+ 10
+ 5
+ 0
+
+ 30
+ 25
+ 20
+ 15
+ 10
+ 5
+ 0
+
+4.2 Transient Performance
+
+ 0
+
+ 100
+
+ 200
+
+ 300
+
+ 600
+
+ 700
+
+ 800
+
+ 900
+
+i
+
+)
+c
+e
+s
+(
+ 
+e
+m
+T
+ 
+e
+s
+n
+o
+p
+s
+e
+R
+
+)
+s
+p
+t
+t
+(
+ 
+o
+i
+t
+a
+R
+ 
+s
+s
+e
+c
+c
+u
+S
+
+i
+
+e
+z
+S
+ 
+e
+u
+e
+u
+Q
+
+ 25
+
+ 20
+
+ 15
+
+ 10
+
+ 5
+
+ 0
+
+ 600
+ 500
+ 400
+ 300
+ 200
+ 100
+ 0
+
+ 200
+
+ 150
+
+ 100
+
+ 50
+
+ 0
+
+ 0
+
+ 100
+
+ 200
+
+ 300
+
+ 400
+
+ 500
+
+ 600
+
+ 700
+
+ 800
+
+ 900
+
+Time (sec)
+
+(b) Transient Success Ratio
+
+ 0
+
+ 100
+
+ 200
+
+ 300
+
+ 600
+
+ 700
+
+ 800
+
+ 900
+
+ 400
+ 500
+Time (sec)
+
+Figure 6. Transient Response Time of the
+Baselines
+
+ 0
+
+ 100
+
+ 200
+
+ 300
+
+ 600
+
+ 700
+
+ 800
+
+ 900
+
+ 400
+ 500
+Time (sec)
+
+(c) Transient Queue Size
+
+ 0
+
+ 100
+
+ 200
+
+ 300
+
+ 600
+
+ 700
+
+ 800
+
+ 900
+
+ 400
+ 500
+Time (sec)
+
+Figure 5. Transient Performance of FC-CU
+
+In this subsection, we present the transient perfor-
+mance of FC-CU and the tested baselines. Figure 5(a)
+and Figure 6 show the transient response time of the
+tested approaches, which is measured at every 1s sam-
+pling period. FC-CU substantially outperforms the
+baselines in terms of the transient response time as
+shown in the ﬁgures. The response time overshoot of
+Open is 55.32s and its transient response time is over
+15s for more than half of the experiment as shown in
+Figure 6(a). AC and FC-C in Figures 6(b) and 6(c)
+
+274274
+
+considerably reduce the transient response time com-
+pared to Open, but they frequently violate the desired
+delay bound by large amounts.
+
+At the beginning in Figure 5(a), the response time
+is high mainly due to database initialization overhead
+involving a lot of disk accesses and data structure ini-
+tialization. From 170s, however, its transient response
+time is below 2s, i.e., the horizontal bar in Figure 5(a),
+for most of the time. There are two relatively large
+overshoots in the time period between 600s − 700s, but
+these overshoots decay in less than three sampling pe-
+riods, satisfying Dt ≤ 100s in QoS-SPEC.
+
+Figure 5(b) shows FC-CU’s transient success ratio
+measured by the number of timely transactions per sec-
+ond (ttps), which denotes the number of transactions
+ﬁnishing within Ds at every second. Also, the transient
+ready queue length of FC-CU is plotted in Figure 5(c).
+In Figure 5(b), the success ratio is relatively low during
+the database initialization. As a result, the ready queue
+builds up, increasing the transient response time at the
+beginning as shown in Figures 5(b) and 5(c). Note
+that this may not be a serious problem, since a real
+stock trading database may choose to not accept ser-
+vice requests during the initialization phase. Further,
+
+the initialization takes less than 3 minutes in Chronos
+as shown in Figure 5(a). After the initialization, FC-
+CU achieves the generally increasing success ratio until
+200s, while processing the backlog accumulated during
+the initialization as shown in Figure 5(b). In the ﬁg-
+ure, its success ratio ranges between 370 ttps − 563
+ttps in [170s, 900s]. The tested baselines achieve much
+lower success ratios compared to FC-CU due to widely
+oscillating transient response time shown in Figure 6.
+The maximum transient success ratio of Open is 332
+ttps. AC’s maximum success ratio is only 202 ttps,
+while FC-C’s maximum success ratio is 290 ttps. Note
+that FC-CU’s maximum success ratio is over 560 ttps
+as described before.
+
+As shown in Figure 5(c), FC-CU maintains the
+queue size in a steady manner except the initialization
+period. The maximum queue size from the beginning
+to 108s is 149 data service requests as shown in the
+ﬁgure. It ranges between 26 − 58 requests during the
+time period of [109s, 300s]. Note that the queue is
+not empty, since the feedback control signal is posi-
+tive to accept more requests during this time interval
+where the response time is shorter than the desired 2s
+bound. After that, the queue length ranges between
+49 − 71 requests. The queue size has been increased
+at 300s, since the inter-request time is considerably
+reduced at 300s in our experiments. From this, we
+can observe that our feedback controller can eﬀectively
+manage the queue size to support the desired delay
+bound. In summary, FC-CU signiﬁcantly enhances the
+average and transient data service performance com-
+pared to the baselines by applying feedback control and
+eﬃcient workload adaptation techniques.
+
+5 Related Work
+
+Most RTDB work is based on simulations [19]. Very
+little prior work on real-time data management [1, 9,
+14, 7] has actually been implemented and evaluated in
+real database systems. However, no RTDB testbed is
+publicly available. As a result, it is hard to perform
+RTDB research in a real database system. To address
+this problem, we have developed Chronos [7], which is
+signiﬁcantly extended in this paper as discussed before.
+Conceptually, our work is closest to the recent work
+on feedback control in RTDBs, including [2, 8, 13], aim-
+ing to support the speciﬁed CPU utilization, deadline
+miss ratio, or data and timeliness imprecision in RT-
+DBs. In this paper, we develop a new control model
+to support the desired response time for real-time data
+service requests. Our work is also diﬀerent from the ex-
+isting work in that our work is implemented and eval-
+uated in a real database system.
+
+In this paper, we propose a new temporal data up-
+date policy, which can eﬃciently manage the fresh-
+ness in a self-adaptive manner diﬀerent from our pre-
+vious work [8]. Adelberg et. al. [1] observe that there
+is a trade-oﬀ between transaction timeliness and data
+freshness. The data imprecision and similarity concept
+[2, 4] can be applied to reduce update workloads under
+overload. When a certain data value is changed by less
+than the speciﬁed threshold, the corresponding update
+can be dropped under overload. Those approaches are
+complementary to our approach. RTDB performance
+could be further improved, if our adaptive update pol-
+icy is augmented by the data similarity or imprecision
+concept. This is reserved for future work.
+
+UNIT [17] and QUTS [16] propose adaptive query
+and update scheduling algorithms to optimize the user
+preference and proﬁt, respectively. However, they do
+not aim to support the delay bound critical for real-
+time data services. Schroeder et. al. [20] determine, via
+queuing and control theoretic techniques, an appropri-
+ate number of transactions allowed to concurrently ex-
+ecute in a database system. However, their work aims
+to support neither the desired response time bound nor
+the data freshness essential for real-time data services.
+It lacks a formal discussion of controller design and
+stability analysis too.
+
+Feedback control has been applied to manage the
+performance of various systems such as a web server
+and real-time middleware [10, 12, 11]. These ap-
+proaches, however, may not be directly applicable to
+RTDBs, because they do not consider RTDB-speciﬁc
+issues such as the data freshness.
+
+6 Conclusions and Future Work
+
+As database workloads may considerably vary due
+to dynamic data/resource contention, it is challenging
+for a RTDB to process transactions in a timely man-
+ner using fresh data, e.g., current stock prices or traﬃc
+data. Also, transaction timeliness and data freshness
+requirements may compete for system resources.
+In
+this paper, we propose a novel feedback control model
+to support the desired data service delay by managing
+the amount of the backlog in the database. We also
+propose a new adaptive update policy to adapt the
+freshness of cold data in an eﬃcient way based on tem-
+poral data access and update patterns. Unlike most ex-
+isting work on feedback control of RTDB performance,
+we actually implement and evaluate feedback control
+and database workload adaptation techniques in a real
+database testbed. In our stock trading testbed exper-
+iments, our feedback control system supports the de-
+sired response time bound and data freshness, while
+
+275275
+
+the 13th IEEE Real-Time and Embedded Technology
+and Applications Symposium, 2007.
+
+[14] C.-S. Peng, K.-J. Lin, and C. Boettcher. Real-Time
+Database Benchmark Design for Avionics Systems.
+In the First International Workshop on Real-Time
+Databases: Issues and Applications, 1996.
+
+[15] C. L. Phillips and H. T. Nagle. Digital Control System
+Analysis and Design (3rd edition). Prentice Hall, 1995.
+[16] H. Qu and A. Labrinidis. Preference-Aware Query
+and Update Scheduling in Web-databases. In the 23rd
+International Conference on Data Engineering, 2007.
+[17] H. Qu, A. Labrinidis, and D. Mosse. UNIT: User-
+centric Transaction Management in Web-Database
+In the 22nd International Conference on
+Systems.
+Data Engineering, 2006.
+
+[18] K. Ramamritham. Real-Time Databases.
+
+Interna-
+tional Journal of Distributed and Parallel Databases,
+1(2), 1993.
+
+[19] K. Ramamritham, S. H. Son, and L. C. Dipippo. Real-
+Time Databases and Data Services. In Real-Time Sys-
+tems, volume 28, Nov.-Dec. 2004.
+
+[20] B. Schroeder, M. Harchol-Balter, A.
+
+Iyengar,
+E. Nahum, and A. Wierman. How to Determine a
+Good Multi-Programming Level for External Schedul-
+ing. In Proceedings of the 22nd International Confer-
+ence on Data Engineering, page 60, 2006.
+performance
+
+[21] Transaction
+
+processing
+
+council.
+
+http://www.tpc.org/.
+
+[22] U. Vallamsetty, K. Kant, and P. Mohapatra. Char-
+acterization of E-Commerce Traﬃc. Electronic Com-
+merce Research, 3(1-2), 2003.
+
+[23] D. Vrancic. Design of Anti-Windup and Bumpless
+Transfer Protection. PhD thesis, University of Ljubl-
+jana, Slovenia, 1997.
+
+[24] M. Xiong, K. Ramamritham, J. A. Stankovic,
+D. Towsley, and R. Sivasankaran.
+Scheduling
+Transactions with Temporal Constraints: Exploit-
+IEEE Transactions on Knowl-
+ing Data Semantics.
+edge and Data Engineering, 14(5):1155–1166, Septem-
+ber/October 2002.
+
+[25] Yahoo! Finance. http://ﬁnance.yahoo.com/.
+
+processing a signiﬁcantly larger number of transactions
+in time compared to the tested baselines. Thus, in this
+paper, we show the feasibility of feedback control of a
+real database system. In the future, we will continue to
+enhance feedback control, data service quality adapta-
+tion schemes, transaction scheduling, and concurrency
+control schemes.
+
+References
+
+[1] B. Adelberg, H. Garcia-Molina, and B. Kao. Applying
+Update Streams in a Soft Real-Time Database System.
+In ACM SIGMOD, 1995.
+
+[2] M. Amirijoo, J. Hansson, and S. H. Son. Speciﬁcation
+and Management of QoS in Real-Time Databases Sup-
+porting Imprecise Computations. IEEE Transactions
+on Computers, 55(3):304–319, 2006.
+
+[3] Oracle Berkeley DB Product Family, High Per-
+formance, Embeddable Database Engines. Avail-
+able at http://www.oracle.com/database/berkeley-
+db/index.html.
+
+[4] D. Chen and A. Mok. SRDE-Application of Data Sim-
+ilarity to Process Control. In the 20th IEEE Real-Time
+Systems Symposium, 1999.
+
+[5] N. R. Draper and H. Smith. Applied Regression Anal-
+
+ysis. Wiley, 1968.
+
+[6] J. L. Hellerstein, Y. Diao, S. Parekh, and D. M.
+Tilbury. Feedback Control of Computing Systems. A
+John Wiley and Sons, Inc., Publication, 2004.
+
+[7] K. D. Kang, P. H. Sin, J. Oh, and S. H. Son. A Real-
+Time Database Testbed and Performance Evaluation.
+In the 13th IEEE International Conference on Embed-
+ded and Real-Time Computing Systems and Applica-
+tions, 2007.
+
+[8] K. D. Kang, S. H. Son, and J. A. Stankovic. Manag-
+ing Deadline Miss Ratio and Sensor Data Freshness in
+Real-Time Databases. IEEE Transactions on Knowl-
+edge and Data Engineering, 16(10):1200–1216, 2004.
+
+[9] S. Kim, S. H. Son, and J. A. Stankovic. Performance
+Evaluation on a Real-Time Database. In IEEE Real-
+Time Technology and Applications Symposium, 2002.
+[10] C. Lu, T. F. Abdelzaher, J. A. Stankovic, and S. H.
+Son. A Feedback Control Approach for Guaranteeing
+Relative Delays in Web Servers. In Proceedings of the
+Seventh Real-Time Technology and Applications Sym-
+posium, page 51, 2001.
+
+[11] C. Lu, X. Wang, and C. Gill. Feedback Control Real-
+Time Scheduling in ORB Middleware. In Proceedings
+of the The 9th IEEE Real-Time and Embedded Tech-
+nology and Applications Symposium, page 37, 2003.
+
+[12] Y. Lu, T. F. Abdelzaher, C. Lu, L. Sha, and X. Liu.
+Feedback Control with Queueing-Theoretic Prediction
+for Relative Delay Guarantees in Web Servers. In the
+9th IEEE Real-Time and Embedded Technology and
+Applications Symposium, 2006.
+
+[13] J. Oh and K. D. Kang. An Approach for Real-Time
+Database Modeling and Performance Management. In
+
+276276
+
+

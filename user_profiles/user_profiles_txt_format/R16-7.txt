@@ -1,0 +1,2445 @@
+Voltage Emergency Prediction:
+
+Using Signatures to Reduce Operating Margins
+
+Vijay Janapa Reddi, Meeta S. Gupta, Glenn Holloway, Gu-Yeon Wei, Michael D. Smith, David Brooks
+
+{vj, meeta, holloway, guyeon, smith, dbrooks}@eecs.harvard.edu
+
+Harvard University
+
+Abstract
+
+Inductive noise forces microprocessor designers to sacri-
+ﬁce performance in order to ensure correct and reliable op-
+eration of their designs. The possibility of wide ﬂuctuations
+in supply voltage means that timing margins throughout
+the processor must be set pessimistically to protect against
+worst-case droops and surges. While sensor-based reactive
+schemes have been proposed to deal with voltage noise, in-
+herent sensor delays limit their effectiveness. Instead, this
+paper describes a voltage emergency predictor that learns
+the signatures of voltage emergencies (the combinations of
+control ﬂow and microarchitectural events leading up to
+them) and uses these signatures to prevent recurrence of the
+corresponding emergencies. In simulations of a represen-
+tative superscalar microprocessor in which ﬂuctuations be-
+yond 4% of nominal voltage are treated as emergencies (an
+aggressive conﬁguration), these signatures can pinpoint the
+likelihood of an emergency some 16 cycles ahead of time
+with 90% accuracy. This lead time allows machines to oper-
+ate with much tighter voltage margins (4% instead of 13%)
+and up to 13.5% higher performance, which closely ap-
+proaches the 14.2% performance improvement possible with
+an ideal oracle-based predictor.
+
+1. Introduction
+The power ceiling in modern microprocessors presents a
+major challenge to continued performance scaling. Power-
+reduction techniques such as clock gating, when aggres-
+sively applied to constrain power consumption, can lead
+to large current swings in the microprocessor. When cou-
+pled with the non-zero impedance characteristics of power-
+delivery subsystem, these current swings can cause the volt-
+age to ﬂuctuate beyond safe operating margins. Such events,
+called voltage emergencies, have traditionally been dealt
+with by allocating sufﬁciently large timing margins. Un-
+fortunately, on-chip voltage ﬂuctuations and the margins
+they require are getting worse. A recent paper analyz-
+ing emergency-prone activity of the POWER6 microproces-
+sor [12] shows that required timing margins translate to op-
+erating voltage margins of nearly 20% of the nominal supply
+voltage (∼200mV for a nominal voltage of 1.1V). Such con-
+servative operating voltage margins ensure robust operation
+of the system, but can severely degrade performance due
+
+978-1-4244-2932-5/08/$25.00 ©2008 IEEE
+
+18
+
+to the lower operating frequencies. To reduce the gap be-
+tween nominal and worst-case operating voltages, this paper
+proposes a voltage emergency predictor that identiﬁes when
+emergencies are imminent and prevents their occurrence.
+
+A voltage emergency predictor anticipates voltage emer-
+gencies using voltage emergency signatures and throttles
+machine execution to prevent them. An emergency signa-
+ture is an interleaved sequence of control-ﬂow events and
+microarchitectural events leading up to an emergency. A
+voltage emergency signature is captured when an emergency
+ﬁrst occurs by taking a snapshot of relevant event history and
+storing it in the predictor. A built-in checkpoint-recovery
+mechanism then rolls the machine back to a known correct
+state and resumes execution. Subsequent occurrences of the
+same emergency signature cause the predictor to throttle ex-
+ecution and prevent the impending emergency. By doing so,
+the predictor enables aggressive timing margins in order to
+maximize performance.
+
+The signature-based predictor outperforms previously
+proposed architecture-centric techniques [6, 13, 22, 23] that
+rely on voltage sensors to detect and react to emergencies
+via throttling. In these prior schemes, emergencies are de-
+tected by using a voltage sensor to monitor the supply volt-
+age for speciﬁc soft threshold crossings, which indicate volt-
+age margin violations are possible. Whenever the supply
+voltage falls below this threshold, the machine throttles ex-
+ecution in pursuit of emergency prevention. Unfortunately,
+these schemes cannot always guarantee correctness without
+incurring large performance penalties. Aggressively setting
+the soft threshold close to the operating margin limits time
+available to throttle and successfully prevent an emergency.
+Alternatively, setting the threshold too conservatively leads
+to unnecessary throttling that degrades performance. Not ev-
+ery conservative soft threshold crossing eventually crosses
+the lower operating voltage margin. Our predictor instead
+recognizes and tracks patterns of emergency-prone activity
+to proactively throttle execution well before an emergency
+can occur. Our results show high prediction accuracy is pos-
+sible, which translates to performance enhancements by re-
+ducing otherwise conservative margins.
+
+An additional beneﬁt is that our voltage emergency pre-
+dictor does not require ﬁne tuning based on speciﬁcs of the
+microarchitecture nor the power delivery subsystem, as is
+the case with reactive sensor-based schemes. The current
+
+%(cid:23)(cid:13)(cid:27)(cid:20)(cid:20)(cid:11)(cid:13)(cid:22)(cid:11)# (cid:28)&(cid:11)(cid:13)’(cid:22)(cid:9)(cid:27)(cid:23)
+(cid:8)"(cid:20)(cid:27)(cid:22)(cid:22)(cid:15)(cid:11)# (cid:28)&(cid:11)(cid:13)’(cid:22)(cid:9)(cid:27)(cid:23)
+
+(cid:30)(cid:17)(cid:7)(cid:21)(cid:14)(cid:14)(cid:4)(cid:7)(cid:16)(cid:4)(cid:28) (cid:31) (cid:4)(cid:7)!(cid:16)(cid:2)(cid:21)(cid:17)
+(cid:0)(cid:27)(cid:14)(cid:21)(cid:16)(cid:16)(cid:9)(cid:4)(cid:28) (cid:31) (cid:4)(cid:7)!(cid:16)(cid:2)(cid:21)(cid:17)
+
+ (cid:11)(cid:23)(cid:16)(cid:27)(cid:20) (cid:11)(cid:23)(cid:21)$(cid:15)(cid:11)(cid:16) (cid:22)"(cid:20)(cid:27)(cid:22)(cid:22)(cid:15)(cid:9)(cid:23)(cid:24)
+
+(cid:25)(cid:4)(cid:17)(cid:10)(cid:21)(cid:14) (cid:4)(cid:17)(cid:15)(cid:29)(cid:9)(cid:4)(cid:10) (cid:16)(cid:27)(cid:14)(cid:21)(cid:16)(cid:16)(cid:9)(cid:2)(cid:17)(cid:18)
+
+Actuator
+
+Throttle
+
+CPU
+
+Monitor
+
+Current / Voltage
+
+Soft Threshold 
+
+Sensor
+
+On / Off
+
+(cid:11)
+(cid:24)
+(cid:21)
+(cid:22)
+(cid:15)
+(cid:27)
+(cid:26)
+
+(cid:9)
+
+(cid:23)
+(cid:24)
+(cid:20)
+(cid:21)
+(cid:25)
+(cid:24)
+(cid:23)
+(cid:9)
+(cid:22)
+(cid:21)
+(cid:20)
+(cid:11)
+(cid:19)
+(cid:18)
+
+(cid:29)(cid:27)(cid:10)(cid:9)(cid:23)(cid:21)(cid:15) (cid:26)(cid:27)(cid:15)(cid:22)(cid:21)(cid:24)(cid:11)
+
+(cid:30)(cid:24)(cid:24)(cid:20)(cid:11)(cid:16)(cid:16)(cid:9)(cid:31)(cid:11)
+ (cid:27)!(cid:22) (cid:8)"(cid:20)(cid:11)(cid:16)"(cid:27)(cid:15)#
+
+(cid:4)
+(cid:18)
+(cid:15)
+(cid:16)
+(cid:9)
+(cid:21)
+(cid:20)
+
+(cid:2)
+
+(cid:17)
+(cid:18)
+(cid:14)
+(cid:15)
+(cid:19)
+(cid:18)
+(cid:17)
+(cid:2)
+(cid:16)
+(cid:15)
+(cid:14)
+(cid:4)
+(cid:13)
+(cid:12)
+
+(a)
+
+(b)
+
+(cid:28)(cid:10)(cid:11)(cid:20)(cid:24)(cid:11)(cid:23)(cid:13)(cid:9)(cid:11)(cid:16)
+
+(cid:4)
+
+(cid:3)
+
+(cid:2)
+
+(cid:6)
+
+(cid:0)(cid:4)
+(cid:8)(cid:9)(cid:10)(cid:11) (cid:12)(cid:13)(cid:14)(cid:13)(cid:15)(cid:11)(cid:16)(cid:17)
+
+(cid:5)
+
+(cid:0)(cid:3)
+
+(cid:0)(cid:2)
+
+(cid:22)(cid:21)(cid:3)(cid:2)(cid:17)(cid:15)(cid:9) (cid:20)(cid:21)(cid:9)(cid:16)(cid:15)(cid:18)(cid:4)
+
+(cid:23)(cid:21)(cid:17)(cid:10)(cid:4)(cid:14)(cid:24)(cid:15)(cid:16)(cid:2)(cid:24)(cid:4)
+(cid:25)(cid:21)(cid:26)(cid:16) (cid:0)(cid:27)(cid:14)(cid:4)(cid:10)(cid:27)(cid:21)(cid:9)(cid:28)
+
+(cid:0)(cid:2)(cid:3)(cid:4) (cid:6)(cid:7)(cid:8)(cid:7)(cid:9)(cid:4)(cid:10)(cid:11)
+
+(c)
+
+Figure 1: Sensor-based throttling. (a) A feedback loop is intended to detect and prevent emergencies. (b) Aggressive soft thresholds allow too little time to
+prevent emergencies. (c) Conservative soft thresholds trigger unnecessary throttling.
+
+and voltage activity of a microprocessor are products of
+machine utilization that are speciﬁc to the workload’s dy-
+namic demands. Capturing that activity in the form of volt-
+age emergency signatures allows the predictor to dynami-
+cally adapt to the emergency-prone behavior patterns result-
+ing from the processor’s interactions with the power delivery
+subsystem without having to be preconﬁgured to reﬂect the
+characteristics of either.
+
+Some researchers have also proposed to use checkpoint-
+recovery alone to handle voltage emergencies. However,
+the coarse-grained checkpointing intervals of traditional
+checkpoint-recovery schemes (between 100 and 1000 cy-
+cles) translate to unacceptable performance penalties. Gupta
+et al. [9] have proposed a low-overhead implicit checkpoint-
+ing scheme to handle voltage emergencies by buffering com-
+mits until it is conﬁrmed that no voltage emergencies have
+occurred while the buffered sequence was in ﬂight. While
+shown to be effective, implicit checkpointing is specialized
+and requires modiﬁcations to traditional microarchitectural
+structures. Since coarse-grained checkpoint-recovery is al-
+ready available in existing production systems [1, 26] to
+serve multiple purposes [15, 16, 19, 25, 27, 29], we also rely
+on it as a fail-safe mechanism during predictor training.
+
+In summary, the contributions of this paper are:
+
+• Voltage emergency prediction. Recognizing that ac-
+tivity leading to voltage emergencies is a consequence
+of program control ﬂow and microarchitectural events,
+we show that voltage emergencies are predictable with
+over 90% accuracy by exploiting program behavior and
+locality.
+
+• Signature-based voltage emergency reduction.
+
+A
+voltage emergency predictor
+relies on traditional
+checkpoint-recovery to capture voltage emergency sig-
+natures and prevents emergencies via throttling. Its per-
+formance comes to within 5% of an oracle-based throt-
+tling scheme.
+
+• Efﬁcient predictor implementation. A Bloom ﬁlter-
+based voltage emergency predictor implementation is
+shown to achieve 11.1% improvement in performance,
+approaching the 14.2% possible with an oracle-based
+throttling scheme.
+
+The remainder of the paper is organized as follows: Sec-
+tion 2 reviews the limitations of sensor-based schemes for
+handling voltage emergencies. Section 3 then shows how
+program control ﬂow and microarchitectural events can be
+used to predict voltage emergencies. Section 4 describes the
+experimental framework we use to evaluate predictor accu-
+racy in Section 5. Finally, Section 6 compares the perfor-
+mance of the predictor to other schemes and describes im-
+plementation tradeoffs.
+
+2. Limits of Sensor-Based Approaches
+Given the direct impact of voltage on circuit delay, intermit-
+tent voltage droops, past a lower operating margin, can slow
+down logic delay paths and lead to timing violations. Volt-
+age spikes that exceed an upper margin can cause long-term
+reliability issues. Hence, modern designs impose conserva-
+tive operating voltage margins to avoid these voltage emer-
+gencies and guarantee correct operation in the microproces-
+sor. However, large margins translate to inefﬁcient energy
+consumption and lower performance. This section reviews
+sensor-based techniques that react to and mitigate on-chip
+voltage emergencies.
+
+A typical sensor-based proposal uses a tight feedback
+loop like that shown in Figure 1(a). The loop includes a sen-
+sor that tries to detect impending emergencies and a throt-
+tling actuator that tries to avoid them. The sensor relies on a
+soft current or voltage threshold as a “canary”. Crossing that
+threshold means that voltage is approaching its lower mar-
+gin, so the actuator turns on throttling until the crisis is past.
+Proposed throttling schemes range from frequency throt-
+tling, to pipeline freezing/ﬁring, to issue ramping, and alter-
+ing the number of accessible memory ports [6, 13, 22, 23].
+The behavior of the feedback loop is determined by two
+parameters, the setting of the soft threshold level and the
+delays around the feedback loop. Unfortunately, choosing
+those parameters to accommodate reduced operating mar-
+gins is thwarted by correctness failures and/or performance
+penalties.
+Correctness failures. Figure 1(b) illustrates the use of a
+soft threshold to throttle execution and prevent an emer-
+gency.
+The graph shows voltage waveforms with and
+without sensor-based throttling (Throttled Execution and
+
+19
+
+(cid:0)(cid:2)
+
+(cid:3)(cid:2)
+
+(cid:4)(cid:2)
+
+(cid:5)(cid:2)
+
+(cid:2)
+
+(cid:20)
+
+(cid:10)
+(cid:14)
+(cid:19)
+(cid:9)
+(cid:14)
+(cid:18)
+(cid:13)
+(cid:14)
+(cid:17)
+(cid:16)
+
+(cid:15)
+(cid:14)
+(cid:10)
+(cid:10)
+(cid:14)
+(cid:13)
+(cid:12)
+(cid:12)
+(cid:11)
+(cid:10)
+(cid:9)
+(cid:8)
+(cid:6)
+
+(cid:0)(cid:2)
+
+(cid:3)(cid:2)
+
+(cid:4)(cid:2)
+
+(cid:5)(cid:2)
+
+(cid:2)
+
+(cid:11)
+
+(cid:16)
+(cid:12)
+(cid:10)
+(cid:16)
+(cid:16)
+(cid:15)
+(cid:14)
+(cid:13)
+
+(cid:11)
+
+(cid:10)
+(cid:12)
+(cid:10)
+(cid:9)
+(cid:8)
+(cid:6)
+
+(cid:2)
+
+(cid:21)
+
+(cid:5)
+
+(cid:22)
+
+(cid:4)
+
+(cid:23)
+
+(cid:5)(cid:6)
+
+(cid:5)(cid:17)(cid:18)(cid:6)
+
+(cid:19)(cid:6)
+
+(cid:24)(cid:14)(cid:14)(cid:15)(cid:25)(cid:26)(cid:19)(cid:27) (cid:28)(cid:29)(cid:29)(cid:12) (cid:30)(cid:14)(cid:31)(cid:26)  !(cid:19) (cid:19)(cid:31)(cid:14)(cid:10)"
+
+(cid:20)(cid:9)(cid:10)(cid:16)(cid:15)(cid:14) (cid:21)(cid:22)(cid:14)(cid:9)(cid:16)(cid:22)(cid:15)(cid:23)(cid:24)(cid:16)
+
+(a)
+
+(b)
+
+Figure 2: Implications of feedback loop delay and soft threshold settings
+on correctness and performance.
+(a) A large percentage of emergencies
+are not detected with sufﬁcient time to prevent them due to feedback loop
+delays. (b) Even assuming a 0-cycle feedback loop delay, the number of soft
+threshold crossings that do not violate the minimum operating margin (i.e.,
+benign crossings) is so large that performance suffers due to unnecessary
+throttling.
+
+Uncorrected Execution, respectively). The solid horizontal
+line marked Aggressive Soft Threshold indicates the thresh-
+old at which a voltage sensor starts to take action to pre-
+vent an emergency. Setting the soft threshold aggressively
+(i.e., close to the lower operating margin) requires a very
+fast reaction by the sensor and actuation system. Failure to
+respond quickly enough results in a voltage emergency. In
+Figure 1(b), the voltage starts to recover under throttling, but
+not in time to avoid crossing the lower operating margin.
+
+Figure 2(a) shows the sensitivity of sensor-based mech-
+anisms to feedback loop delays by plotting the number of
+emergencies that go unsuppressed in our benchmark suite as
+a function of sensor-loop delay times. Here we assume the
+soft threshold to be 3% below the nominal voltage and the
+lower operating margin to be 4% below nominal. Feedback
+loop delays ranging between 0 and 5 cycles would require a
+nearly perfect sensor. Yet even a 2-cycle delay causes 50%
+of all soft threshold crossings to violate the simulated mi-
+croprocessor’s minimum operating margin speciﬁcation. In
+other words, fail-safe execution is not possible at this mar-
+gin using sensor-based schemes, as they cannot operate in a
+timely manner.
+
+Performance penalties. To accommodate slow sensor re-
+sponse times and ensure that
+throttling effectively pre-
+vents emergencies, sensor-based schemes can use conser-
+vative soft thresholds. Lifting the soft threshold away
+from the lower operating margin, as illustrated by the
+Conservative Soft Threshold in Figure 1(c), gives the throt-
+tling system more time to prevent an emergency. But as the
+Uncorrected Execution waveform in Figure 1(c) shows, even
+in the absence of throttling, a soft threshold crossing may
+not be followed by an emergency. Throttling execution in
+such cases decreases performance without any compensat-
+ing beneﬁt. The more conservative the soft threshold set-
+ting, the greater the performance penalty. Figure 2(b) shows
+that this penalty can be quite large. Assuming an ideal sen-
+sor with no feedback loop delay (i.e., 0-cycle sensor delay),
+the percentage of benign soft threshold crossings is between
+
+20
+
+77% and 58% for soft thresholds ranging from 2% to 3%.
+So even if it were possible to design a feedback loop with no
+delay, the large performance penalties would deter architects
+from reducing operating margins.
+Resonant versus isolated pulse emergencies. A sensor-
+based scheme proposed by Powell and Vijaykumar [22] re-
+duces sensitivity to feedback loop delay by focusing on
+voltage emergencies that are the result of resonating pat-
+terns. While resonance-induced emergencies are dominant
+for some packages, recent work by Gupta et al. [9] illustrates
+that non-resonant (pulse) events are also a major source of
+emergencies across a range of packages. James et al. [12]
+have observed isolated (non-resonant) pulses in a POWER6
+chip implementation. And Kim et al. show that resonant
+emergencies are likely to become less important than iso-
+lated pulses in future chip multi-processors with on-chip
+voltage regulators, as package inductance effects are decou-
+pled from the power grid via on-chip regulators [14]. There-
+fore, to realize the beneﬁts in improved energy efﬁciency or
+performance that reduced margins can enable, new solutions
+are needed that cope with both resonant and non-resonant
+voltage emergencies in future systems.
+
+3. Prediction-Based Throttling
+An effective emergency avoidance mechanism must meet
+two criteria: First, it must anticipate an emergency accu-
+rately to prevent performance degradation due to unneces-
+sary throttling. Second, it must initiate the emergency avoid-
+ance mechanism with enough lead time to throttle and suc-
+cessfully prevent the emergency from occurring. A major
+goal of this work is to show that it is possible to predict volt-
+age emergencies with high accuracy and sufﬁcient lead time
+to throttle and prevent emergencies.
+
+3.1. Overview
+A voltage emergency predictor is a structure that learns re-
+curring voltage emergency activity during runtime and pre-
+vents subsequent occurrences of said emergencies via exe-
+cution throttling. Figure 3(a) presents a block diagram of
+the proposed scheme. The predictor monitors control ﬂow
+and microachitectural events and keeps track of the volt-
+age emergency signatures that cause voltage emergencies,
+identiﬁed by the checkpoint-recovery block. The predictor
+also actuates throttling to avoid future emergencies, but does
+not suffer limitations associated with sensor delays or soft
+thresholds. Unlike sensor-based schemes, our prediction-
+based approach allows the microprocessor to operate with
+margins much tighter than otherwise possible.
+
+A voltage emergency signature comprises an interleaved
+sequence of program control ﬂow and microarchitectural
+events that give rise to an emergency. Voltage emergency
+signatures are dynamic and, as such, must be discovered
+at runtime.
+Initially, no emergency signatures are known.
+As the program executes, emergencies are detected as mar-
+gin violations occur. Since an emergency can potentially
+corrupt machine state, a checkpoint-recovery mechanism is
+
+Actuator
+
+Throttle
+
+CPU
+
+Control Flow and Microarchitectural Events
+
+Checkpoint-Recovery
+
+Monitor
+
+On / Off
+
+Predictor
+
+Emergency
+Notiﬁcation
+
+(cid:4)
+(cid:18)
+(cid:15)
+(cid:16)
+(cid:9)
+(cid:21)
+(cid:20)
+
+(cid:2)
+
+(cid:17)
+(cid:18)
+(cid:14)
+(cid:15)
+(cid:19)
+(cid:18)
+(cid:17)
+(cid:2)
+(cid:16)
+(cid:15)
+(cid:14)
+(cid:4)
+(cid:13)
+(cid:12)
+
+(cid:0)(cid:25)(cid:14)(cid:21)(cid:16)(cid:16)(cid:9)(cid:4)(cid:23) (cid:30)(cid:31)(cid:4)(cid:7) (cid:16)(cid:2)(cid:21)(cid:17) (cid:6)(cid:26)(cid:4)(cid:17)(cid:10)(cid:21)(cid:14)(cid:11)
+(cid:0)(cid:25)(cid:14)(cid:21)(cid:16)(cid:16)(cid:9)(cid:4)(cid:23) (cid:30)(cid:31)(cid:4)(cid:7) (cid:16)(cid:2)(cid:21)(cid:17) (cid:6)(cid:22)(cid:14)(cid:4)(cid:23)(cid:2)(cid:7)(cid:16)(cid:21)(cid:14)(cid:11)
+
+(cid:22)(cid:14)(cid:4)(cid:23)(cid:2)(cid:7)(cid:16)(cid:21)(cid:14) (cid:4)(cid:17)(cid:15)(cid:24)(cid:9)(cid:4)(cid:10) (cid:16)(cid:25)(cid:14)(cid:21)(cid:16)(cid:16)(cid:9)(cid:2)(cid:17)(cid:18)
+
+(cid:26)(cid:4)(cid:17)(cid:10)(cid:21)(cid:14) (cid:4)(cid:17)(cid:15)(cid:24)(cid:9)(cid:4)(cid:10) (cid:16)(cid:25)(cid:14)(cid:21)(cid:16)(cid:16)(cid:9)(cid:2)(cid:17)(cid:18)
+
+(cid:29)(cid:21)(cid:3)(cid:2)(cid:17)(cid:15)(cid:9) (cid:20)(cid:21)(cid:9)(cid:16)(cid:15)(cid:18)(cid:4)
+
+(cid:26)(cid:21)(cid:28)(cid:16)
+(cid:0)(cid:25)(cid:14)(cid:4)(cid:10)(cid:25)(cid:21)(cid:9)(cid:23)
+
+(cid:27)(cid:4)(cid:15)(cid:23) (cid:16)(cid:2)(cid:3)(cid:4)
+
+(cid:0)(cid:2)(cid:3)(cid:4) (cid:6)(cid:7)(cid:8)(cid:7)(cid:9)(cid:4)(cid:10)(cid:11)
+
+(b)
+
+Figure 3: Overview of voltage emergency prediction. (a) The predictor replaces the soft threshold sensor. It relies on code and microarchitectural event
+activity instead of current and voltage activity to decide when to throttle. It is trained using a fail-safe checkpoint-recovery mechanism. (b) Voltage waveforms
+illustrate how the predictor throttles execution with sufﬁcient lead time to prevent emergencies instead of relying on soft thresholds.
+
+(a)
+
+in place to recover and resume execution. While invoking
+the recovery mechanism, the predictor captures the signa-
+ture of the emergency. Over time, the predictor collects a
+history of emergency-prone activity and uses this history to
+successfully prevent future emergencies via throttling. Sec-
+tion 3.2 presents detailed insights into emergency signa-
+tures and our reasoning for assuming a fail-safe checkpoint-
+recovery mechanism.
+
+A voltage emergency predictor does not require a soft
+threshold. Instead, it monitors sequences of program paths
+and architectural events, and initiates throttling whenever
+an emergency-causing pattern is detected. For clarity and
+a brief overview, Figure 3(b) illustrates how a predictor-
+based scheme outperforms a sensor-based throttling scheme.
+As soon as the predictor observes a voltage emergency sig-
+nature, it starts to throttle execution with sufﬁcient lead
+time to prevent an emergency from occurring.
+In con-
+trast, sensor-based throttling, corresponding to waveform
+Throttled Execution (Sensor) from Figure 1(b), fails to avoid
+the emergency with aggressive soft threshold settings. Con-
+servative soft thresholds incur large performance penalties.
+
+3.2. Voltage Emergency Prediction
+In the following subsection, we explore the working princi-
+ples underlying voltage emergency prediction using a spe-
+ciﬁc, but real-life, scenario from benchmark 403.gcc. Build-
+ing upon the insights we gain from this example, we demon-
+strate how to capture a voltage emergency signature, which
+is the enabling mechanism behind a voltage emergency pre-
+dictor. We then discuss factors that inﬂuence the quality of
+an emergency signature, such as the type and amount of in-
+formation recorded.
+
+3.2.1 Exploiting Voltage Emergency Activity Patterns
+
+Programs are highly repetitive. Repeating code patterns
+give rise to repeating patterns of memory access and data
+ﬂow through the processor. Gupta et al. show repeating
+sequences of processor activity have the potential to cause
+voltage emergencies [8]. They elaborate that microarchitec-
+tural events such as cache misses and pipeline ﬂushes stall
+the pipeline. As a consequence, machine activity temporar-
+
+ily reduces. Upon recovering/restarting, there is a rush of
+activity that causes the current to spike and the voltage to
+drop sharply; a voltage emergency occurs when the voltage
+exceeds the lower operating margin. However, it is not well
+understood when such microarchitectural events are benign
+versus harmful. In other words, there is no guarantee that
+a branch misprediction or any recurring event will always
+cause an emergency. In this section, we show it is possible
+to predict the likelihood of an emergency more accurately by
+taking into account the context leading up to the emergency.
+A microarchitectural event acting in complete isolation
+only sometimes causes an emergency by itself. To help illus-
+trate when an event causes an emergency, Figure 4(a) shows
+pipeline activity over 880 cycles for benchmark 403.gcc
+while it is executing the nested loop illustrated in Fig-
+ure 4(b). Figure 4(a) illustrates pipeline ﬂushing due to
+branch mispredictions using a vertical bar in the Flush sub-
+graph. The number next to each vertical bar in the Flush
+graph corresponds to the basic block number in Figure 4(b)
+containing the mispredicted branch. Other relevant pipeline
+activities across different parts of our simulated micropro-
+cessor ranging from cache access, to functional unit usage,
+to the rate at which instructions are being dispatched, issued
+and committed are also shown for the same time frame. The
+resulting current draw and voltage activity are also shown.
+Lastly, Figure 4(a) shows three distinct phases A, B and C
+(see top of ﬁgure) and each phase terminates at an emer-
+gency (see bottom of ﬁgure).
+
+Context. Microarchitectural events perturb machine activ-
+ity signiﬁcantly, but by themselves are not responsible for
+voltage emergencies. Pipeline ﬂush Event 2 in Figure 4(a)
+is an ideal candidate for illustrating this point. Event 2 in
+Phase A causes a voltage droop a few cycles before Event
+5 (also in Phase A), but it does not cause an emergency.
+The same event, however, always causes an emergency in
+Phase B (at the end of B). Understanding the processor ac-
+tivity leading up to these events explains this inconsistent be-
+havior. The Issue, as well as other rates prior to Event 2 are
+different between Phase A and Phase B, so the perturbation
+effects of Event 2 are different between the phases. By com-
+parison, pipeline ﬂush Event 5 always occurs just prior to an
+
+21
+
+(cid:28)(cid:19)(cid:10)(cid:15)(cid:4) (cid:21)
+
+(cid:28)(cid:19)(cid:10)(cid:15)(cid:4) (cid:29)
+
+(cid:28)(cid:19)(cid:10)(cid:15)(cid:4) (cid:0)
+
+(cid:28)(cid:19)(cid:10)(cid:15)(cid:4) (cid:21)
+
+(cid:28)(cid:19)(cid:10)(cid:15)(cid:4) (cid:29)
+
+(cid:28)(cid:19)(cid:10)(cid:15)(cid:4) (cid:0)
+
+(cid:6)
+(cid:13)
+
+(cid:12)
+(cid:12)
+(cid:8)
+(cid:0)
+
+(cid:19)
+(cid:18)
+(cid:6)
+(cid:10)
+(cid:17)
+(cid:15)
+(cid:16)
+
+(cid:13)
+
+(cid:4)
+(cid:2)
+(cid:15)
+(cid:15)
+
+(cid:14)
+
+(cid:4)
+(cid:19)
+(cid:18)
+(cid:10)
+(cid:0)
+
+(cid:23)
+(cid:22)
+(cid:21)
+
+(cid:19)
+(cid:15)
+(cid:2)
+(cid:20)
+
+(cid:9)
+
+(cid:6)
+(cid:5)
+(cid:4)
+(cid:3)
+(cid:3)
+(cid:2)
+(cid:0)
+
+(cid:4)
+(cid:11)
+(cid:10)
+(cid:6)
+(cid:9)
+(cid:8)
+(cid:7)
+
+3
+
+4
+
+2
+
+5
+
+0
+
+1
+
+6
+
+7
+
+(b)
+
+(cid:30)
+
+(cid:31)
+
+(cid:30)
+
+(cid:31)
+
+(cid:30)
+
+(cid:31)
+
+(cid:30)
+
+(cid:31)
+
+(cid:22)(cid:8)(cid:24)(cid:4)(cid:3) (cid:26)(cid:17)(cid:4)(cid:3)(cid:10)(cid:6)(cid:13)(cid:5)(cid:11) (cid:27)(cid:10)(cid:3)(cid:11)(cid:13)(cid:5)
+
+ (cid:12)(cid:4)(cid:3)(cid:11)(cid:4)(cid:5)(cid:18)!
+
+ (cid:12)(cid:4)(cid:3)(cid:11)(cid:4)(cid:5)(cid:18)!
+
+ (cid:12)(cid:4)(cid:3)(cid:11)(cid:4)(cid:5)(cid:18)!
+
+ (cid:12)(cid:4)(cid:3)(cid:11)(cid:4)(cid:5)(cid:18)!
+
+ (cid:12)(cid:4)(cid:3)(cid:11)(cid:4)(cid:5)(cid:18)!
+
+ (cid:12)(cid:4)(cid:3)(cid:11)(cid:4)(cid:5)(cid:18)!
+
+(a)
+
+Figure 4: (a) Voltage emergencies are associated with recurring activity (phases A, B and C) over 880 cycles. The numbers next to the vertical bars in the
+Flush graph correspond to the basic block number in (b) containing the mispredicted branch. (b) An emergency prone nested-loop in function init regs
+of benchmark 403.gcc. init regs’s activity snapshot is shown in (a).
+
+emergency in both Phase A and Phase C. Nevertheless, our
+argument that activity prior to an event matters holds true.
+The voltage just prior to Event 5 in Phase A is rising ver-
+sus falling in Phase C. The latter occurs because the voltage
+is already in ﬂux due to the perturbation brought about by
+Event 2 in Phase B. For this reason, any scheme attempting
+to characterize and exploit recurring patterns must take into
+account the execution context preceding an emergency.
+
+Microarchitectural events and program control ﬂow in-
+terleaving. Voltage emergencies are uniquely identiﬁable
+by tracking control ﬂow instructions and microarchitectural
+events in order of occurrence. Rapid ﬂuctuations in a pro-
+gram’s control and data ﬂow and in its level of parallel uti-
+lization of processor resources lead to changes in current
+ﬂow that induce large voltage swings. For instance, the dis-
+tinct current and voltage activity between phases A, B and
+C are the result of different control ﬂow paths exercised
+by the program combined with the voltage droops induced
+by pipeline ﬂush Events 2 and 5. During the early part of
+Phase A, the program is executing basic blocks 2 → 3 → 5
+(from Figure 4(b)) in a steady-state manner. The stable and
+repetitive Issue rate pattern during the early part of Phase A
+in Figure 4(a) conﬁrms this. Slightly past the midpoint
+of Phase A, the program switches control ﬂow from basic
+blocks 2 → 3 → 5 to basic blocks 2 → 5. This switch trig-
+gers a pipeline ﬂush to recover from speculatively executing
+incorrect code along Edge 2 → 3 to executing correct code
+along Edge 2 → 5. The activity on the recovery path follow-
+ing the pipeline ﬂush causes the voltage to droop slightly
+
+but not enough to violate the operating margin (shown using
+Lower Operating Margin). After a few cycles, a mispredic-
+tion on basic block 5’s control instruction eventually leads
+to a voltage emergency. So the emergency in Phase A is be-
+cause of the activity including, as well as following, basic
+blocks 2 → 3 → 5 combined with pipeline ﬂush Events 2 and
+5. In contrast, the emergency in Phase B arises from execut-
+ing basic blocks 2 → 3 → 4 → 5 followed by the single ﬂush
+Event 2. Consequently, tracking control ﬂow sequence along
+with pipeline ﬂush events in order of occurrence yields two
+unique activity patterns representing Phase A and Phase B.
+
+Recurrence and stability. Voltage emergencies, like pro-
+gram phases, are repetitive over a program’s lifetime, which
+make them predictable. Consider the three phases illus-
+trated in Figure 4(a). The phases are recurring because ex-
+ecution sequence ﬂows through phases A → B → C and
+back to Phase A. A subsequent occurrence of the same
+phase leads to yet another emergency. For instance, Event
+2 always causes an emergency as execution ﬂows through
+phases B → C, but not through phases A → B. Thus, a pattern
+of voltage emergency occurrence emerges. Identifying and
+exploiting such recurring activity is the basis for predicting
+voltage emergencies in terms of program behavior, as well
+as microarchitectural behavior.
+
+3.2.2 Capturing Voltage Emergency Signatures
+
+In this section, we describe the hardware necessary to cap-
+ture program control ﬂow and microarchitectural event in-
+terleaving.
+
+22
+
+Emergency detection. Capturing a voltage emergency
+signature, with our scheme, requires an emergency to occur
+at least once. So we require a mechanism to monitor op-
+erating margin violations. We rely on a voltage sensor. Our
+scheme is not time-sensitive to sensor delay because the pre-
+dictor does not react to sensing a soft threshold crossing to
+throttle. The sensor is used to signal that an emergency has
+occurred and the system ought to take appropriate actions.
+Checkpoint-recovery. Processor state is potentially cor-
+rupted as emergencies occur, since voltage emergencies in-
+duce timing faults. So we rely on a fail-safe checkpoint-
+recovery mechanism to recover from emergencies. The fail-
+safe mechanism initiates a recovery whenever the sensor de-
+tects an emergency, and in that process also captures a volt-
+age emergency signature. Checkpoints can be taken at vary-
+ing intervals (e.g., 10-1000 cycles). We assume a 100-cycle
+rollback penalty.
+
+Coarse-grained checkpoint-recovery is already shipping
+in today’s production systems [1, 26], and researchers are
+proposing a broad range of novel applications that use tradi-
+tional checkpoint-recovery [15,16,19,25,27,29]. With ever-
+increasing applications of this fail-safe mechanism, we be-
+lieve checkpoint-recovery will become part of future main-
+stream processors. However, checkpoint-recovery alone as
+a solution for handling voltage emergencies is unacceptable
+due to performance penalties (as shown in Section 6.1).
+Event history register. The predictor relies on a shift reg-
+ister to capture the interleaved sequence of control ﬂow in-
+structions and architectural events that give rise to an emer-
+gency. A signature is a snapshot of the event history regis-
+ter. The interleaving of events in the event history register
+is important for capturing the dynamic current and voltage
+activity resulting from program interactions with the under-
+lying microarchitecture (as described in Section 3.2.1). The
+purpose of tracking the instruction stream is to capture the
+dynamic path of a program. Consequently, control ﬂow in-
+structions are ideal candidates for tracking a program’s dy-
+namic execution path.
+
+Event history tracking is a well-studied topic in the area
+of branch prediction. Our contribution is unique in that we
+can identify the information ﬂow that precisely captures ac-
+tivity prone to voltage emergencies.
+
+Figure 5 illustrates example snapshots of the emergen-
+cies shown in Figure 4(a) across phases A, B and C. The
+updates into a 4-entry wide event history register are shown
+over time. At the point of the emergency in Phase B, the
+history register contains the following (from oldest to most
+recent): two control ﬂow instruction addresses (illustrated
+as BR) and an event encoding for the pipeline ﬂush (illus-
+trated as 2), followed by another branch. It is important to
+never clear the event history register after capturing a snap-
+shot to maintain a rolling window of contextual information.
+For example, the oldest BR in Signature C overlaps with the
+most recent entry in Signature B.
+
+Since voltage emergencies contribute to timing faults,
+all predictor logic and checkpoint-recovery hardware must
+
+A
+
+B
+
+C
+
+...
+
+BR
+
+BR BR 2 BR BR 5 BR BR BR BR 2
+
+BR BR
+
+5
+
+BR
+
+...
+
+Signature A
+
+2 BR BR 5
+
+Signature B
+
+BR BR 2 BR
+
+y
+c
+n
+e
+g
+r
+e
+m
+E
+
+Signature C
+
+BR BR 5 BR
+
+Figure 5: Overview of voltage emergency signatures. Taking snapshots
+of a 4-entry event history register for emergencies illustrated in Figure 4(a)
+across phases A, B and C.
+
+be carefully designed with sufﬁciently conservative timing
+margins. As these structures are not timing critical, there
+are no performance implications. Any state corruption in
+the predictor logic only leads to incorrect predictions, and
+will therefore only affect the performance of the system due
+to unnecessary throttling, but it will not violate correctness
+guarantees.
+
+3.2.3 Voltage Emergency Signature Semantics
+The function of a voltage emergency signature is to precisely
+indicate whether a pattern of control ﬂow and microarchitec-
+tural event activity will give rise to an emergency. To eval-
+uate the effectiveness of different ﬂavors of signatures, we
+deﬁne predictor accuracy as the fraction of predicted emer-
+gencies that become actual emergencies.
+Contents.
+Information tracking in the event history reg-
+ister must correspond to parts of the execution engine that
+experience large current draws, as well as dramatic spikes
+in current activity. The event history register can collect the
+control ﬂow trace at different points in a superscalar pro-
+cessor:
+in-order fetch and decode, out-of-order issue, and
+in-order commit. Each of these points contribute different
+amounts of information pertaining to an emergency. For
+instance, tracking execution in program order fails to cap-
+ture any information regarding the impact of speculation on
+voltage emergencies. Tracking information at the in-order
+fetch and decode sequence captures the speculative path, but
+it does not capture the out-of-order superscalar issuing of
+instructions.
+
+The accuracies of different signature types are illustrated
+in Figure 6(a) (assuming a signature size of 32 entries, which
+will be discussed next). Tracking committed control ﬂow
+sequences in the event history register gives an accuracy of
+only 40%. If the history register tracks information at the
+decode stage, an accuracy of 72% is possible because the
+decode stage captures the speculative control ﬂow path. Ac-
+curacy improves further by 12%, from 72% to 84%, if the
+history register tracks control ﬂow at the issue stage, since
+we can now capture interactions more precisely at the level
+of hardware instruction scheduling and code executed along
+a speculative path.
+
+Interleaving microarchitectural events with program con-
+trol improves accuracy even further, as processor events pro-
+vide additional information about swings in the supply volt-
+
+23
+
+(cid:0)(cid:2)(cid:2)
+
+(cid:3)(cid:2)
+
+(cid:4)(cid:2)
+
+(cid:5)(cid:2)
+
+(cid:6)(cid:2)
+
+(cid:2)
+
+(cid:14)
+(cid:10)
+(cid:13)
+(cid:12)
+(cid:11)
+(cid:10)
+(cid:10)
+(cid:9)
+(cid:7)
+
+(cid:0)(cid:2)(cid:2)
+
+(cid:3)(cid:2)
+
+(cid:4)(cid:2)
+
+(cid:5)(cid:2)
+
+(cid:6)(cid:2)
+
+(cid:2)
+
+(cid:14)
+(cid:10)
+(cid:13)
+(cid:12)
+(cid:11)
+(cid:10)
+(cid:10)
+(cid:9)
+(cid:7)
+
+(cid:19)
+(cid:18)
+
+(cid:17)
+(cid:17)
+(cid:16)
+(cid:15)
+
+(cid:21)
+(cid:22)
+(cid:16)
+(cid:10)
+(cid:21)
+(cid:20)
+
+(cid:21)
+(cid:11)
+(cid:24)
+(cid:24)
+
+(cid:23)
+
+(cid:28)
+
+(cid:6)
+(cid:29)
+
+(cid:28)
+(cid:21)
+(cid:11)
+(cid:24)
+(cid:24)
+
+(cid:23)
+
+ 
+(cid:24)
+(cid:11)
+(cid:30)
+
+(cid:31)
+
+(cid:28)
+
+(cid:0)
+(cid:29)
+(cid:20)
+
+(cid:28)
+
+(cid:6)
+(cid:29)
+
+(cid:28)
+(cid:21)
+(cid:11)
+(cid:24)
+(cid:24)
+
+(cid:23)
+
+(cid:28)
+ 
+(cid:24)
+(cid:11)
+(cid:30)
+
+(cid:31)
+
+"
+(cid:29)
+!
+(cid:20)
+
+(cid:0) (cid:6) (cid:5) (cid:3) (cid:0)(cid:4) (cid:15)(cid:6) (cid:4)(cid:5)
+
+(cid:25)(cid:18)(cid:26)(cid:27)(cid:13)(cid:19)(cid:11)(cid:12)(cid:21) (cid:15)(cid:16)(cid:27)(cid:19)(cid:21)(cid:27)(cid:19)
+
+(cid:16)(cid:17)(cid:18)(cid:19)(cid:13)(cid:20)(cid:11)(cid:12)(cid:21) (cid:16)(cid:17)(cid:22)(cid:21) (cid:23)(cid:24) (cid:25)(cid:26) (cid:21)(cid:19)(cid:20)(cid:12)(cid:17)(cid:21)(cid:27)(cid:28)
+
+(a)
+
+(b)
+
+Figure 6: Prediction accuracy improves as (a) signature contents represent
+machine activity more closely and as (b) the number of entries per signature
+increases.
+
+age. For instance, pipeline ﬂushes cause a sharp change in
+current draw as the machine comes to a near halt before re-
+covering on the correct execution path (as observed in Fig-
+ure 4(a) immediately following pipeline ﬂush events). The
+last two bars of Figure 6(a) show accuracy improvements
+from adding microarchitectural event activity to the event
+history register. The second to last bar represents the ef-
+fect of capturing events that have the potential to induce
+large voltage swings—pipeline ﬂushes and secondary (L2)
+cache misses. An improvement of ﬁve percentage points is
+achieved by taking ﬂushes and L2 misses into account (i.e.,
+total accuracy of 89%). Another additional improvement in
+the margin of ∼4% Capturing the more frequently occurring
+events like DTLB and DL1 misses contributes additional im-
+provements of ∼4%. Microarchitecture perturbations result-
+ing from instruction cache activity (i.e., IL1 and ITLB) are
+negligible and do not lead to an improvement in accuracy.
+
+From here on, we assume the event history register
+resides at
+the issue stage of the pipeline and captures
+microarchitectural-event activity. More formally, the event
+history register is updated whenever a control ﬂow instruc-
+tion is executed, along with Level 1 and Level 2 cache and
+TLB misses. Lastly, pipeline ﬂushes are also events recorded
+in the event history register.
+
+Size. Accuracy depends not only on recording the right in-
+terleaving of events, but also on balancing the amount of
+information the event history register keeps. Accuracy im-
+proves as the length of history register increases.
+
+However, it can be detrimental to increase the number of
+register entries beyond a certain count. Large numbers of
+entries in a signature can cause unnecessary differentiation
+between similar signatures—signatures whose most recent
+entries are identical and whose older entries are different,
+but not signiﬁcantly so. The predictor would have to track
+more unique signatures per emergency because of this dif-
+ferentiation.
+
+Figure 6(b) shows prediction accuracy improves as signa-
+ture size increases. Accuracy is only 13% on average for a
+signature containing only 1 entry, which supports the discus-
+sion presented in Section 3.2.1 that voltage emergencies do
+
+24
+
+not solely depend upon the last executed branch or a single
+microarchitectural event. It is the history of activity that de-
+termines the likelihood of a recurring emergency. Prediction
+accuracy begins to saturate once signature size reaches 16,
+and peaks at 99% for a signature size of 64 entries.
+Signature encoding. Hardware implementations are re-
+source constrained. So the number of bits representing a
+signature in a realistic hardware implementation matters. To
+avoid large overheads, we use a 3-bit encoding per entry
+in the event history register. But encoding causes aliasing
+between signatures. Therefore, we extend an encoded sig-
+nature to also contain the program counter for the most re-
+cently taken branch—the anchor PC. Anchor PC’s have the
+added beneﬁt of implicitly providing the complete path in-
+formation leading up to the most recent event in the history
+register. The 3-bit encoding compactly captures all of the
+relevant information consisting of different processor events,
+and takes into account the edge taken by each branch (i.e.,
+fall-through paths are encoded as 000 versus 001 for taken
+edges). The compact representation described above results
+in a total signature length of 16 bytes (4 bytes for the anchor
+PC and 12 bytes for a signature size of 32 entries with 3 bits
+per entry).
+Signature compaction. We can further reduce hardware
+overheads by folding multiple signatures corresponding to a
+speciﬁc anchor PC into a single representative signature. We
+use a weighted similarity metric based on Manhattan dis-
+tance to determine how much compaction is possible for a
+set of signatures corresponding to a particular benchmark.
+Let x and y be k-element signatures associated with the
+same instruction address. We deﬁne the similarity of x and
+y to be
+
+2
+
+s =
+
+k(k + 1)
+
+(cid:3)
+
+k(cid:2)
+
+i=1
+
+i
+0
+
+if xi = yi
+otherwise
+
+If the signatures are identical, s is one. If no two correspond-
+ing elements are the same, it is zero. The later elements in
+x and y correspond to later events in time. They are more
+heavily weighted in s, because they are more signiﬁcant for
+emergency prediction. Other measures of similarity might
+yield better compaction, but they would be more expensive
+to compute in hardware. For a given instruction address, we
+partition the signatures into maximal sets in which each sig-
+nature x is related to one or more other signatures y with
+similarity of 0.9 or greater. The resulting partition is then
+used instead of the original signature set.
+
+The number of recurring signatures per benchmark varies
+signiﬁcantly. Benchmark 403.gcc has nearly 87000 signa-
+tures that repeatedly give rise to emergencies. At the other
+end of the spectrum is benchmark 462.libquantum with only
+39 signatures. Applying signature compaction on 403.gcc
+reduces the number of signatures to 29000, thereby achiev-
+ing a ∼67% reduction. Overall, compaction reduces the
+number of signatures by over 61% and the biggest winners
+are benchmarks that exhibit a large number of signatures.
+
+Clock Rate
+Inst. Window
+
+3.0 GHz
+
+RAS
+
+128-ROB, 64-LSQ
+
+Branch Penalty
+
+Functional
+
+8 Int ALU, 4 FP ALU,
+
+Units
+
+Fetch Width
+L1 D-Cache
+L2 I/D-Cache
+
+2 Int Mul/Div,
+2 FP Mul/Div
+8 Instructions
+64 KB 2-way
+2MB 4-way,
+
+16 cycle latency
+
+Branch
+Predictor
+
+BTB
+
+Decode Width
+
+L1 I-Cache
+
+Main Memory
+
+64 Entries
+10 cycles
+
+64-KB bimodal
+gshare/chooser
+
+1K Entries
+
+8 Instructions
+64 KB 2-way
+
+300 cycle
+latency
+
+Table 1: Baseline architecture (Arch 1) parameters for SimpleScalar.
+
+4. Experimental Framework
+The vehicle for all concepts and data presented in this pa-
+per is the x86 SimpleScalar infrastructure. Table 1 lists the
+conﬁguration parameters used to initialize SimpleScalar for
+our baseline microprocessor design, which we refer to as
+Arch 1. The workload set is comprised of benchmarks from
+the SPEC CPU2006 suite. All but a few were simulated for
+100 million instructions across their different inputs using
+the phase most heavily weighted by Simpoint [21].1 The
+benchmarks were compiled at optimization level -O3 using
+the GNU GCC 3.4 compiler toolchain.
+
+To get a detailed cycle-accurate current proﬁle, we in-
+corporate a modiﬁed version of Wattch [4] into our Sim-
+pleScalar simulator. Simulated current proﬁles are con-
+volved with an impulse response of the power delivery sub-
+system to obtain voltage variations. Other studies [13, 23]
+use this second-order model as well.
+
+Operating margin. For the purpose of quantitative com-
+parisons and evaluation, a maximum swing of 4% is allowed
+between nominal supply voltage and the lower operating
+voltage margin, beyond which a voltage emergency occurs.
+However, the work in this paper is independent of a spe-
+ciﬁc margin and the major ﬁndings of the paper remain un-
+changed across different margin settings.
+
+Power delivery model. We evaluate three different pack-
+ages. Quality factor (Q) is the ratio of the resonant fre-
+quency to the rate at which the package dissipates its en-
+ergy. A larger Q gives rise to larger voltage swings for
+currents oscillating within the resonance band of frequen-
+cies. Applications with current ﬂuctuations in the resonance
+band therefore suffer more from inductive noise with a high-
+Q package. The packages are labeled Pkg 1, Pkg 2 and
+Pkg 3. Details pertaining to the packages are shown in Ta-
+ble 2. Our baseline package is Pkg 1, which closely resem-
+bles characteristics of the Pentium 4 package [11]. Pack-
+age Pkg 2 is representative of the package used in an ear-
+lier study [13], and its parameters are based on the Alpha
+21264/21364 package. For comparisons, we include Pack-
+age Pkg 3, which represents a bad package with very large
+quality factor.
+
+1445.gobmk input 13x13, 456.hmmer, 471.omnetpp, 473.astar,
+434.zeusmp, 453.povray and 470.lbm are omitted because SimpleScalar’s
+x86 decoder does not support instruction encodings used by these bench-
+marks.
+
+Package
+
+Peak Impedance Current Quality Resonance
+
+(mOhm)
+
+(A)
+
+Factor
+
+Cycles
+
+Comment
+
+Pkg 1
+Pkg 2
+Pkg 3
+
+5
+2
+17
+
+16–50
+30–70
+16–50
+
+3
+2
+6
+
+30
+60
+30
+
+Pentium 4 [2]
+Used in [13]
+
+Worst package
+
+Table 2: Characteristics of the packages evaluated.
+
+Single-core vs. multi-core and multi-threaded architec-
+tures. We limit our evaluations in this paper to a single-
+core platform with an off-chip power delivery subsystem.
+Much of prior work is also within the context of single-core
+platforms, which allows comparative analysis of our scheme
+to others. Kim et al. and Gupta et al. have shown that volt-
+age emergencies are problematic for multi-core platforms as
+well [7, 14]. The authors demonstrate that synchronous/in-
+phase operation of cores or chip-wide resonant behavior can
+cause voltage emergencies, and so can per-core power do-
+mains. We believe it is possible to extend our work to
+capture inter-core activity leading to emergencies by track-
+ing additional events such as cache coherence messages and
+inter-thread synchronization primitives. And in the case of a
+multi-threaded architecture, it is possible to easily adapt the
+emergency capturing mechanism to be a part of the hard-
+ware’s thread context. Building a predictor for a multi-core
+and multi-threaded architecture is beyond the scope of this
+paper and requires further investigations.
+
+5. Predictor Accuracy Evaluation
+A signature-based emergency predictor,
+in contrast to a
+sensor-based scheme, is broadly applicable across different
+combinations of microprocessor designs and power deliv-
+ery subsystems with no need for ﬁne-tuning, catering for the
+worst-case, or relying on soft thresholds.
+In this section,
+we demonstrate the robustness of signature-based prediction
+across different machine conﬁgurations assuming a signa-
+ture size of 32 entries. We also demonstrate an ability to
+predict emergencies 16 cycles ahead of time with 90% accu-
+racy.
+
+Workloads. Applications exhibit different characteristics
+that drive the machine into different levels of activity and,
+therefore, varying rates of current draw. Figure 7(a) plots
+prediction accuracy across the spectrum of benchmarks
+from CPU2006.
+For benchmarks with multiple inputs,
+we present the average prediction accuracy across differ-
+ent inputs. The signatures enable high prediction accuracy
+with an average of 93% and a median of 94%. Voltage
+emergency signatures are able to handle a range of bench-
+marks from control-ﬂow-intensive benchmarks like 403.gcc
+and 400.perlbench to memory-intensive benchmarks like
+429.mcf, and to 462.libquantum that exhibit a large number
+of microarchitectural events such as cache misses. Overall,
+high prediction accuracy is observed across both the integer
+and ﬂoating-point benchmarks.
+
+Tolerance. Figure 7(b) shows that when we pair power de-
+livery packages Pkg 1, Pkg 2, and Pkg 3 with our baseline
+microprocessor design Arch 1 (Table 1), average prediction
+
+25
+
+(cid:0)(cid:2)(cid:2)
+
+(cid:3)(cid:2)
+
+(cid:4)(cid:2)
+
+(cid:5)(cid:2)
+
+(cid:6)(cid:2)
+
+(cid:2)
+
+(cid:14)
+(cid:10)
+(cid:13)
+(cid:12)
+(cid:11)
+(cid:10)
+(cid:10)
+(cid:9)
+(cid:7)
+
+(cid:0)(cid:2)(cid:2)
+
+(cid:3)(cid:4)
+
+(cid:3)(cid:2)
+
+(cid:12)
+(cid:8)
+(cid:11)
+(cid:10)
+(cid:9)
+(cid:8)
+(cid:8)
+(cid:7)
+(cid:5)
+
+(cid:12)
+(cid:13)
+(cid:16)
+(cid:15)
+(cid:13)
+
+(cid:6)
+(cid:23)
+(cid:21)
+(cid:17)
+
+(cid:22)
+
+(cid:15)
+(cid:20)
+(cid:19)
+(cid:13)
+(cid:18)
+(cid:17)
+
+(cid:10)
+(cid:10)
+(cid:30)
+
+(cid:29)
+(cid:29)
+(cid:26)
+
+(cid:13)
+(cid:20)
+(cid:28)
+
+(cid:27)
+
+(cid:22)
+(cid:26)
+
+(cid:11)
+(cid:10)
+(cid:13)
+(cid:10)
+
+(cid:26)
+
+(cid:15)
+(cid:15)
+(cid:20)
+(cid:31)
+(cid:13)
+(cid:30)
+
+(cid:25)
+(cid:24)
+(cid:9)
+(cid:15)
+(cid:11)
+(cid:16)
+(cid:10)
+(cid:13)
+(cid:10)
+
+#
+(cid:31)
+(cid:17)
+"
+(cid:30)
+
+(cid:15)
+(cid:10)
+(cid:13)
+(cid:31)
+"
+(cid:12)
+(cid:30)
+
+%
+(cid:20)
+(cid:12)
+(cid:5)
+(cid:4)
+(cid:6)
+$
+
+(cid:28)
+&
+(cid:20)
+
+(cid:22)
+(cid:26)
+
+(cid:15)
+(cid:20)
+
+(cid:26)
+
+(cid:24)
+!
+(cid:24)
+ 
+(cid:15)
+(cid:31)
+(cid:20)
+(cid:30)
+
+(cid:31)
+(cid:11)
+(cid:16)
+(
+(cid:13)
+(cid:11)
+’
+(cid:17)
+
+(cid:22)
+(cid:26)
+
+%
+(cid:10)
+(cid:31)
+
+(cid:10)
+
+(cid:26)
+(cid:22)
+
+(cid:31)
+
+(cid:28)
+(cid:31)
+(cid:13)
+(
+
+%
+(cid:12)
+(cid:18)
+
+(cid:30)
+(
+(cid:20)
+)
+(cid:15)
+
+(cid:26)
+
+(cid:27)
+(cid:20)
+(cid:23)
+"
+(cid:15)
+
+&
+(cid:27)
+(
+$
+(cid:23)
+(cid:15)
+
+(cid:22)
+
+$
+(cid:10)
+(
+(cid:20)
+(cid:17)
+(cid:26)
+(cid:12)
+(cid:20)
+(cid:23)
+
+#
+(cid:31)
+(cid:17)
+(cid:10)
+(
+(cid:13)
+(cid:13)
+(cid:27)
+
+(cid:26)
+
+(cid:29)
+
+.
+(cid:9)
+(cid:24)
++
+(cid:25)
+
++
+-
+(cid:9)
+,
++
+*
+(cid:9)
+
+(a)
+(cid:0)(cid:2)(cid:2)
+
+(cid:3)(cid:4)
+
+(cid:3)(cid:2)
+
+(cid:12)
+(cid:8)
+(cid:11)
+(cid:10)
+(cid:9)
+(cid:8)
+(cid:8)
+(cid:7)
+(cid:5)
+
+(cid:17)
+
+(cid:0)
+
+(cid:16)
+(cid:15)
+(cid:14)
+
+(cid:0)
+
+(cid:13)
+(cid:8)
+(cid:10)
+(cid:7)
+
+(cid:17)
+
+(cid:18)
+
+(cid:16)
+(cid:15)
+(cid:14)
+
+(cid:0)
+
+(cid:13)
+(cid:8)
+(cid:10)
+(cid:7)
+
+(cid:17)
+
+(cid:19)
+
+(cid:16)
+(cid:15)
+(cid:14)
+
+(cid:0)
+
+(cid:13)
+(cid:8)
+(cid:10)
+(cid:7)
+
+(cid:17)
+
+(cid:0)
+
+(cid:16)
+(cid:15)
+(cid:14)
+
+(cid:18)
+
+(cid:13)
+(cid:8)
+(cid:10)
+(cid:7)
+
+(cid:2)
+
+(cid:13)
+
+(cid:14)
+
+(cid:0)(cid:15)
+
+(cid:16)(cid:17)(cid:11)(cid:18) (cid:19)(cid:20)(cid:21)(cid:17) (cid:22)(cid:8)(cid:12)(cid:8)(cid:23)(cid:17)(cid:24)(cid:25)
+
+(b)
+
+(c)
+
+Figure 7: A voltage emergency predictor maintains high prediction ac-
+curacy across different (a) program types and (b) power delivery packages
+and microarchitecture combinations. (c) The predictor is also capable of
+predicting emergencies with sufﬁcient lead time.
+
+accuracy remains high (93%, 96%, and 95%, respectively)
+despite decreasing package quality. Signatures consistently
+enable emergency prediction with over 90% accuracy with-
+out specialization. By comparison, sensor-based schemes
+require careful conﬁguration of soft thresholds [9]. When
+we pair package Pkg 1 with a simpler out-of-order proces-
+sor Arch 2 (one with the same structure as that in Table 1,
+but with half-sized fetch and decode widths and half-sized
+buffers, queues, and caches), the accuracy of our predictor
+still remains high at 97%.
+
+Lead time. Predicting an emergency with sufﬁcient lead
+time enables the machine to throttle execution and success-
+fully avoid an impending emergency. Figure 3(b) illustrates
+this notion of lead time using the Lead time label. Up to this
+point in the paper, we assumed a lead time of 0 cycles to
+initially validate that signatures are good predictors of emer-
+gencies. However, real systems require non-zero lead times
+to account for circuit delays and allow for throttling to take
+effect. To experiment with other lead times, we can erase
+trailing segments of the signatures that we capture. Fig-
+ure 7(c) shows accuracy slightly degrades from 93% as lead
+time increases. However, even with 16 cycles of lead time,
+ample time to prevent an emergency, prediction accuracy re-
+mains high at 90%.
+
+It is important to note that throttling cannot prevent all
+emergencies even when they are correctly predicted with 16
+cycles of lead time. In such cases, the fail-safe mechanism
+must recover processor state and the machine incurs rollback
+penalties. However, our experimental data (not shown) ver-
+iﬁes that the number of such emergencies is only 1% of the
+total emergencies that occur without throttling and resulting
+penalties are very low.
+
+26
+
+6. Performance Evaluation
+
+An aggressive reduction in operating voltage margins can
+translate to higher performance or higher energy efﬁciency.
+Since performance and power are inextricably tied, we fo-
+cus on clock frequency performance improvements. Assess-
+ing performance also enables straightforward accounting of
+penalties resulting from throttling and rollbacks. We evalu-
+ate the maximum attainable performance within the context
+of all runtime costs previously illustrated in Figure 3(a) and
+compare to a variety of idealized and non-ideal approaches.
+While the initial analysis makes optimistic assumptions in
+regards to hardware implementations of the voltage emer-
+gency predictor, Section 6.2 explores design tradeoffs and
+shows a resource-constrained predictor implementation that
+retains high accuracy and performance improvements.
+
+Designers typically build in conservative margins (guard-
+bands) to safeguard against potentially large voltage droops
+that can lead to timing violations. Such margins translate
+to clock frequency reductions and performance loss. Re-
+cent papers on industrial designs have shown that 15% to
+20% operating voltage margins would be required to protect
+against voltage emergencies [3, 12]. Similarly, our analysis
+of our baseline system (Pkg 1 and Arch 1) reveals a worst-
+case droop of 13%.
+
+The nearly-linear relationship between operating voltage
+and clock frequency facilitates translation of voltage mar-
+gin reductions into performance gains. Based on detailed
+circuit-level simulations of an 11-stage ring oscillator con-
+sisting of fanout-of-4 inverters, we observe a 1.5x rela-
+tionship between voltage and frequency at the PTM 32nm
+node [30]. This relationship is consistent with results re-
+ported by Bowman et al. [3], which show that a 10% re-
+duction in voltage margins leads to a 15% improvement
+in clock frequency. While we use this 1.5x voltage-to-
+frequency scaling factor throughout the rest of the paper, we
+also observe a disconcerting trend across technologies. Sim-
+ulation results reveal voltage-to-frequency scaling factors of
+1.2x, 1.5x, 2.3x, and 2.8x for PTM nodes at 45nm, 32nm,
+22nm, and 16nm, respectively. Given a slowdown in tradi-
+tional constant-ﬁeld scaling trends, sensitivity of frequency
+to voltage is growing, which further stresses the need for
+techniques that can efﬁciently reduce voltage noise in future
+processors.
+
+Based on the 1.5x scaling factor, the 4% operating volt-
+age margin assumed in this paper corresponds to a 6% loss in
+frequency. Similarly, a conservative voltage margin of 13%,
+sufﬁcient to cover the worst-case droops observed, leads to
+20% lower frequency. If we take this conservative margin
+as the baseline for comparisons and the 13% margin can re-
+duce to 4% while avoiding voltage emergencies, the corre-
+sponding clock frequency improvement offers system per-
+formance gains of 17.5%. This sets the upper bound on max-
+imum performance gains achievable. We make a simplifying
+assumption that frequency improvements directly translate
+to higher overall system performance.
+
+Schemes
+
+Performance
+
+Gain (%)
+
+Predictor throttling
+
+Ideal sensor throttling
+
+Oracle
+Voltage emergency signature
+Microarchitectural event
+2% soft threshold
+3% soft threshold
+
+Explicit checkpoint and recovery
+Delayed commit and rollback (DeCoR)
+
+14.2
+13.5
+4.1
+2.2
+9.0
+-13.0
+13.0
+
+Table 3: Performance comparison across different ﬂavors of throttling and
+checkpoint-recovery for handling voltage emergencies.
+
+6.1. Comparison of Schemes
+To thoroughly evaluate the beneﬁts of using our signature-
+based predictor, we compare it to variety of other schemes
+that also use throttling and/or checkpoint-recovery. We as-
+sume a half-rate throttling mechanism that gates every other
+clock cycle. For sensor-based schemes, we assume sen-
+sors are ideal with zero delay, and can instantly react to
+either resonant or single-event-based voltage emergencies.
+For our predictor, we assume an unbounded prediction table
+with a voltage emergency signature predictor with 16 cy-
+cle lead time. Calculation of performance gains shown for
+each scheme begins with the maximum 17.5% gains possi-
+ble, which then scales down by accounting for all perfor-
+mance overheads. Again, a conservative voltage margin of
+13% allows for emergency-free, lower-frequency operation
+and is the common baseline for all comparisons. Table 3
+shows the performance gains of all schemes.
+
+Oracle predictor. To set an upper bound on the potential
+beneﬁts of prediction-based schemes, we consider an oracle
+predictor. It throttles exactly when an emergency is about
+to occur, and it always prevents the emergency. It does not
+waste throttles nor does it incur rollback penalties. By re-
+moving all voltage emergencies, the resulting performance
+gain of 14.2%, is the best achievable performance while in-
+curring only 2.9% throttling overhead.
+
+Voltage emergency signature predictor. Our signature-
+based prediction scheme incurs performance overhead of
+3.5% on average, due to throttling and rollbacks that are
+needed to detect emergencies and also due to emergencies
+that throttling cannot avoid. The slightly higher overhead
+translates to performance gain relative to our baseline of
+13.5%, just 0.7% less than the oracle predictor.
+
+Microarchitectural event predictor. We also evaluate a
+simpler prediction scheme that associates an emergency with
+the most recent microarchitectural event and the address of
+the instruction responsible for it [10]. Whenever that com-
+bination recurs, this scheme throttles execution to prevent
+another emergency. The prediction accuracy of this simple
+scheme is poor, translating to large amounts of unnecessary
+throttling that severely degrades performance. Large over-
+heads limit performance gain to only 4.1% with this method.
+
+Ideal sensor. Still using a 4% operating margin as the hard
+lower operating voltage margin, we evaluate sensor-based
+schemes for two soft voltage threshold settings, a conserva-
+tive threshold of 2% and an aggressive one of 3%. We opti-
+
+mistically assume a 0-cycle sensor delay and that all emer-
+gencies that would occur after crossing the soft threshold are
+prevented. Note that an actual sensor would have a delay of
+several cycles and so would give poorer performance results.
+Despite the optimistic assumptions, performance gains for
+the the 2% and 3% soft thresholds are only 2.2% and 9.0%,
+respectively. These low gains are due to the high fraction
+of benign soft threshold crossings that lead to unnecessary
+throttling penalties, shown earlier in Figure 2(b).
+Explicit checkpoint and recovery. Gupta et al. propose
+the use of checkpointing speciﬁcally for the purpose of han-
+dling voltage emergencies [9]. They demonstrate that ex-
+plicit checkpoint-recovery schemes cannot be directly ap-
+plied to handling voltage emergencies due to their high roll-
+back costs. Our results conﬁrm their claim. We observe a
+13% performance loss when using an explicit checkpoint-
+recovery mechanism that has a 100-cycle rollback penalty.
+Delayed commit and rollback. To overcome limitations
+of explicit checkpoint-recovery, Gupta et al. propose an
+implicit checkpointing scheme called DeCoR that specula-
+tively buffers register ﬁle and memory updates until it has
+been veriﬁed that no emergency has occurred during a pe-
+riod long enough to detect an emergency [9]. The commit
+proceeds as usual unless an emergency is detected, in which
+case the machine rolls back and resumes execution at a throt-
+tled pace. We assume a 5-cycle sensor delay for DeCoR,
+which represents the best case as demonstrated by its de-
+signers.
+
+DeCoR’s performance gain is 13.0%, so our signature-
+based predictor outperforms it, but only slightly. How-
+ever, the beneﬁts of using a signature-based predictor out-
+weigh using DeCoR for a general-purpose processor design.
+DeCoR’s implicit checkpointing requires changes to tradi-
+tional microarchitectural structures. In comparison, coarse-
+grained checkpoint-recovery is already shipping in produc-
+tion systems [1, 26] and can serve multiple purposes ranging
+from boosting processor performance [15,16,27] to fault de-
+tection [25] and debugging [19]. A signature-based predic-
+tor leverages the coarse-grained checkpoint-recovery hard-
+ware, thereby retaining all the beneﬁts of coarse-grained
+checkpoint-recovery while also reducing voltage emergen-
+cies.
+Issue-rate staggering. Pipeline mufﬂing [20, 23] and a
+ﬂoor-plan aware di/dt controller [17] both stagger issue rates
+to combat cycle-to-cycle high-frequency noise within indi-
+vidual microarchitectural units. In contrast, this paper con-
+siders inductive noise in the mid-frequency (10-100MHz)
+range that impacts the entire chip over periods of tens of
+cycles. As discussed in [23], issue-ramping strategies are
+not suitable for mid-frequency noise because ramping cur-
+rent over such a large number of cycles is not practical; these
+strategies are thus orthogonal to our approach.
+
+6.2. Proof-of-Concept Implementation
+Up to this point we assume unbounded resources for match-
+ing voltage emergency signatures. In this section, we show
+
+27
+
+one way to implement a resource constrained predictor.
+Our implementation combines a content-addressable mem-
+ory (CAM) with a Bloom ﬁlter. We discuss why this com-
+bination is more efﬁcient than a CAM or a Bloom ﬁlter by
+itself. Using a 8KB table, we observe a performance gain
+of 11.1%, as compared to the 13.5% gain for the unbounded
+predictor (described in Section 6.1).
+Prediction table. A prediction table is a hardware struc-
+ture for recognizing voltage emergency signatures. Lookups
+in the prediction table happen whenever the processor up-
+dates the contents of the event history register. The proces-
+sor combines the event sequence from the history register
+with the address of the last issued branch instruction to form
+a signature, and then tries to match that signature in the pre-
+diction table. If the match succeeds, the processor throttles
+execution to prevent a potential emergency. We assume the
+prediction table is managed by ﬁrmware.2 When an emer-
+gency occurs, the ﬁrmware makes a signature by combining
+the contents of the event history register with the most re-
+cently issued branch address and enters it in the prediction
+table.
+CAM. A CAM is a natural structure for implementing a
+prediction table. However, our analysis shows that at least
+8,000 entries would be needed to achieve good performance.
+At 16 bytes per entry, such a large CAM would require too
+much area and power. With a smaller CAM, capacity misses
+could prevent emergencies from being detected, which could
+lead to severe rollback penalties.
+Bloom ﬁlter. A Bloom ﬁlter is a compact lookup structure
+that saves space, but may sometimes return a false match. It
+is a probabilistic hash table that maps keys to boolean val-
+ues, implemented using a bit vector and k hash functions.
+The procedure to add a key to the Bloom ﬁlter hashes the
+key k ways and sets the bits in the bit vector correspond-
+ing to the k indices returned by the hash functions. A key
+matches in the Bloom ﬁlter if and only if the bits for all k
+indices hashed from that key are set. With some probabil-
+ity, all of the indices for a key that has never been entered
+may nevertheless be set, in which case matching that key
+produces a false positive result.
+
+For our purposes, false positives can be tolerated be-
+cause they only affect performance, not correctness. How-
+ever, we ﬁnd that a Bloom ﬁlter by itself needs to be quite
+large to give acceptable performance. Smaller Bloom ﬁl-
+ters have higher false positive rates, and the resulting un-
+necessary throttling severely degrades performance. While
+a 64KB Bloom ﬁlter could yield a performance gain compa-
+rable to our unconstrained signatured-based predictor, that
+for a Bloom ﬁlter of a more practical size, such as 8KB, falls
+to less than 2%.
+CAM plus Bloom ﬁlter. By screening the anchor PC com-
+ponents of signatures using a CAM, we can reduce the num-
+
+2The use of ﬁrmware to manage the prediction table is consistent with
+systems in which ﬁrmware manages energy and deals with processor design
+errors [5,18,24,28]. Firmware implementation details are beyond the scope
+of this paper.
+
+(cid:0)(cid:2)
+
+(cid:3)(cid:2)
+
+(cid:4)(cid:2)
+
+(cid:5)(cid:2)
+
+(cid:2)
+
+(cid:9)
+
+(cid:10)
+(cid:11)
+(cid:18)
+(cid:17)
+(cid:11)
+(cid:16)
+(cid:15)
+(cid:11)
+(cid:14)
+(cid:13)
+
+(cid:12)
+(cid:11)
+(cid:10)
+(cid:10)
+(cid:8)
+(cid:6)
+
+(cid:9)
+
+(cid:0)(cid:2)
+
+(cid:0)(cid:3)
+
+(cid:2)
+
+(cid:3)
+
+(cid:8)
+
+(cid:9)
+(cid:7)
+(cid:6)
+(cid:4)
+
+(cid:24)(cid:29)(cid:3)
+(cid:24)(cid:29)(cid:0)
+(cid:24)(cid:29)(cid:0)(cid:3)
+
+(cid:5)
+
+(cid:2)
+(cid:5)
+
+(cid:2)
+(cid:4)
+
+(cid:2)
+(cid:3)
+
+(cid:2)
+(cid:0)
+
+(cid:2)
+(cid:19)
+
+(cid:2)
+(cid:20)
+
+(cid:2)
+(cid:21)
+
+(cid:2)
+(cid:22)
+
+(cid:2)
+(cid:23)
+
+(cid:2)
+(cid:2)
+(cid:5)
+
+(cid:24)(cid:25)(cid:15)(cid:11)(cid:10)(cid:25)(cid:26)(cid:27)(cid:12)
+
+(a)
+
+(cid:12)
+(cid:11)
+(cid:10)
+
+(cid:12)
+(cid:11)
+(cid:13)
+
+(cid:12)
+(cid:11)
+(cid:14)
+
+(cid:12)
+(cid:11)
+(cid:15)
+(cid:0)
+
+(cid:12)
+(cid:11)
+(cid:10)
+(cid:16)
+
+(cid:17)(cid:18)(cid:19)(cid:20)(cid:8)(cid:21)(cid:22)(cid:8)(cid:23)(cid:9) (cid:24)(cid:7)(cid:25)(cid:26)(cid:19) (cid:27)(cid:8)(cid:28)(cid:19)
+
+(b)
+
+Figure 8: The effect of threshold value (T ) on (a) the fraction of emergen-
+cies not handled by the predictor and (b) performance gains when voltage
+margin is reduced from a conservative 13% to an aggressive 4% setting.
+
+ber of lookups in the Bloom ﬁlter, which reduces the num-
+ber of times false positives cause throttling. In our exper-
+iments we observe that the working set of anchor PCs is
+small enough that a CAM is practical. Sizing the CAM ap-
+propriately is important, however, because capacity misses
+allow emergencies to happen, which leads to rollbacks. At
+CAM sizes of 32 and 64 entries, our results show that roll-
+back penalties reduce performance gains by as much as 50%
+and 10%, respectively. But with a 128-entry CAM, the per-
+formance loss due to capacity misses is negligible.
+
+Thresholds. The other way to reduce false positives is to
+keep the occupancy of the Bloom ﬁlter low. That can be
+done by excluding the less frequently occurring emergency
+signatures. The trade-off is that with higher thresholds, we
+miss more emergencies and incur more rollback costs. The
+ﬁrmware that manages the prediction table could at the same
+time proﬁle signature occurrences and exclude those signa-
+tures whose occurrence counts fall below a chosen threshold.
+To investigate the effects of thresholds, we used a predic-
+tion table combining a 128-entry CAM (one 32-bit address
+per entry) with a Bloom ﬁlter that uses three hash functions.
+Figure 8(a) shows that a threshold of one captures all but
+2.8% of all emergencies. Larger thresholds cause so many
+emergencies to be missed that performance degradation due
+to rollbacks is severe.
+
+Figure 8(b) shows the performance gains with different
+prediction table sizes for a variety of threshold values. For
+small table sizes, a higher threshold yields better perfor-
+mance because it reduces the false positive rate. With a 2KB
+prediction table size, performance gain is only 0.8% without
+a threshold (T=0). But a threshold of T=10 reduces throt-
+tles caused by false positives so much that performance gain
+increases to 7.3%, despite increased rollback penalties. On
+the other hand, as table size grows, the false positive rate
+drops so that lower thresholds are more attractive. With an
+8KB prediction table size, performance gain for a threshold
+of T=10 is 3 percentage points less than that for a thresh-
+old of T=1, because false positives are reduced so much that
+rollback penalties dominate. With T=1 (which simply ex-
+cludes all non-recurring emergency signatures), the perfor-
+
+28
+
+mance gain for an 8KB table is 11.1%, as compared to the
+13.5% gain for the unbounded prediction table described in
+Section 6.1.
+
+7. Summary and Conclusions
+With continued technology scaling, the inductive noise prob-
+lem is an increasingly important design challenge. Several
+architectural solutions have been proposed in the past to deal
+with inductive noise in processors. However, these solutions
+either have trouble guaranteeing correctness or they incur
+severe performance penalties. This paper proposes a novel
+voltage emergency predictor that learns to predict recurring
+voltage emergencies by collecting signatures of the program
+behavior and processor activity that leads to such emergen-
+cies. Our proposed predictor-based architecture uses the col-
+lected signatures to anticipate emergencies and proactively
+avoid them via throttling, while relying on a checkpoint-
+restart fall-back scheme already available in today’s produc-
+tion systems to train the throttling predictor. Our signature-
+based voltage emergency predictor operates independently
+of sensor delays, package characteristics, and microarchi-
+tecture details, and it enables operation at aggressive volt-
+age margins without compromising correctness. With an ag-
+gressive margin of 4%, it can enable a performance gain of
+as much as 13.5%, compared to 14.2% for an ideal oracle-
+based throttling mechanism.
+
+Acknowledgments
+We are thankful to our colleagues in industry and academia
+for the many discussions that have contributed to this work.
+We are also grateful to the anonymous reviewers for their
+comments and suggestions. This work is supported by gifts
+from Intel Corporation, and National Science Foundation
+grants CCF-0429782 and CSR-0720566. Any opinions,
+ﬁndings, conclusions, or recommendations expressed in this
+material are those of the authors and do not necessarily re-
+ﬂect the views of the NSF.
+
+References
+[1] H. Ando and et al. A 1.3 GHz Fifth-Generation SPARC64 Micropro-
+
+cessor. In In Proceedings of Design Automation Conference, 2003.
+
+[2] K. Aygun, M. J. Hill, K. Eilert, R. Radhakrishnan, and A. Levin.
+Power Delivery for High-Performance Microprocessors. Intel Tech-
+nology Journal, 9, 2005.
+
+[3] K. A. Bowman, J. W. Tschanz, N. S. Kim, J. Lee, C. B. Wilkerson,
+S.-L. Lu, T. Karnik, and V. De. Energy-efﬁcient and metastability-
+immune timing-error detection and instruction replay-based recovery
+circuits for dynamic variation tolerance. In ISSCC 2008, 2008.
+
+[4] D. Brooks, V. Tiwari, and M. Martonosi. Wattch: a Framework for
+Architectural-level Power Analysis and Optimizations. In 27th An-
+nual International Symposium on Computer Architecture, 2000.
+
+[5] K. Constantinides, O. Mutlu, T. Austin, and V. Bertacco. Software-
+based online detection of hardware defects: Mechanisms, architec-
+tural support, and evaluation. In MICRO 2007, 2007.
+
+[6] E. Grochowski, D. Ayers, and V. Tiwari. Microarchitectural Simula-
+tion and Control of di/dt-induced Power Supply Voltage Variation. In
+Int’l Symposium on High-Performance Computer Architecture, 2002.
+[7] M. S. Gupta, J. L. Oatley, R. Joseph, G.-Y. Wei, and D. M. Brooks.
+Understanding voltage variations in chip multiprocessors using a dis-
+tributed power-delivery network. In DATE, 2007.
+
+29
+
+[8] M. S. Gupta, K. Rangan, M. D. Smith, G.-Y. Wei, and D. M. Brooks.
+Towards a Software Approach to Mitigate Voltage Emergencies. In
+ISLPED ’07, 2007.
+
+[9] M. S. Gupta, K. Rangan, M. D. Smith, G.-Y. Wei, and D. M. Brooks.
+DeCoR: A Delayed Commit and Rollback Mechanism for Handling
+Inductive Noise in Processors. In HPCA ’08, 2008.
+
+[10] M. S. Gupta, V. J. Reddi, M. D. Smith, G.-Y. Wei, and D. M. Brooks.
+An event-guided approach to handling inductive noise in processors.
+In DATE, 2009.
+
+[11] Intel.
+
+Intel Pentium 4 Processor in the 423 Pin/Package /Intel 850
+
+Chipset Platform, 2002.
+
+[12] N. James, P. Restle, J. Friedrich, B. Huott, and B. McCredie. Com-
+parison of Split-Versus Connected-Core Supplies in the POWER6 Mi-
+croprocessor. In ISSCC 2007, 2007.
+
+[13] R. Joseph, D. Brooks, and M. Martonosi. Control Techniques to Elim-
+inate Voltage Emergencies in High Performance Processors. In Int’l
+Symposium on High-Performance Computer Architecture, 2003.
+
+[14] W. Kim, M. S. Gupta, G.-Y. Wei, and D. Brooks. System level analy-
+sis of fast, per-core dvfs using on-chip switching regulators. In HPCA,
+2007.
+
+[15] N. Kirman, M. Kirman, M. Chaudhuri, and J. Martinez. Checkpointed
+Early Load Retirement. In HPCA ’05: Proceedings of the 11th In-
+ternational Symposium on High-Performance Computer Architecture,
+2005.
+
+[16] J. F. Mart´ınez, J. Renau, M. C. Huang, M. Prvulovic, and J. Torrel-
+las. Cherry: Checkpointed Early Resource Recycling in Out-of-order
+Microprocessors. In International Symposium on Microarchitecture
+(MICRO), 2002.
+
+[17] F. Mohamood, M. Healy, S. Lim, and H.-H. S. Lee. A Floorplan-
+Aware Dynamic Inductive Noise Controller for Reliable Processor
+Design. In MICRO, 2006.
+
+[18] S. Narayanasamy, B. Carneal, and B. Calder. Patching processor de-
+
+sign errors. In ICCD, 2006.
+
+[19] S. Narayanasamy, G. Pokam, and B. Calder. BugNet: Continuously
+Recording Program Execution for Deterministic Replay Debugging.
+In ISCA ’05: Proceedings of the 32nd Annual International Sympo-
+sium on Computer Architecture, 2005.
+
+[20] M. D. Pant, P. Pant, D. S. Wills, and V. Tiwari. An architectural solu-
+tion for the inductive noise problem due to clock-gating. In ISLPED,
+1999.
+
+[21] E. Perelman, G. Hamerly, M. V. Biesbrouck, T. Sherwood, and
+B. Calder. Using simpoint for accurate and efﬁcient simulation. In
+SIGMETRICS ’03, New York, NY, USA, 2003. ACM.
+
+[22] M. Powell and T. N. Vijaykumar. Exploiting Resonant Behavior to
+
+Reduce Inductive Noise. In ISCA, 2004.
+
+[23] M. D. Powell and T. N. Vijaykumar. Pipeline mufﬂing and a priori
+current ramping: architectural techniques to reduce high-frequency
+inductive noise. In Int’l Symposium on Low Power Electronics and
+Design, 2003.
+
+[24] S. Sarangi, S. Narayanasamy, B. Carneal, A. Tiwari, B. Calder, and
+J. Torrellas. Patching processor design errors with programmable
+hardware. IEEE Micro, 2007.
+
+[25] S. Shyam, K. Constantinides, S. Phadke, V. Bertacco, and T. Austin.
+Ultra Low-Cost Defect Protection for Microprocessor Pipelines.
+ASPLOS-XII, 2006.
+
+[26] T. J. Slegel, R. M. A. III, M. A. Check, B. C. Giamei, B. W. Krumm,
+C. A. Krygowski, W. H. Li, J. S. Liptay, J. D. MacDougall, T. J.
+McPherson, J. A. Navarro, E. M. Schwarz, K. Shum, and C. F. Webb.
+Ibm’s s/390 g5 microprocessor design. IEEE Micro, 19, 1999.
+
+[27] D. J. Sorin, M. M. K. Martin, M. D. Hill, and D. A. Wood. Fast Check-
+point/Recovery to Support Kilo-instruction Speculation and Hard-
+ware Fault Tolerance. Computing science technical report, University
+of Wisconsin-Madison, 2000.
+
+[28] I. Wagner, V. Bertacco, and T. Austin. Shielding against design ﬂaws
+
+with ﬁeld repairable control logic. In IEEE/ACM DAC, 2006.
+
+[29] N. J. Wang and S. J. Patel. ReStore: Symptom-Based Soft Error De-
+tection in Microprocessors. IEEE Trans. Dependable Secur. Comput.,
+3(3), 2006.
+
+[30] W. Zhao and Y. Cao. Predictive technology model for sub-45nm early
+
+design exploration. ACM JETC.
+
+

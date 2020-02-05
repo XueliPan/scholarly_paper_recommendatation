@@ -1,0 +1,2289 @@
+Estimating Query Result Sizes for Proxy Caching in Scientiﬁc
+
+Database Federations
+
+Tanu Malik, Randal Burns(cid:3)
+
+Nitesh V. Chawla†
+
+Alex Szalay‡
+
+Dept. of Computer Science
+Johns Hopkins University
+
+Baltimore, MD 21218
+
+Dept. of Computer Science and Engg.
+
+Dept. of Physics and Astronomy
+
+University of Notre Dame
+
+Notre Dame, IN 46556
+
+Johns Hopkins University
+
+Baltimore, MD 21218
+
+Abstract
+
+grow to include 120 sites in 2007.
+
+In a proxy cache for federations of scientiﬁc databases it
+is important to estimate the size of a query before making
+a caching decision. With accurate estimates, near-optimal
+cache performance can be obtained. On the other extreme,
+inaccurate estimates can render the cache totally ineffective.
+
+We present classiﬁcation and regression over templates
+(CAROT), a general method for estimating query result
+sizes, which is suited to the resource-limited environment
+of proxy caches and the distributed nature of database fed-
+erations. CAROT estimates query result sizes by learning
+the distribution of query results, not by examining or sam-
+pling data, but from observing workload. We have integrated
+CAROT into the proxy cache of the National Virtual Ob-
+servatory (NVO) federation of astronomy databases. Exper-
+iments conducted in the NVO show that CAROT dramat-
+ically outperforms conventional estimation techniques and
+provides near-optimal cache performance.
+
+Keywords: proxy caching, data mining, scientiﬁc federa-
+tions
+
+1 Introduction
+
+The National Virtual Observatory (NVO) is a globally-
+distributed, multi-Terabyte federation of astronomical
+databases. It is used by astronomers world-wide to conduct
+data-intensive multi-spectral and temporal experiments and
+has lead to many new discoveries [Szalay et al. 2002]. At its
+present size – 16 sites – network bandwidth bounds perfor-
+mance and limits scalability. The federation is expected to
+
+(cid:3)e-mail: tmalik@cs.jhu.edu,randal@cs.jhu.edu
+†e-mail:nchawla@cse.nd.edu
+‡e-mail:szalay@jhu.edu
+
+Permission to make digital or hard copies of all or part of this work for
+personal or classroom use is granted without fee provided that copies are
+not made or distributed for proﬁt or commercial advantage and that copies
+bear this notice and the full citation on the ﬁrst page. To copy otherwise, to
+republish, to post on servers or to redistribute to lists, requires prior speciﬁc
+permission and/or a fee.
+
+SC2006 November 2006, Tampa, Florida, USA
+0-7695-2700-0/06 $20.00 c(cid:13)2006 IEEE
+
+Proxy caching [Cao and Irani 1997; Amiri et al. 2003] can re-
+duce the network bandwidth requirements of the NVO and,
+thus, is critical for achieving scale.
+In previous work, we
+demonstrated that bypass-yield (BY) caching [Malik et al.
+2005] can reduce the bandwidth requirements of the Sloan
+Digital Sky Survey [SDSS ] by a factor of ﬁve. SDSS
+is a principal site of the NVO. Proxy caching frameworks
+for scientiﬁc databases, such as bypass-yield caching, repli-
+cate database objects, such as columns (attributes), tables,
+or views, near clients so that queries to the database may
+be served locally, reducing network bandwidth requirements.
+BY caches load and evict the database objects based on their
+expected yield:
+the size of the query results against that
+object or, equivalently, the network savings realized from
+caching the object. The ﬁve-fold reduction in bandwidth is
+an upper bound, realized when the cache has perfect, a pri-
+ori knowledge of query result sizes. In practice, a cache must
+estimate yield.
+
+Similar challenges are faced by distributed applications
+which rely on accurate estimation of query result sizes.
+Other examples include load balancing [Poosala and Ioan-
+nidis 1996], replica maintenance [Olston et al. 2001; Ol-
+ston and Widom 2002], grid computing [Seraﬁni et al. 2001],
+Web caching [Amiri et al. 2003], and distributed query op-
+timization [Ambite and Knoblock 1998]. In many such ap-
+plications, estimation is largely ignored; estimation is an or-
+thogonal issue and any accurate technique is assumed to be
+sufﬁcient.
+
+Existing techniques for yield estimation do not translate to
+proxy caching for scientiﬁc databases. Databases estimate
+yield by storing a small approximation of data distribution in
+an object. There are several obstacles to learning and main-
+taining such approximations in caches. First, proxy caches
+are situated closer to clients, implying that a cache learns
+distributions on remote data. Generating approximations in-
+curs I/O at the databases and network trafﬁc for the cache,
+reducing the beneﬁt of caching. Caches and databases are
+often in different organizational domains and the require-
+ments for autonomy and privacy in federations are quite
+stringent [Sheth and Larson 1990]. Second, a cache is a con-
+strained resource in terms of storage. Thus, data structures
+for estimation must be compact. Finally, scientiﬁc queries
+
+are complex and refer to many database attributes and join
+multiple tables. Traditional database methods typically per-
+form poorly in such cases – they assume independence while
+building yield estimates from the component object data dis-
+tributions. For such workloads, it is important to learn ap-
+proximations of the joint data distribution of objects.
+
+techniques exist for learning approxi-
+Several statistical
+mate data distributions.
+These include sampling, his-
+tograms [Poosala and Ioannidis 1996], wavelets [Chakrabarti
+et al. 2000; Vitter and Wang 1999], and kernel density es-
+timators [Gunopulos et al. 2000]. These techniques are
+considered in the context of query optimization within a
+database. Therefore, complete access to data is always as-
+sumed. Further, most of these techniques are not sufﬁciently
+compact when learning distributions for combinations of
+objects. For example, for histograms – the most popular
+method – the storage overhead and construction cost increase
+exponentially with the number of combinations [Vitter and
+Wang 1999].
+
+We depart from current solutions and make yield estimates
+by learning the distribution of result sizes directly; we do not
+access data, nor do we attempt to estimate the underlying
+object distributions. A fundamental workload observation
+makes this possible. Queries in astronomy workloads follow
+templates, in which a template is formed by grouping query
+statements based on syntactic similarity. Queries within the
+same template have the same structure against the same set
+of attributes and relations; they differ in minor ways, using
+different constants and operators. Templates group workload
+into query families. The results size distributions of these
+families may be learned accurately by data mining the ob-
+served workload: queries in a template and the size of the
+results.
+
+Our use of templates matches well with modern database ap-
+plications in which forms and prepared statements are used
+to interrogate a database [Amiri et al. 2003; Luo and Xue
+2004], resulting in queries within the same template. Sci-
+entiﬁc domains also include user-written queries. A user-
+written query is a scientiﬁc program which repeats a ques-
+tion on different databases or over different parts of a single
+database. This is remarkably exhibited by SDSS workload
+in which a month long workload of 1.4 million queries (both
+form-based and user-written) can be captured by 77 tem-
+plates, and the top 15 templates capture 87% of all queries.
+Thus, it is sufﬁcient for a BY cache to learn a template yield
+distribution, rather than learning distributions of thousands
+of objects plus their combinations.
+
+We call our system for estimating yield classiﬁcation and re-
+gression over templates (CAROT). From query statements
+and results within a template, CAROT learns a yield distri-
+bution through the machine learning techniques of classiﬁ-
+cation trees and regression. Classiﬁcation trees learn the dis-
+tribution crudely and regression reﬁnes it. Future queries to
+
+the same template are estimated from a learned yield dis-
+tribution and are also used to re-evaluate the yield distribu-
+tion.
+If required, they tune the learned model. The com-
+putational complexity of both classiﬁcation trees and regres-
+sion is very low, allowing CAROT to generate and update
+learning models quickly and asynchronously. The sizes of
+learned models in CAROT vary from tens to hundreds of
+kilobytes allowing them to ﬁt entirely in memory, making
+CAROT extremely space efﬁcient. Through its use of tem-
+plates, CAROT captures queries that refer to multiple ob-
+jects, enabling CAROT to estimate complex queries accu-
+rately, e.g. multi-dimensional range queries and user-deﬁned
+functions.
+
+Extensive experimental results on the BY caching frame-
+work show that CAROT outperforms other techniques sig-
+niﬁcantly in terms of accuracy and meets the requirements on
+compactness and data-access independence. On the SDSS
+workload, BY caching plus CAROT achieves savings within
+5% of optimal, as compared to 45% with the Microsoft SQL
+optimizer, which uses histograms and reﬁnement [Ioannidis
+2003]. We include: an analysis of the SDSS workload, re-
+sults that show CAROT to be compact and fast, and a de-
+tailed comparison of CAROT and the optimizer on prevalent
+queries.
+
+2 Related Work
+
+The performance of BY caches depends critically upon ac-
+curate query result size estimates. This is also true for query
+optimizers. Query optimizers choose the most efﬁcient
+query execution plan based on cost estimates of database op-
+erators. Query optimizers rely on statistics obtained from
+the underlying database system to compute these estimates.
+In this section, we review the prominent statistical methods
+used by query optimizers for cost estimation and consider
+their applicability within BY caches.
+
+Previous work for estimation in query optimizers can be
+classiﬁed in four categories [Chen and Roussopoulos 1994],
+namely non-parametric, parametric, sampling and curve-
+ﬁtting. We ﬁrst consider data dependent methods within each
+category. Non-parametric approaches [Poosala et al. 1996;
+Gunopulos et al. 2000; Ioannidis 2003] are mainly histogram
+based. Histograms approximate the frequency distribution of
+an object by grouping object values into “buckets” and ap-
+proximate values and frequencies in each bucket. Paramet-
+ric methods [Selinger et al. 1979; Christodoulakis 1983] as-
+sume that object data is distributed according to some known
+functions such as uniform, normal, Poisson, Zipf, etc. These
+methods are accurate only if the actual data also follows one
+of the distributions. Sampling based approaches [Lipton and
+Naughton 1995] randomly sample object data to obtain accu-
+rate estimates. Curve-ﬁtting approaches [W. Sun and Deng
+1993; Chen and Roussopoulos 1994] assume data distribu-
+
+tion to be a polynomial that is a linear combination of model
+functions and use regression to determine the coefﬁcients of
+the polynomial.
+
+All the above approaches require access to data. Recently,
+curve-ﬁtting methods and histograms have been improved to
+include query feedback, i.e., the result of a query after being
+executed.
+
+Chen and Roussopoulos [Chen and Roussopoulos 1994] ﬁrst
+suggested the idea of using query feedback to incremen-
+tally reﬁne coefﬁcients of a curve ﬁtting approach. Their
+approach is useful when distributions are learned on single
+objects and the data follows some smooth distribution. Nei-
+ther of these assumptions are valid for BY caches in which
+cache requests refer to multiple objects and arbitrary data
+sets have to be approximated. In the same context, Harangsri
+et al [Harangsri et al. 1997] used regression trees, instead of a
+curve ﬁtting approach. Their approach is also limited to sin-
+gle objects. Further, it remains an open problem if one can
+ﬁnd model functions for a combination of objects [Aboul-
+naga and Chaudhuri 1999].
+
+Aboulnaga and Chaudhari [Aboulnaga and Chaudhuri 1999]
+use the query feedback approach to build self-tuning his-
+tograms. The attribute ranges in predicate clauses of a query
+and the corresponding result sizes are used to select buckets
+and reﬁne frequency of histograms initialized using unifor-
+mity assumption. Both single and multi-dimensional (m-d)
+histograms can be constructed by this method. Higher ac-
+curacy on m-d histograms is obtained by initializing them
+from accurate single dimensional histograms. However the
+latter can only be obtained by scanning data, making such
+approaches data dependent. The other approach of ini-
+tializing m-d histograms with uniformly-distributed, single-
+dimensional histograms involves expensive restructuring and
+converges slowly. Further, the method is limited to range
+queries and does not generalize when the attributes are, for
+example, user-deﬁned functions. STHoles [Bruno et al.
+2001] improves upon self-tuning histograms, but is subject
+to the same limitations. Workload information has also been
+incorporated by LEO [Stillger et al. 2001] and SIT [Bruno
+and Chaudhuri 2002] in order to reﬁne inaccurate estimates
+of the query optimizers. These approaches are closely tied
+to the query optimizer and, thus, are not applicable to the
+caching environment.
+
+CXHist [Lim et al. 2005] builds workload-aware histograms
+for selectivity estimation on a broad class of XML string-
+based queries. XML queries are summarized into feature
+distributions, and their selectivity quantized into buckets. Fi-
+nally, they use naive Bayes classiﬁers to compute the bucket
+to which a query belongs. The naive Bayes approach as-
+sumes conditional independence among the features within a
+bucket. Conditional independence does not hold in scientiﬁc
+workloads, such as the SDSS. Astronomy consists of highly
+correlated spatial data. Assuming independence among spa-
+
+Server
+
+Cache 
+
+WAN 
+
+LAN
+
+DL
+
+BD
+
+CD
+
+Client
+
+AD
+
+Figure 1: Network Flows in a Client-Server Pair Using
+Bypass-Yield Caching
+
+tial attributes leads to incorrect estimates in regions without
+data.
+
+In CAROT, we use a curve-ﬁtting approach. But instead, of
+approximating the frequency distribution of the data, we ap-
+proximate the yield function in the parameter space, in which
+parameters are obtained from query statements. For the spe-
+ciﬁc case of multi-dimensional range queries, this reduces
+to approximating the cumulative frequency distribution as a
+piece-wise linear function, in which the pieces are decided
+from decision trees and regression learns the linear function.
+
+3 Yield Estimation in BY Caches
+
+In this section, we describe the architecture of the bypass-
+yield cache, the use of query result size estimates in cache
+replacement algorithms, and metrics which deﬁne the net-
+work performance of the system. Then, we highlight proper-
+ties of BY caches that make yield estimation challenging.
+
+3.1 The BY Cache Application
+
+The bypass-yield cache is a proxy cache, situated close to
+clients. For each user query, the BY cache evaluates whether
+to service the query locally, loading data into the cache,
+versus shipping each query to be evaluated at the database
+server. The latter is a bypass query, because the query and
+its results circumvent the cache and do not change its con-
+tents. By electing to bypass some queries, caches minimize
+the total network cost of servicing all the queries. Figure 1
+shows the architecture in which the network trafﬁc mini-
+mized (WAN) is the bypass ﬂow from a server directly to
+a client DB, plus the trafﬁc to load objects into the cache DL.
+The client application sees the same query result data DA for
+all caching conﬁgurations, i.e., DA = DB + DC, in which DC
+is the trafﬁc from the queries served out of the local cache.
+
+In order to minimize the WAN trafﬁc, a BY cache manage-
+ment algorithm makes an economic decision analogous to
+the rent-or-buy problem [Fujiwara and Iwama 2002]. Algo-
+rithms choose between loading (buying) an object and ser-
+vicing queries for that object in the cache versus bypassing
+the cache (renting) and sending queries to be evaluated at
+
+sites in the federation. (Recall that objects in the cache are
+tables, columns or views.) Since objects are much larger
+than query results or, equivalently, buying is far more costly
+than renting, objects are loaded into the cache only when
+the cache envisions long-term savings. At the heart of a
+cache algorithm is byte yield hit rate (BYHR), a savings rate,
+which helps the cache make the load versus bypass decision.
+BYHR is maintained on all objects in the system regardless
+of whether they are in cache or not. BYHR is deﬁned as
+
+Yield
+
+Estimate
+
+I
+
+R
+E
+Z
+M
+T
+P
+O
+
+I
+
+DB
+
+SERVER
+
+Bypass Query/ 
+Load Object
+
+WAN
+
+LAN
+
+Query
+
+Client
+
+Result
+
+BYPASS YIELD CACHE
+
+BYHR (cid:17) (cid:229)
+
+pi; jyi; j fi
+
+2
+
+si
+
+j
+
+(1)
+
+Query
+
+Yield
+
+Estimate
+
+for an object oi of size si and fetch cost fi accessed by queries
+Qi with each query qi; j 2 Qi occurring with probability pi; j
+and yielding yi; j bytes.
+Intuitively, BYHR prefers objects
+for which the workload yields more bytes per unit of cache
+space. BYHR measures the utility of caching an object (ta-
+ble, column, or view) and measures the rate of network sav-
+ings that would be realized from caching that object. BY
+cache performance depends on accurate BYHR, which, in
+turn, requires accurate yield estimates of incoming queries.
+(The per object yield yi; j is a function of the yield of the in-
+coming query.)
+
+3.2 Challenges
+
+BY caching presents a challenging environment for the im-
+plementation of a yield estimation technique. An estima-
+tion technique, even if accurate, can adversely affect per-
+formance in terms of both resource usage and minimizing
+overall network trafﬁc. We describe below some of the main
+challenges.
+
+Limited Space: Caches provide a limited amount of space
+for metadata. Overly large metadata has direct consequences
+on the efﬁciency of a cache [Drewry et al. 1997] and con-
+sumes storage space that could otherwise be used to hold
+cached data. Therefore, metadata for yield estimation must
+be concise.
+
+Remote Data: The BY cache acts as a proxy, placed near
+the clients and far from servers. This automatically creates
+an access barrier between the cache and the server. Man-
+agement boundaries create privacy concerns making it difﬁ-
+cult to access the databases to collect statistics on data. The
+data is mostly accessed via a Web services interface. Fur-
+ther, a cache may choose not to invest its resources in the
+I/O-intensive process of collecting statistics on data [Chen
+and Roussopoulos 1994].
+
+Variety of Queries: BY caching serves scientiﬁc workloads
+which consist of complex queries. A typical query contains
+multiple clauses, specifying multi-dimensional ranges, mul-
+tiple joins, and user-deﬁned functions. A yield estimation
+technique should be general. Speciﬁcally, it should not as-
+sume independence between clauses to estimate the yield.
+
+Result Size
+Feedback
+
+Group
+Queries
+
+Collect Qry
+Parameters
+
+Learn
+Distribution
+(Classify +
+Regress)
+
+CAROT
+
+Figure 2: Estimating Yield in a BY Cache
+
+4 CAROT
+
+We describe CAROT (Section 4.1), the yield estimation tech-
+nique used by the BY cache for most queries (Figure 2).
+CAROT groups similar queries together and then learns the
+yield distribution in each group. To learn the distribution,
+CAROT uses query parameters and query results as inputs,
+i.e., it does not collect samples from data to learn the dis-
+tribution. CAROT uses the machine learning techniques of
+classiﬁcation and regression, which result in concise and ac-
+curate models of the yield distribution. The yield model in
+CAROT is self-learning. When a query arrives, CAROT es-
+timates its yield using the model. When the query is exe-
+cuted, the query parameters and its result together update the
+model. This results in feedback-based, incremental model-
+ing of the yield distribution. In Section 4.2 we illustrate the
+learning process in CAROT using a real-world example from
+Astronomy.
+
+In order to provide accurate estimates for all queries,
+CAROT occasionally prefers an estimate from the database
+optimizer in favor of its own estimate (Section 4.3). This
+happens for (1) queries in templates for which enough train-
+ing data has not been collected to learn a distribution, and
+(2) queries in which the database has speciﬁc information
+that gives it advantage, e.g., uniqueness or indexes.
+
+4.1 Estimating Query Yield from CAROT
+
+Grouping Queries: CAROT groups queries into templates.
+A template t over SPJ (Select-Project-Join) queries and user-
+deﬁned functions (UDFs) is deﬁned by: (a) the set of objects
+mentioned in the from clause of the query (objects imply ta-
+bles, views or tabular UDFs) and (b) the set of attributes and
+
+Select #
+From R
+Where R.a ?1 @1
+and   R.b ?2 @2
+
+# = {TOP,MAX}
+? = {<,>,=,!=}
+@ = {constants}
+
+Parameter Space Yield
+
+{#,?1,@1,?2,@2,    Y}
+
+{1,<,50,>,0.1,     1}
+{0,>,23,<,0.6,   250}
+{0,<,50,<,0.9,  2000}
+{0,<,68,>,0.1,   790}
+{0,<,159,>,0.3, 3890}
+
+Yield
+
+CF
+<=100     A
+101−1000  B
+>=1000    C
+
+{(p1,A),(p2,B),
+ (p3,C),p4,B),
+ (p5,C)}
+
+(a) Template and
+ its  parameters
+
+(b) Yield distribution (c) Class distribution
+
+Figure 3: Learning in CAROT
+
+UDFs occurring in the predicate expressions of the where
+clause. Intuitively, a template is like a function prototype.
+Queries belonging to the same template differ only in their
+parameters. For a given template t , the parameters (Fig-
+ure 3(a)) are: (a) constants in the predicate expressions, (b)
+operators used in the join criteria or the predicates, (c) argu-
+ments in table valued UDFs or functions in predicate clauses,
+and (d) bits which specify if the query uses an aggregate
+function in the select clause. A template does not deﬁne the
+choice of attributes in the select clause of a user query and
+the parameters of a template are those features in a query that
+inﬂuence/determine its yield.
+
+Collecting Query Parameters: The parameters of a query
+that inﬂuence its yield form a vector. Figure 3(b) shows vec-
+tors with parameters and yields from a few queries. For
+a template, the parameter space refers to all the possible
+combination of parameters, each chosen from their respec-
+tive domain. A query belonging to a template refers to one
+of these combinations and has a corresponding yield in the
+range R = (0; max(ti)), in which max(ti) is the maximum
+yield of a query in a given template, i.e., the size of a rela-
+tion for a query to a single relation and the size of the cross
+product for a join query.
+
+CAROT learns an approximate distribution of yields within
+each template. The actual yield distribution of a template t
+over n queries is the set of pairs t D = (p1; y1); (p2; y2); : : : ;
+(pn; yn), in which pi is the parameter vector of query qi, and
+yi is its corresponding yield. CAROT groups queries within
+a template into classes and learns an approximate, class
+distribution, deﬁned as t C = (p1; c1); (p2; c2); : : : ; (pn; cn) in
+which ci = CF (yi) and CF is a classiﬁcation function.
+
+Classiﬁcation and Regression: Having received n queries
+in a template, CAROT learns the class distribution using de-
+cision trees [Quinlan 1993]. Decision trees recursively parti-
+tion the parameter space into axis orthogonal partitions until
+there is exactly one class (or majority of exactly one class) in
+each partition. They do it based on information gain of pa-
+rameters so as to minimize the depth of recursion. CAROT
+uses decision trees as they are a natural mechanism for learn-
+ing a class distribution in the parameter space when indepen-
+dence among parameter values cannot be assumed.
+
+By learning t C, i.e. classes of yields, and not t D, i.e. values
+of yields, CAROT loses some information. It regains some
+of the lost information by constructing a linear regression
+function within each class. A class speciﬁc regression func-
+tion gives yield values for different queries that belong to the
+same class.
+
+Finally, CAROT uses k-means clustering as the classiﬁca-
+tion function CF in which k is the number of classes and is a
+dynamically, tunable parameter. Several techniques [Pelleg
+and Moore 2000; Hamerly and Elkan 2003] can be used as
+a wrapper over k-means to ﬁnd a suitable k from the lowest
+and highest observed yield value, or it can be chosen based
+on domain knowledge.
+
+Reﬁnement: Once the cache/server has used the estimate
+and served the query result, the size of the result is used as
+a feedback for CAROT. This feedback, combined with pa-
+rameters of the query, reﬁne the learned class distribution.
+When updating the decision tree, CAROT also updates the
+corresponding linear regression function(s). We update the
+learning model after collecting the ﬁxed n number of queries
+in a template.
+
+4.2 A Multi-Dimensional Example
+
+We illustrate CAROT using an example astronomy tem-
+plate from the SDSS workload. In particular, we show how
+CAROT accurately estimates the distribution of data in a
+combination of attributes using only queries and their re-
+sults. Figure 4(a) depicts the data distribution in a relation
+called photo that stores spatial location of astronomical bod-
+ies. The attributes photo:ra, photo:dec are spherical coor-
+dinates used by astronomers to locate an astronomical body.
+Each point in the ﬁgure corresponds to an astronomical body
+and has a spatial location given by the ra and dec attributes
+of the table. The ﬁgure shows relatively higher density of
+astronomical bodies in the top-left and bottom-right corners.
+Thus, ra and dec are not independent in this distribution.
+In other words, the joint probability is not the product of
+the individual probabilities of ra and dec. It is not possible
+to represent this distribution using a combination of single
+dimensional histograms on ra and dec. Thus, a query op-
+timizer cannot estimate yield as accurately as CAROT for
+queries from this distribution.
+
+Now we describe how CAROT learns this distribution indi-
+rectly; it learns it from queries in the workload, not data. One
+of the popular queries in astronomy involves the user-deﬁned
+function, getNearbyObject. The function is often used as:
+
+SELECT * FROM Photo p,
+
+getNearbyObject(@ra,@dec) g
+
+WHERE p.objid = g.objid
+
+in which @ra and @dec are parameters supplied by the user.
+In reality, the function takes a radius parameter as well, but
+
+photo:dec
+
+photo:dec
+
+photo:ra
+
+photo:ra
+
+(a) Data Distribution
+
+(b) Queries
+
+DEC
+
+4
+
+DEC
+
+3.5
+
+1.5
+
+1
+
+5.5
+4
+
+4.5
+
+4.5
+
+2.5
+
+4
+
+4.25
+
+2
+
+1.5
+
+4.5
+
+5
+
+4
+
+3.5
+
+4.75
+
+5.5
+
+4.5
+
+H
+
+H
+
+H
+
+H
+
+H
+
+L
+
+L
+
+H
+
+H
+
+H
+
+H
+H H
+HH
+
+L
+
+H
+
+H
+
+L
+
+L
+
+RA
+
+RA
+
+(c) Query Yields
+
+(d) Yield Classes
+
+DEC
+
+DEC
+
+H
+
+H
+
+H
+
+H
+
+H
+
+L
+
+L
+
+H
+
+H
+
+H
+
+H
+H H
+HH
+
+L
+
+H
+
+H
+
+L
+
+L
+
+RA
+
+RA
+
+(e) Decision Tree Splits
+
+(f) Regression Functions
+
+Figure 4: CAROT on SDSS Data
+
+we assume it to be constant for simplicity of showing this ex-
+ample in 2-D. Figure 4(b) shows queries matching this tem-
+plate on the data distribution. Each circle shows the neigh-
+borhood from which the objects are fetched. Figure 4(c)
+shows the same queries in the parameter space as seen at
+the BY cache, which has no knowledge of the distribution.
+Each query also has a corresponding yield – shown as the
+logarithm of the query result size in bytes – and is a function
+of the parameter @ra and @dec.
+
+The high variance in yield for queries in this template gives
+CAROT a yield distribution to learn. It learns by observing
+that some queries are high (H) in yield (logarithmic value
+greater than 3.5) and some low (L) (Figure 4(d)). It classiﬁes
+this distribution using decision trees, which split on speciﬁc
+values of RA and DEC, learning regions of purely high den-
+sity and purely low density. Figure 4(e) shows an initial split
+on a DEC and then a split on RA. The decision tree itself
+
+can be used for estimation, but we improve upon it by using
+regression. In each decision tree leaf node, we look at the
+original yield values for queries and approximate this distri-
+bution through linear regression. We show this pictorially in
+Figure 4(f). We show straight lines, although the regression
+function is a plane.
+
+4.3 Falling Back on the Optimizer
+
+To provide a consistent yield estimation service to the BY
+cache, CAROT identiﬁes circumstances in which it cannot
+provide accurate estimates and chooses the optimizers esti-
+mates in favor of its own.
+
+This arises in two situations. (1) New queries that cannot
+be grouped into existing templates are estimated at the op-
+timizer. CAROT learns the distribution after a few queries
+to a new template have occurred. Further queries are es-
+timated from the learned distribution, after which learning
+and estimation go hand-in-hand. As experiments show, such
+cases are few, given the few number of templates and the
+rapid rate of learning due to locality in queries. (2) There
+are queries that are better estimated at the optimizer. These
+include queries for which there are indexes or uniqueness
+constraints. While CAROT can learn such distributions, the
+optimizer has speciﬁc information on which to make more
+accurate estimates. In many such cases, the optimizer pro-
+duces exact answers and CAROT would expend space and
+time to learn a trivial distribution, e.g. uniqueness. In both
+cases, CAROT adopts a simple policy, it detects such queries
+from template and schema information and returns control to
+the BY cache, which obtains estimates from the database op-
+timizer.
+
+Were an optimizer not available, CAROT estimates such
+queries heuristically. For example, identity queries against
+a key ﬁeld always return one row. This will not be the case
+for the SDSS site in the NVO, for which we invoke the MS
+SQL optimizer. However, some federations may not expose
+the database optimizer interface.
+
+5 Implementing CAROT
+
+We describe how CAROT identiﬁes templates for a large
+class of queries and extracts feature vectors. While our treat-
+ment of detecting templates and extracting feature vectors
+is general, we highlight the cases that dominate the SDSS
+workload.
+
+5.1 Template Detection
+
+Queries submitted by applications often use or follow a tem-
+plate. In a template, queries are constructed from a prepared
+
+statement and parameters to queries are submitted by user
+programs, i.e., each query is an instantiation of a particular
+template. We previously argued that Web forms and applica-
+tion derived queries make templates prevalent.
+
+In CAROT, the template generator has two goals: (a) in-
+fer templates of incoming queries from a database of tem-
+plates and (b) detect new query templates from changing
+user queries. To do so, we convert predicate expressions into
+a canonical form in order to detect similarity, even when the
+queries do not take the exact same form; e.g., the order of two
+commutative terms in a predicate expression are reversed. To
+construct the canonical form of a query, we ﬁrst rewrite the
+expression in AND-OR normal form and order the clauses
+according to a numerical labeling of the database schema.
+For example, attribute 2.1 is the ﬁrst attribute in the second
+table.
+
+Based on the canonical form of the predicate expression, we
+construct a template signature used to match queries to ex-
+isting templates. A signature is a unique, numeric value de-
+rived from the attributes and operators used in the predicate
+expression. This allows for fast template matching. Tem-
+plate detection builds upon existing query matching algo-
+rithms [Amiri et al. 2003; Luo and Naughton 2001; Luo and
+Xue 2004].
+
+5.2 Constructing Parameter Vectors
+
+It is important that parameter vectors encode the maximum
+information available in query parameters. Thus, we include
+both syntactic and semantic information by transforming the
+input parameters. We describe some of the important trans-
+formations on the most common predicates as witnessed in
+the SDSS workload.
+
+(cid:15) Predicate
+
+(cid:15) A predicate
+
+of
+
+the
+
+clauses
+
+form “col i op
+constant” in which i op is a relational opera-
+tor from <; >; =; >=; <= and col is an attribute, are
+represented by the feature vector (constant,i op).
+form “col BETWEEN
+constant1 and constant2”
+represented
+(constant1,constant2-constant1).
+as
+The
+between
+the two constants and has more semantic in-
+formation than other
+such as
+(constant1,constant2).
+
+feature vectors,
+
+difference
+
+captures
+
+distance
+
+clause
+
+the
+
+of
+
+is
+
+(cid:15) For user-deﬁned functions, whether in table or predicate
+clause, we use the arguments to the function as a feature
+vector, i.e. (arg1,arg2,: : :,argn). The arguments
+can further be transformed by including semantic infor-
+mation from user-deﬁned functions.
+
+(cid:15) Aggregate functions such as COUNT, MAX, MIN and
+constructs such as TOP in select clause may change
+yield drastically. We associate a single feature to in-
+dicate the presence of these primitives in a query.
+
+Number of queries
+Number of query templates
+Percent of queries in top 15 templates
+Yield from all queries
+Percent yield in top 35 templates
+
+1; 403; 833
+77
+87%
+1706 GB
+90.2%
+
+Table 1: SDSS Astronomy Workload Properties
+
+The concept of col, i.e., a “column”, is general and deﬁned
+recursively as compositions of (a) a single attribute of a re-
+lation, (b) a scalar user-deﬁned function, which returns a
+numeric value, and (c) a bit operator (b op 2 (j; &)) ex-
+pression of the form col1 b op col2 or col1 b op
+constant. For a given template, when arguments or con-
+stants change in columns, we consider them as predicates
+and vectors are formed as deﬁned previously.
+
+Our system parses queries with numeric constants, operators
+and strings.
+It does not, at this point, generalize to string
+operators, such as LIKE or IN, which may take arbitrary
+strings.
+
+6 Experimental Results
+
+CAROT is a system developed for BY caches. BY caches
+are being currently introduced in the mediation middle-ware
+for the NVO federation of astronomy databases [FedCache
+]. From the current 16 databases of the federation, we con-
+sidered the SDSS database and its corresponding workload
+to evaluate CAROT.
+
+We present two levels of experiments. At the macro level
+we show performance of CAROT when used along with BY
+caches. In particular, we show the effect of yield estimates
+on the cache’s network performance: the most important cost
+metric to measure the efﬁcacy of the BY cache. CAROT
+outperforms the Microsoft SQL optimizer and preserves the
+network-savings realized by BY caching when compared
+with having exact, prior knowledge of query yield. Subse-
+quently, we conduct a ﬁne-grained evaluation of the tool on
+the most important queries in the workload. These experi-
+ments explore the accuracy of CAROT’s estimates, the size
+of its data structure, and the running time of learning algo-
+rithms.
+
+6.1 Experimental Setup
+
+Workload Characterization: We took a month-long
+trace of queries against Sloan Digital Sky Survey (SDSS)
+database. The SDSS is a major site in the National Virtual
+Observatory: a federation of astronomy databases. This sys-
+tem is actively used by a large community of astronomers.
+Our trace has more than 1.4 million queries that generate
+close to two Terabytes of network trafﬁc.
+
+Template
+
+Number of Dimensions in Available
+
+Feature Vector
+
+Index
+
+T1
+T2
+T3
+T4
+T5
+T6
+
+Queries
+23343
+103148
+761605
+4142
+68603
+3176
+
+4
+6
+4
+3
+4
+5
+
+Query Semantics
+
+Range query on a single table
+Function query on a single table
+Function query on a single table
+Function query on 2 joined tables
+Equality query on a single table
+Function query on 3 joined tables
+
+1
+0
+0
+0
+1
+0
+
+Table 2: Six Important Query Templates in the SDSS Workload.
+
+An analysis of the traces reveal that an astonishingly small
+number of query templates capture the workload (Table 1).
+A total of 77 different query templates occur in all 1.4 mil-
+lion queries. Further, the top 15 of these templates account
+for 87% of the queries, and the top 35 account for 90% of the
+total network trafﬁc (yield). This conﬁrms our intuition that
+most queries are generated through either Web forms and
+application libraries or correspond to user-written queries in
+iterative scientiﬁc programs. Thus, the SDSS traces exhibit
+a remarkable amount of reuse. The trace we considered in-
+cluded a variety of access patterns, such as range queries,
+spatial searches, identity queries, and aggregate queries.
+
+CAROT’s scalability and accuracy are derived from work-
+load properties. Storage requirements scale with the num-
+ber of templates. Because few templates capture the SDSS
+workload, CAROT has minimal space requirements. Also,
+few templates mean that a large number of queries appear in
+each template. This gives CAROT good training data, based
+on which it learns query yields accurately.
+
+In SDSS, we used the 2.0TB
+The SDSS Database:
+BESTDR4 database. The database has 120 tables, and
+5948 columns in total. The largest table has 446 columns.
+BESTDR4 database is stored in Microsoft SQL 2000 server.
+
+The BY Cache: We were provided with a prototype of the
+BY cache. The prototype implements the OnlineBY cache
+algorithm. It maintains a virtual cache, the total size of which
+is equal to 30% of the database size, which in our case is
+the BESTDR4 database. A 30% cache size equals 600GB,
+which is just large enough to accommodate the largest table
+of BESTDR4. 0.5% of the cache space is kept for meta-
+data (schema information) and internal data structures. BY
+caches cache database objects, and need a minimum cache
+size equal to the size of the largest object.
+
+Comparison Methods: To compare CAROT, we use two
+other selectivity estimation methods: Sampling and Op-
+timizer. In Sampling, we randomly sampled 1GB of data
+from the SDSS database. Choosing a 1GB large sample
+meant the cache allocated 1GB of its space to the random
+sample. Given the space constraints at the cache, this is
+the maximum we think a cache should allocate. Also given
+CAROT’s small storage requirements, 1GB of space is sub-
+stantial. For the Optimizer method, we use the Microsoft
+SQL2000 query optimizer. In this method, query estimates
+
+(a) Network Cost
+
+Model
+
+Network Cost
+
+Savings % difference
+from optimal
+
+(GB)
+
+No Caching
+
+Prescient
+CAROT
+Optimizer
+Sampling
+
+(GB)
+
+1706.28
+1147.51
+1174.13
+1399.06
+1590.81
+
+558.49
+532.15
+307.22
+115.47
+
+-0.00
+-4.72
+-45.01
+-79.32
+
+(b) Savings comparison
+
+Figure 5:
+Caching Performance
+
+Impact of Yield Estimation on Bypass-Yield
+
+are obtained from the optimizer. There were two reasons for
+choosing the optimizer. First, the optimizer method occu-
+pies no space in the cache as the estimates are stored at the
+server. Thus space-wise this may be the best method for BY
+caches. Second, optimizer estimates in MS SQL 2000 are
+stored on a per object basis as max-diff histograms, which
+allows us to compare CAROT with histograms. Sampling
+and histograms are the two most popular methods for yield
+estimation in databases. In CAROT, we used a k of 3, classi-
+fying yield into low, medium and high, and an n of 100.
+
+Error Metrics: When CAROT is used along with BY cache
+we use the amount of network savings in the BY cache as a
+measure to evaluate CAROT. When evaluating the accuracy
+of CAROT, we consider average relative error.
+
+6.2 Yield Estimation and Cache Perfor-
+
+mance
+
+Our principal result deﬁnes the performance of CAROT
+in the bypass-yield caching environment. This experiment
+is conducted against the speciﬁc databases for which we
+will deploy CAROT using workload extracted from those
+databases. We compare CAROT with the Optimizer and
+the Sampling method. We also compare against a Prescient
+estimator, which has a priori knowledge of the query result
+sizes, i.e., a perfect CAROT. The prescient estimator gives us
+an upper-bound on how well a caching algorithm could pos-
+sibly perform when the query result sizes are known a-priori.
+
+As a yield estimator for BY caching, CAROT outperforms
+Optimizer dramatically and approaches the ideal perfor-
+mance of the Prescient estimator. Figure 5 shows the to-
+tal amount of data sent across the network to serve the en-
+tire 1706 GB of the SDSS workload. For any template, the
+learned model is used for prediction after the 100 queries
+have occurred. We also include the network savings, i.e. the
+amount of data that was served out of cache, and compare
+network savings with the ideal performance of Prescient.
+Based on CAROT’s estimates, the BY cache serves the work-
+load saving 532.15 GB when compared with 307.22 GB for
+the Optimizer. CAROT also compares well with Prescient,
+reducing network savings by 5% from 558.49 GB to 532.15
+GB. (We choose network savings as a metric because it cor-
+responds to cache hit rate.)
+
+Caching results also show the sensitivity of BY caching to
+accurate yield estimates. Nearly all of the beneﬁt of caching
+may be lost. The Optimizer loses 45% of network savings
+and Sampling loses 80%. Sampling is a primitive technique;
+the Optimizer provides a better point of comparison. How-
+ever, Sampling does illustrate the sensitivity of BY caching
+and plays an important role in subsequent experiments.
+
+6.3 Decomposing Workload by Template
+
+To further describe CAROT on the SDSS workload, we take
+six representative templates that account for 68.7% of the
+queries (Table 2). The dimensions in feature vector indi-
+cates the number of attributes that provide information gain
+for the decision tree. Not all attributes are useful and un-
+used attributes are pruned away by the decision tree algo-
+rithm. We also include when indexes are available for at-
+tributes referenced by queries in the template. When using
+the query optimizer, the presence of an index provides better
+estimates. Notable features of the SDSS workload include:
+(1) that many important queries do not have indexes and,
+thus, it may be hard to estimate yield accurately; (2) yield es-
+timation has non-trivial dimensionality, i.e., many attributes
+are required; and, (3) user deﬁned functions play an impor-
+tant role in the workload. Subsequent experiments examine
+the performance of CAROT in detail using the queries from
+these six templates.
+
+6.4 Accuracy of CAROT
+
+We further describe the performance of CAROT by compar-
+ing its accuracy with that of the Optimizer and Sampling
+within the different templates. In these experiments, the eval-
+uation is static in that we build an a priori model using train-
+ing queries and then use the model to make predictions dur-
+ing testing using testing queries. When comparing accuracy,
+a static evaluation provides a lower bound on the accuracy
+of the system. The incrementally updated CAROT system
+will estimate even more accurately as the model gets updated
+with test queries. In addition, we keep the distribution of test
+queries same as those of training queries.
+
+To measure error, we use the absolute error ( ¯Ei) averaged
+over all queries Qi that occur in template Ti.
+
+¯Ei =
+
+(cid:229) q2Qi j r (q) (cid:0) ˆr (q) j
+
+;
+
+(cid:229) q2Qi
+
+r (q)
+
+(2)
+
+r (q) and ˆr (q) are the actual and estimated yield of a query
+q. Absolute error corresponds well with our notion of cost
+and accuracy in caching – network trafﬁc saved, I/O avoided,
+etc.
+
+For range queries, CAROT often estimates yield more accu-
+rately than the Optimizer even when an index is available.
+Figure 6(a) shows results over a two attribute range query
+on a single table (Template T1). Error arises in the opti-
+mizer because of overestimation when selectivity is low and
+underestimation when selectivity is high. The relative error
+for CAROT reduces as the size of the training set increases.
+Sampling performs much worse than CAROT and the query
+optimizer, because it cannot overcome the large size of the
+underlying data. The sampled subset represents the true data
+
+ 1
+
+ 0.8
+
+ 0.6
+
+ 0.4
+
+ 0.2
+
+r
+o
+r
+r
+E
+ 
+e
+v
+i
+t
+a
+l
+e
+R
+ 
+e
+g
+a
+r
+e
+v
+A
+
+ 0
+
+ 10
+
+ 1
+
+ 0.8
+
+ 0.6
+
+ 0.4
+
+ 0.2
+
+r
+o
+r
+r
+E
+ 
+e
+v
+i
+t
+a
+l
+e
+R
+ 
+e
+g
+a
+r
+e
+v
+A
+
+ 0
+
+ 10
+
+ 1
+
+ 0.8
+
+ 0.6
+
+ 0.4
+
+ 0.2
+
+r
+o
+r
+r
+E
+ 
+e
+v
+i
+t
+a
+l
+e
+R
+ 
+e
+g
+a
+r
+e
+v
+A
+
+ 0
+
+ 10
+
+ 1
+
+ 0.8
+
+ 0.6
+
+ 0.4
+
+ 0.2
+
+r
+o
+r
+r
+E
+ 
+e
+v
+i
+t
+a
+l
+e
+R
+ 
+e
+g
+a
+r
+e
+v
+A
+
+ 0
+
+ 10
+
+ 15
+
+ 20
+
+ 25
+
+ 30
+
+ 35
+
+ 40
+
+ 45
+
+ 50
+
+ 15
+
+ 20
+
+ 25
+
+ 30
+
+ 35
+
+ 40
+
+ 45
+
+ 50
+
+ 15
+
+ 20
+
+ 25
+
+ 30
+
+ 35
+
+ 40
+
+ 45
+
+ 50
+
+Training Data Size (% of # of queries in template)
+
+Training Data Size (% of # of queries in template)
+
+Training Data Size (% of # of queries in template)
+
+CAROT
+
+Optimizer
+
+Random
+
+CAROT
+
+Optimizer
+
+Random
+
+CAROT
+
+Optimizer
+
+Random
+
+(a) Template T1
+
+(b) Template T2
+
+(c) Template T3
+
+CAROT
+Optimizer
+
+Random
+
+ 1
+
+ 0.8
+
+ 0.6
+
+ 0.4
+
+ 0.2
+
+r
+o
+r
+r
+E
+ 
+e
+v
+i
+t
+a
+l
+e
+R
+ 
+e
+g
+a
+r
+e
+v
+A
+
+ 0
+
+ 10
+
+ 1
+
+ 0.8
+
+ 0.6
+
+ 0.4
+
+ 0.2
+
+r
+o
+r
+r
+E
+ 
+e
+v
+i
+t
+a
+l
+e
+R
+ 
+e
+t
+a
+g
+e
+r
+g
+g
+A
+
+ 15
+
+ 20
+
+ 25
+
+ 30
+
+ 35
+
+ 40
+
+ 45
+
+ 50
+
+ 15
+
+ 20
+
+ 25
+
+ 30
+
+ 35
+
+ 40
+
+ 45
+
+ 50
+
+Training Data Size (% of # of queries in template)
+
+Training Data Size (% of # of queries in template)
+
+CAROT
+
+Optimizer
+
+Random
+
+CAROT
+
+Optimizer
+
+Random
+
+ 0
+
+ 10
+
+ 15
+
+ 20
+
+ 25
+
+ 30
+
+ 35
+
+ 40
+
+ 45
+
+ 50
+
+Training Data Size (% of # of queries in template)
+
+(d) Template T4
+
+(e) Template T5
+
+(f) Template T6
+
+Figure 6: Error Results for Templates in the SDSS Workload
+
+distribution poorly. The hump at 20% occurs for CAROT as
+it learns unseen data.
+
+tribution from individual distributions.
+
+CAROT provides the most improvement when operating
+against user deﬁned functions. Figure 6(b) (Template T2)
+and 6(c) (Template T3) show function queries against a sin-
+gle table. The opaque nature of function queries make yield
+estimation difﬁcult for Optimizer and Sampling. The func-
+tions in template T2 and T3 look for objects in a circular re-
+gion and rectangular region, respectively. Often the regions
+speciﬁed are very small. Random sampling suffers because
+it has not sampled enough objects in the small region spec-
+iﬁed. The query optimizer performs poorly because it has
+no semantic information on which to construct an estimate.
+The Optimizer often returns the same constant for every in-
+vocation of a function. Function queries dominate the SDSS
+workload, as can be seen by the high number of queries in
+templates T2 and T3.
+
+Scientiﬁc queries often use mathematical and bit operators
+and are quite common in the SDSS workload. Figure 6(d)
+considers such a query in template T4. Speciﬁcally, the pred-
+icates in the query add two attributes and compare the result
+with a constant. The Optimizer predicts poorly as it adds two
+approximate distributions, thus propagating further errors.
+Random sampling performs better than the query optimizer,
+because of the high yield of queries in this template. CAROT
+learns such distributions precisely as it does not learn the dis-
+
+CAROT performs well under multi-way joins. Template T5
+(Figure 6(e)) is a three-way join, which implies that the ac-
+curacy is not limited by the number of tables involved. The
+same is not true for the optimizer or sampling. Accuracy
+under multi-way joins is a known limitation of existing se-
+lectivity techniques. CAROT starts with a higher error than
+the optimizer, because of low training data, but rapidly learns
+and reduces the error signiﬁcantly.
+
+In the above experiments, CAROT performs well even for
+small training sets. This is an artifact of user access pat-
+terns which possess “locality” properties; they seem to be
+drawn from a stable distribution. While many templates in
+the workload possess locality properties, other templates do
+not, because the distribution of values in their feature space
+is too disperse. Figure 6(f) shows such a distribution in tem-
+plate T6. The query optimizer gives near accurate estimates
+for an equality query against an index. Random sampling
+does not perform well as most of the objects are not sam-
+pled, giving a yield of zero for most queries. CAROT does
+not learn a model from the values in the attribute space, be-
+cause the objects are accessed randomly from the domain of
+the queried attributes. Queries in this class are dangerous for
+CAROT, as it may spend storage and computational effort to
+no avail. To avoid classiﬁcation overheads for such queries,
+we include a set of simple rules to detect equality queries and
+
+s
+e
+i
+r
+e
+u
+Q
+
+ 
+f
+o
+
+ 
+r
+e
+b
+m
+u
+N
+
+ 250
+
+ 200
+
+ 150
+
+ 100
+
+ 50
+
+ 0
+
+ 0
+
+ 350
+
+ 300
+
+ 250
+
+ 200
+
+ 150
+
+ 100
+
+ 50
+
+s
+e
+i
+r
+e
+u
+Q
+
+ 
+f
+o
+
+ 
+r
+e
+b
+m
+u
+N
+
+ 0.2
+
+ 0.4
+
+ 0.6
+
+ 0.8
+
+ 1
+
+ 1.2
+
+OPT Relative Error
+
+ 0.4
+ 0.8
+CAROT Relative Error
+
+ 0.6
+
+ 1
+
+ 1.2
+
+ 0
+
+ 0
+
+ 0.2
+
+(a) Optimizer
+
+(b) CAROT
+
+Figure 7: CAROT Performs Better than Optimizer Over a Large Fraction of Queries
+
+locate indexes. This relies on schema information, not data
+access. Such queries are sent to the optimizer (Section 4.3).
+
+To show the performance of CAROT and the query optimizer
+in more detail (Figure 7), we compare the absolute relative
+errors of queries chosen from template T1. We chose this
+template because the presence of index on queried attributes
+provides a better chance for the optimizer to perform well.
+By comparing the relative error one can evaluate the per-
+formance of the methods on a per query basis. The graphs
+shows for a given relative error the number of queries wit-
+nessed in each method. Optimizer has a large number of
+queries when the relative error is high unlike CAROT in
+which most queries have low relative error. This shows that
+for most queries in the trace, CAROT performs far better
+than Optimizer.
+
+6.5 Space Utilization and Running Time
+
+The decision tree data structures used by CAROT occupy lit-
+tle space (Table 3). The size of decision trees tends to be in
+the tens or hundreds of kilobytes. The largest tree overall was
+that of template T3 at 286 KB, which summarizes the results
+of over 750,000 queries. This is low requirement in com-
+parison to Optimizer. The total space requirement of max-
+diff histograms with 5% sampling, where a histogram is con-
+structed for every attribute in a query is 2612 KB, which is 8x
+more than the space requirement of CAROT. Also, CAROT
+only grows the decision tree as necessary. The workload for
+the equality query of template T5 has little information for
+classiﬁcation. Thus, CAROT builds a small decision tree,
+even though there are many queries in the template. How-
+ever, in the caching system, we would rely on the optimizer
+estimate for this template, because an index is available.
+
+The height of the decision tree deﬁnes the performance of
+CAROT. Estimating yield takes time O(h) in which h is the
+height of a decision tree.
+In practice, decision tree height
+ranges from one to seven. CAROT also needs to construct
+the decision tree from training data. Given m attributes and
+n training examples, decision tree construction takes time
+
+Template
+
+Size (KB) Height
+
+T1
+T2
+T3
+T4
+T5
+T6
+
+29.03
+80.43
+285.66
+5.62
+6.12
+19.15
+
+6
+6
+7
+4
+7
+3
+
+Table 3: Space Performance – Size and Height of Decision
+Trees
+
+Template
+
+Time (seconds)
+
+CAROT Optimizer
+
+Sampling
+
+T1
+T2
+T3
+T4
+T5
+T6
+
+3.09
+5.38
+15.50
+1.50
+0.30
+7.00
+
+55
+345
+890
+0.1
+244
+0.1
+
+211
+3290
+8000
+32
+522
+56
+
+Table 4: Time Performance of Estimators
+
+O(mn(logn)).
+
+CAROT also exhibits good runtime performance (Table 4).
+The time to make estimates is negligible – microseconds per
+query. Because decision trees are small, they easily ﬁt in
+cache and estimates require only memory accesses. Con-
+struction of decision trees and regression functions consumes
+almost all of time in CAROT, as much as 15.5 seconds for the
+largest template. The Optimizer incurs substantially more
+time, except for joins of function templates (T4 and T5) in
+which it outputs a constant. Sampling performs poorly over-
+all owing to I/O costs, conducting queries on the sampled
+subset. All experiments were performed on a IBM work-
+station with 1.3GHz Pentium III processor and 512MB of
+memory, running Red Hat Linux 8.0.
+
+CAROT and other methods have different execution time
+proﬁles. CAROT invests all of its time in model construc-
+tion and produces estimates nearly instantaneously. The time
+for the Optimizer and Sampling include only the time to es-
+timate query yields; we did not charge them for building
+
+data structures, sampling, indexing, etc. Thus, time mea-
+surements are not directly comparable. While Sampling and
+the Optimizer have initialization costs, they can be incurred
+when the data are loaded or updated. In contrast, CAROT
+prefers to update its data structure occasionally to capture
+changes in workload. These updates may be performed asyn-
+chronously, building new decision trees while the current
+ones are still in use.
+
+builds a distribution on classes of queries and their results
+and uses further queries to reﬁne and update the distribution.
+The estimation model suits the stringent access and perfor-
+mance requirements of bypass-yield caching. We have eval-
+uated our approach on workloads from the Sloan Digital Sky
+Survey. Experimental results verify the efﬁcacy and accu-
+racy of CAROT.
+
+7 Learning Algorithms and Yield
+
+Estimation
+
+The data properties dictate the use of appropriate learning
+algorithms. For yield estimation, an algorithm learns re-
+sults sizes based on the multi-dimensional parameter space
+of the template variables. Given the problem of predicting
+result sizes, regression lends itself naturally to learn the func-
+tions on the parameter space. Learning a linear or polyno-
+mial multivariate regression function on the parameter space
+leads to under-ﬁtting, as for complex queries the result sizes
+are a non-linear function of the parameter space. Therefore
+we have adopted an initial classiﬁcation step using decision
+trees that partitions the parameter space into axis-parallel hy-
+per rectangles. This creates homogeneous regions of the pa-
+rameter space, in which we use a class-speciﬁc regression
+functions to estimate the yield. An alternative approach is to
+use regression trees [Mitchell 1997], which are like decision
+trees but can directly output result sizes obviating the need to
+learn a subsequent regression function. However, when com-
+pared with the combination of classiﬁcation (with decision
+trees) and regression, on our datasets, the constructed regres-
+sion trees were larger and took longer to update. Also while
+they were slightly more accurate, they took much longer to
+learn.
+
+We opted not to use other learning techniques for a variety
+of reasons. Bayes techniques [Mitchell 1997] assume con-
+ditional independence among input variables. This assump-
+tion is not true for astronomy data and scientiﬁc data sets in
+general. In fact, this assumption is also made by the opti-
+mizer and leads to its inaccuracy. The high-dimensionality
+of the input data renders some techniques, such as support
+vector machines [Mitchell 1997], inefﬁcient. Finally, near-
+est neighbor techniques [Mitchell 1997] are also very slow
+for prediction time, as computing nearest neighbors for ev-
+ery query point is time consuming.
+
+8 Conclusions and Future Work
+
+In CAROT, we have presented a novel approach to yield-
+estimation using the data mining techniques of classiﬁcation
+and regression. Estimation is query-based and adaptive: it
+
+In the future, we are interested in the applicability of CAROT
+to non-scientiﬁc workloads. Many of CAROT’s beneﬁts
+derive from properties of the SDSS workload. Metadata
+are compact because there are very few different classes of
+queries. The high-dimensionality of data and complex joins
+of the workload are easily learned by CAROT and make opti-
+mizer estimates less accurate. Also, astronomy databases are
+static: no ﬁne-grained updates, only major data releases. Is-
+sues that arise in other workloads include the management of
+a large number of templates and the consistency of CAROT’s
+metadata when updating databases. Inclusion of such fea-
+tures will broaden the applicability of CAROT to various
+other workloads. It is to be noted, however, that the CAROT
+is a general purpose estimation tool. Workload properties
+such as existence of few templates enhance the scalability of
+CAROT but do not undermine its ability to estimate accu-
+rately.
+
+Merging related templates offers a promising approach to
+reducing the number of templates induced by a workload.
+Templates grow with the number of different queries on
+the same relation. For templates that share some attributes
+and describe similar distributions, a merged, more general
+template reduces metadata without compromising accuracy.
+However, creating general templates by merging results in
+missing values within feature vectors. Thus, we are applying
+studies of missing values in decision trees to CAROT [Zhang
+et al. 2005]. For example, we want to understand how the
+yield of a join query can be interpreted from the two exist-
+ing templates of the corresponding relations. We are also
+working on more complex queries, such as nested queries
+and queries that fetch images.
+
+We are also interested in integrating CAROT into database
+query optimizers. CAROT provides accurate estimates for
+queries that have challenged optimizers in the past, speciﬁ-
+cally, user-deﬁned functions and multi-dimensional queries.
+The key feature of CAROT for caching is its ability to pro-
+vide estimates without access to data, i.e., remotely from
+databases. However,
+this does not preclude its use in
+databases. It seems that an optimizer could deploy CAROT
+to handle the special cases in which it cannot provide good
+estimates. This use would mirror CAROT’s use of the op-
+timizer for queries in which CAROT has not yet learned a
+yield distribution or when indexes are available.
+
+Acknowledgments
+
+The authors sincerely thank Jim Gray for his help with the selec-
+tivity estimation methods proposed for query optimizers. The au-
+thors thank Amitabh Chaudhary for giving us the idea of the multi-
+dimensional example. We thank Xiodan Wang for his help with the
+SDSS workload. Finally, we would like to thank our anonymous
+reviewers who helped us improve the presentation of this paper.
+
+References
+
+GUNOPULOS, D., KOLLIOS, G., TSOTRAS, V., AND DOMENI-
+CONI, C. 2000. Approximating multi-dimensional aggregate
+range queries over real attributes.
+In Proceedings of the 19th
+ACM-SIGMOD Intl. Conference on Management of Data.
+
+HAMERLY, G., AND ELKAN, C. 2003. Learning the k in k-means.
+
+In NIPS.
+
+HARANGSRI, B., SHEPHERD, J., AND NGU, A. H. H. 1997.
+Query size estimation using machine learning. In Database Sys-
+tems for Advanced Applications, 97–106.
+
+IOANNIDIS, Y. E. 2003. The history of histograms (abridged). In
+Proceedings of the International Conference on Very Large Data
+Bases, 19–30.
+
+ABOULNAGA, A., AND CHAUDHURI, S.
+
+1999. Self-tuning
+histograms: Building histograms without looking at data.
+In
+Proceedings of the ACM SIGMOD International Conference on
+Management of Data, 181–192.
+
+LIM, L., WANG, M., AND VITTER, J. S. 2005. CXHist : An
+on-line classiﬁcation-based histogram for XML string selectivity
+estimation. In Proceedings of the International Conference on
+Very Large Data Bases, 1187–1198.
+
+AMBITE, J. L., AND KNOBLOCK, C. A. 1998. Flexible and scal-
+able query planning in distributed and heterogeneous environ-
+ments.
+In Conference on Artiﬁcial Intelligence Planning Sys-
+tems, 3–10.
+
+AMIRI, K., PARK, S., TEWARI, R., AND PADMANABHAN, S.
+2003. Scalable template-based query containment checking for
+Web semantic caches. In Proceedings of the International Con-
+ference on Data Engineering, 493–504.
+
+BRUNO, N., AND CHAUDHURI, S. 2002. Exploiting statistics on
+query expressions for optimization. In Proceedings of the ACM
+SIGMOD International Conference on Management of Data,
+263–274.
+
+BRUNO, N., CHAUDHURI, S., AND GRAVANO, L. 2001. STHoles:
+A multidimensional workload-aware histogram. In Proceedings
+of the ACM SIGMOD International Conference on Management
+of Data.
+
+CAO, P., AND IRANI, S. 1997. Cost-aware WWW proxy caching
+algorithms. In Proceedings of the USENIX Symposium on Inter-
+net Technology and Systems.
+
+CHAKRABARTI, K., GAROFALAKIS, M. N., RASTOGI, R., AND
+SHIM, K. 2000. Approximate query processing using wavelets.
+In Proceedings of the International Conference on Very Large
+Data Bases, 111–122.
+
+CHEN, C. M., AND ROUSSOPOULOS, N. 1994. Adaptive se-
+lectivity estimation using query feedback.
+In Proceedings of
+the ACM SIGMOD International Conference on Management of
+Data, 161–172.
+
+CHRISTODOULAKIS, S. 1983. Estimating block transfers and join
+sizes. In Proceedings of the ACM SIGMOD International Con-
+ference on Management of Data, 40–54.
+
+DREWRY, M., CONOVER, H., MCCOY, S., AND GRAVES, S.
+1997. Meta-data: quality vs. quantity. In Second IEEE Meta-
+data Conference.
+
+FEDCACHE. FedCache: Proxy Caching in Wide-Area Scientiﬁc
+
+Federations, http://hssl.cs.jhu.edu/fedcache.
+
+FUJIWARA, H., AND IWAMA, K. 2002. Average-case competitive
+In Intl. Symposium on Algo-
+
+analyses for ski-rental problems.
+rithms and Computation.
+
+LIPTON, R., AND NAUGHTON, J. 1995. Query size estimation by
+adaptive sampling. Journal of Computer and System Science 51,
+18–25.
+
+LUO, Q., AND NAUGHTON, J. F. 2001. Form-based proxy caching
+In Proceedings of the Interna-
+
+for database-backed web sites.
+tional Conference on Very Large Data Bases, 191–200.
+
+LUO, Q., AND XUE, W. 2004. Template-based proxy caching for
+table-valued functions. In Proceedings of the International Con-
+ference on Database Systems for Advanced Applications, 339–
+351.
+
+MALIK, T., SZALAY, A. S., BUDAVRI, A. S., AND THAKAR,
+A. R. 2003. SkyQuery: A WebService Approach to Federate
+Databases. In Proceedings of the Conference on Innovative Data
+Systems Research.
+
+MALIK, T., BURNS, R. C., AND CHAUDHARY, A. 2005. Bypass
+caching: Making scientiﬁc databases good network citizens. In
+Proceedings of the International Conference of Data Engineer-
+ing, 94–105.
+
+MITCHELL, T. 1997. Machine Learning. McGraw Hill.
+
+OLSTON, C., AND WIDOM, J. 2002. Best-effort cache synchro-
+nization with source cooperation.
+In Proceedings of the ACM
+SIGMOD International Conference on Management of Data,
+73–84.
+
+OLSTON, C., LOO, B., AND WIDOM, J. 2001. Adaptive preci-
+sion setting for cached approximate values. In Proceedings of
+the ACM SIGMOD International Conference on Management of
+Data, 355–366.
+
+OSQ. The Open Skyquery, http://www.openskyquery.net.
+
+PELLEG, D., AND MOORE, A. 2000. X-means: Extending k-
+means with efﬁcient estimation of the number of clusters.
+In
+Proceedings of the Seventeenth International Conference on Ma-
+chine Learning, Morgan Kaufmann, San Francisco, 727–734.
+
+POOSALA, V., AND IOANNIDIS, Y. E. 1996. Estimation of query-
+result distribution and its application in parallel-join load balanc-
+ing. In The VLDB Journal, 448–459.
+
+POOSALA, V., IOANNIDIS, Y. E., HAAS, P. J., AND SHEKITA,
+E. J. 1996. Improved histograms for selectivity estimation of
+range predicates. In Proceedings of the ACM SIGMOD Interna-
+tional Conference on Management of Data, 294–305.
+
+QUINLAN, J. R. 1993. C4.5: Programs for Machine Learning.
+
+Morgan Kaufmann Publishers Inc., San Francisco, CA, USA.
+
+SDSS. The Sloan Digital Sky Survey, http://www.sdss.org.
+
+SELINGER, P., ASTRAHANAND, M., CHAMBERLIN, D.,
+A.R.LORIE, AND PRICE, T. 1979. Access path selection in
+a relational database management system.
+In Proceedings of
+the ACM SIGMOD International Conference on Management of
+Data.
+
+SERAFINI, L., STOCKINGER, H., STOCKINGER, K., AND ZINI,
+F. 2001. Agent-based query optimisation in a grid environment.
+In Proceedings of IASTED International Conference on Applied
+Informatics.
+
+SHETH, A. P., AND LARSON, J. A. 1990. Federated database sys-
+tems for managing distributed, heterogeneous, and autonomous
+databases. ACM Computing Surveys 22, 3, 183–236.
+
+STILLGER, M., LOHMAN, G. M., MARKL, V., AND KANDIL, M.
+2001. LEO - DB2’s LEarning Optimizer. In Proceedings of the
+International Conference on Very Large Data Bases, 19–28.
+
+SZALAY, A. S., GRAY, J., THAKAR, A. R., KUNSZT, P. Z., MA-
+LIK, T., RADDICK, J., STOUGHTON, C., AND VANDENBERG,
+J. 2002. The SDSS SkyServer: Public access to the Sloan Digital
+Sky Server data. In Proceedings of the ACM SIGMOD Interna-
+tional Conference on Management of Data, 570–581.
+
+VITTER, J. S., AND WANG, M. 1999. Approximate computation
+of multidimensional aggregates of sparse data using wavelets. In
+Proceedings of the ACM SIGMOD International Conference on
+Management of Data, 193–204.
+
+W. SUN, Y. LING, N. R., AND DENG, Y. 1993. An instant
+and accurate size estimation method for joins and selection in a
+retrieval-intensive environment. In Proceedings of the ACM SIG-
+MOD International Conference on Management of Data, 79–88.
+
+WEKA.
+
+The Weka Machine
+
+Learning
+
+Project.
+
+http://www.cs.waikato.ac.nz/ ml/index.html.
+
+ZHANG, S., QIN, Z., LING, C. X., AND SHENG, S. 2005. Missing
+is useful: Missing values in cost-sensitive decision trees. In IEEE
+Transactions on Knowledge and Data Engineering, vol. 17, 1689
+– 1693.
+
+

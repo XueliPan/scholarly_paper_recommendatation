@@ -1,0 +1,5330 @@
+Web Search Using Mobile Cores:
+
+Quantifying and Mitigating the Price of Efﬁciency
+
+Vijay Janapa Reddi
+
+Harvard University
+
+Benjamin C. Lee
+Stanford University
+
+Trishul Chilimbi
+Microsoft Research
+
+Kushagra Vaid
+
+Microsoft Corporation
+
+vj@eecs.harvard.edu
+
+bcclee@stanford.edu
+
+trishulc@microsoft.com
+
+kvaid@microsoft.com
+
+ABSTRACT
+The commoditization of hardware, data center economies
+of scale, and Internet-scale workload growth all demand
+greater power eﬃciency to sustain scalability. Traditional
+enterprise workloads, which are typically memory and I/O
+bound, have been well served by chip multiprocessors com-
+prising of small, power-eﬃcient cores. Recent advances in
+mobile computing have led to modern small cores capable
+of delivering even better power eﬃciency. While these cores
+can deliver performance-per-Watt eﬃciency for data center
+workloads, small cores impact application quality-of-service
+robustness, and ﬂexibility, as these workloads increasingly
+invoke computationally intensive kernels. These challenges
+constitute the price of eﬃciency. We quantify eﬃciency for
+an industry-strength online web search engine in production
+at both the microarchitecture- and system-level, evaluating
+search on server and mobile-class architectures using Xeon
+and Atom processors.
+
+Categories and Subject Descriptors
+C.0 [Computer Systems Organization]: General—Sys-
+tem architectures; C.4 [Computer Systems Organiza-
+tion]: Performance of Systems—Design studies, Reliability,
+availability, and serviceability
+
+General Terms
+Measurement, Experimentation, Performance
+
+1.
+
+INTRODUCTION
+
+Internet services are experiencing a paradigm shift in which
+computation and data migrates from clients to a cloud of dis-
+tributed resources located in data centers. The commodi-
+tization of hardware, data center economies of scale, and
+Internet-scale workload growth all demand greater power
+eﬃciency to sustain scalability. Advances in chip multi-
+processors comprised of small cores provide opportunities for
+power eﬃciency. Piranha and Niagara propose integrating
+
+Permission to make digital or hard copies of all or part of this work for
+personal or classroom use is granted without fee provided that copies are
+not made or distributed for proﬁt or commercial advantage and that copies
+bear this notice and the full citation on the ﬁrst page. To copy otherwise, to
+republish, to post on servers or to redistribute to lists, requires prior speciﬁc
+permission and/or a fee.
+ISCA’10, June 19–23, 2010, Saint-Malo, France.
+Copyright 2010 ACM 978-1-4503-0053-7/10/06 ...$10.00.
+
+simple cores to lower design eﬀort and improve throughput,
+respectively [1, 7, 9]. These smaller cores deliver throughput
+with better power eﬃciency when compared to their low-
+latency, high-performance counterparts. Recent advances
+in mobile computing provide small cores with even greater
+power eﬃciency. Traditional enterprise and online transac-
+tion processing (OLTP) applications are amenable to execu-
+tion on small cores because they are typically memory or I/O
+bound. Consequently, platform and overall system design,
+rather than microarchitectural design, determine whether
+the application’s service requirements are met.
+
+Emerging data center workloads increasingly invoke com-
+putationally intensive and performance-critical kernels, for
+which small cores may weaken service requirements and guar-
+antees. Relative to the traditional sort, these workloads are
+comprised of computationally intensive and performance-
+critical kernels that have latency requirements as part of
+their service level agreement (SLA). Microarchitecture de-
+sign for small cores will increasingly determine whether ser-
+vice requirements are satisﬁed for these emerging and more
+compute-prone workloads. Although small cores are advan-
+tageous for power eﬃciency and throughput computing, they
+are less capable of handling increases in computational inten-
+sity and might jeopardize application quality-of-service and
+latency constraints. These challenges constitute the price of
+eﬃciency from small cores.
+
+We quantify the price of small-core power eﬃciency for
+industry-strength web search, Microsoft Bing. Unlike tradi-
+tional enterprise workloads, our version of web search relies
+on machine learning kernels at its core, which signiﬁcantly
+increases computation at index serving nodes in a way that
+contravenes conventional wisdom regarding small cores for
+enterprise workloads. We demonstrate the computational
+intensity of our search engine with respect to other work-
+loads in Figure 1.1 Our search engine experiences signiﬁ-
+cantly more instruction level parallelism (ILP) and is the
+only workload in Figure 1 exhibiting an un-normalized IPC
+greater than one, which surpasses prior search engines that
+experience an IPC similar to traditional enterprise work-
+loads [2, 3]. This demand for ILP indicates a need for more
+performance than is typically provided by simple, in-order
+cores. Consequently, the strategy of small cores for greater
+power eﬃciency has deep implications for our Internet-scale
+workload. We explore these implications and make the fol-
+lowing contributions:
+
+1All workloads are conﬁgured as per industry-standard set-
+tings[23] and are operating under typical load conditions,
+running natively on a 4-way superscalar processor (Table 1).
+
+3141.0
+
+0.8
+
+0.6
+
+0.4
+
+0.2
+
+0.0
+
+C
+P
+I
+ 
+d
+e
+z
+
+i
+l
+
+a
+m
+r
+o
+N
+
+Web
+
+(Apache)
+
+ 
+ 
+
+Java
+
+(JRockit)
+
+File
+
+(DBench)
+
+ 
+ 
+
+Database
+(MySQL)
+
+(MS Exchange)
+
+Search
+(Ours)
+
+ 
+ 
+
+Mail
+
+Figure 1: The computational needs of our search
+engine exceed that of traditional workloads with an
+un-normalized IPC noticeably greater than one.
+
+• Search: We evaluate an online web search engine op-
+erating in an enterprise environment that uses machine
+learning kernels at the index serving nodes to service
+user queries. (Section 2)
+
+• Eﬃciency: We compare the power eﬃciency of the
+server-class Xeon and mobile-class Atom microarchi-
+tectures for Search, relying on hardware counter data
+and multimeter power measurements. Search is 5×
+more eﬃcient on Atom than on Xeon. (Section 3)
+
+• Price of Eﬃciency: Search eﬃciency on Atom comes
+at the expense of robustness and ﬂexibility. Quality-
+of-service guarantees become less robust as per query
+latency increases and becomes more variable. Com-
+putational intensity increases and microarchitectural
+bottlenecks impact search computation. (Section 4)
+
+• Mitigating the Price of Eﬃciency: We address
+the price of eﬃciency through eﬀective system design
+strategies, greater integration and enhanced microar-
+chitectures. These strategies also address the total cost
+of ownership (TCO) at the data center level due to in-
+eﬃciencies at the platform level, which translates to
+lower performance per dollar.
+
+Collectively, the results in this paper contravene conven-
+tional wisdom with respect to small cores and data centers
+for online web search. The microprocessor industry oﬀers
+a choice of two strategies to achieve the economies of scale
+necessary for this evolving workload: (1) start with big, high
+performance cores and improve eﬃciency or (2) start with
+small, low power cores and improve performance. We com-
+pare these two strategies and favor the latter for search.
+
+2. SEARCH
+
+Search is representative of a broad class of data center
+workloads that perform distributed and expensive compu-
+tation. The workload requires thousands of processors to
+service queries under strict performance, ﬂexibility and reli-
+ability guarantees. A single query might require tens of bil-
+lions of processor cycles and access hundreds of megabytes of
+data [3]. Traditionally, parallel indexing aﬀords substantial
+improvement in performance. However, as search engines
+continue to evolve and machine learning techniques become
+integral, per core performance is becoming more important
+again.
+
+Incoming
+Queries
+
+Aggregator
+
+Cache
+
+Manager
+Manager
+Manager
+
+Ranker
+
+ContextGenerator
+
+NeuralNet
+
+Streams
+
+Index
+
+Content
+
+Index Serving Node
+                     (ISN)
+
+Figure 2: Overview of our speciﬁc Search instantia-
+tion. In this paper, we target the darkened subset
+within each index serving node (ISN).
+
+2.1 Structure
+
+Figure 2 outlines the structure of the search engine. Search
+queries enter the system through a top-level Aggregator. If
+the aggregator cannot satisfy a query from its set of fre-
+quently asked queries (i.e., Cache), it distributes the query
+to the Index Serving Nodes (ISNs). The ISNs operate in
+a distributed manner. Examining its subset of the docu-
+ment index, each node uses neural networks to identify and
+to return the top N most relevant pages and their dynamic
+ranks. Each ISN is responsible for ranking pages, as well as
+generating descriptions of relevant pages for the user [5].
+
+Upon receiving a query, an ISN’s Manager invokes the
+Ranker on the ISN’s local subset of the index. The ranker
+parses the query and invokes Streams that use query fea-
+tures to identify a matching list of pages from query fea-
+tures. The ranker then uses statistical inference engines to
+compute a relevance score for each page in the matching list.
+Using these scores, the ranker identiﬁes the top N results
+and passes these results to the aggregation layer, which in
+turn decides upon the set of results to return. After aggre-
+gating and sorting relevance scores, the aggregator requests
+captions from the ISNs. Each caption is comprised of a title,
+URL, and context snippets. Captions are generated by the
+ContextGenerator based on the content distributed to each
+particular ISN. Captions for the top N results across the
+ISNs are returned to the user in response to the query.
+
+2.2 Requirements
+
+Robustness. Search performance is quantiﬁed by a com-
+bination of Quality-of-Service (QoS), throughput, and la-
+tency. The application deﬁnes a QoS metric by the minimum
+percentage of queries handled successfully. For example, a
+QoS metric of θ percent requires a minimum of θ success-
+ful queries for every 100. The other 100-θ queries might
+time-out due to long latencies for expensive query features
+or might be dropped due to fully occupied queues. Given a
+QoS target constraint, we might consider a platform’s sus-
+tainable throughput, which quantiﬁes the maximum number
+of queries per second (QPS) that can arrive at a node with-
+out causing the node to violate the QoS constraint. If QPS
+exceeds the sustainable throughput, QoS degrades.
+
+Query processing must also observe latency constraints.
+The average response time of queries must fall within a cer-
+tain number of milliseconds, with additional constraints for
+the 90-th percentile of queries. Latency directly impacts rel-
+evance (i.e., documents corresponding to a speciﬁc query)
+
+315by aﬀecting the number of iterative reﬁnements made to a
+search result. Given a latency constraint, the ranker checks
+for remaining time before, for example, checking the next
+tier in a tiered index. Lower query processing latencies al-
+low for additional reﬁnements to improve relevance.
+
+Flexibility and Absolute Load. The search engine
+operates in a highly distributed system under a variety of
+loads and activity patterns. Not only must such a system
+be scalable, it must also be ﬂexible to changes in activity.
+For example, activity patterns are often periodic and corre-
+lated with time of day. Moreover, even a modest spike in
+complex queries may generate sudden activity spikes mea-
+sured in absolute terms, as complex queries cannot be broken
+down into simpler queries for redistribution across multiple
+nodes. Every ISN must handle its own incoming complex
+query load. Therefore, the underlying architecture must be
+robust enough to tolerate these absolute spikes and, ideally,
+would exhibit gradual rather than sharp QoS degradations
+as load increases. Architectures that exhibit gradual rather
+than sharp QoS degradations as load increases in absolute
+terms would provide greater ﬂexibility with less disruption.
+Reliability and Relative Load. Hardware failures are
+to be expected within large-scale data centers. To ensure
+reliability and robustness in the presence of failures, ISNs
+must operate with spare capacity to bear additional load
+when a fraction of index serving nodes fail, since work is
+then dynamically re-balanced across the remaining nodes.
+Each node experiences a fractional increase of a failed node’s
+sustainable throughput, an activity spike measured in rela-
+tive terms. Architectures that exhibit gradual and minimal
+QoS degradations as load increases in relative terms would
+provide greater reliability with less disruption.
+
+3. EFFICIENCY
+
+Search exercises the datapath as it uses inference engines
+(e.g., Neural Nets) to service queries. Therefore, the work-
+load is traditionally run using high-end server processors.
+But in this section, we seek to understand the trade-oﬀs
+between using high-end processors and small-core designs.
+After explaining our experimental infrastructure, we com-
+pare search running on Xeon versus Atom, quantifying the
+microarchitectural, power and cost eﬃciency across both de-
+signs in terms of delivered search application performance.
+
+3.1 Experimental Setup and Methodology
+
+Microarchitectural Extrema. Considering the spec-
+trum of commodity x86 microprocessors, we observe high-
+performance, server-class microprocessors at one end and
+low-power, mobile-class processors at the other end. Table
+1 summarizes the microarchitectures we consider.
+
+The Xeon is representative of modern, high-performance
+microarchitectures. We consider the Harpertown, a dual-
+die, quad-core processor comprised of Penryn cores [8, 14].
+This processor implements several power optimizations. Im-
+plemented at 45nm using high-K dielectric and metal gate
+transistors, the process technology reduces leakage power by
+5-10× and switching power by 30 percent. Moreover, the L2
+cache is organized into 1MB slices, allowing cache resizing in
+1MB increments for power reduction. Dynamic voltage and
+frequency scaling supports system-driven power mitigation.
+Finally, we consider a particularly low-power Harpertown
+part, the L5420, which operates at 2.5 GHz. The choice of
+
+Processors
+Cores
+Process
+Frequency
+Pipeline Depth
+Superscalar Width
+Execution
+
+Reorder Buﬀer
+Load/Store Buﬀer
+
+Inst TLB
+Data TLB
+L1 Inst/Data Cache
+L2 Cache (per die)
+FSB
+
+Xeon
+
+Atom
+
+Harpertown
+
+Diamondville
+
+1
+4
+
+45nm
+2.5GHz
+14 stages
+
+4 inst issue
+out-of-order
+
+96 entries
+
+32/20 entries
+
+128-entry, 4-way
+256-entry, 4-way
+
+32/32KB
+
+1
+2
+
+45nm
+
+1.6 GHz
+16 stages
+
+2 inst issue
+
+in-order
+
+n/a
+n/a
+
+Unavailable
+Unavailable
+
+32/24KB
+
+12MB, 24-way
+
+1MB, 8-way
+
+1066MHz
+
+533 MHz
+
+Table 1: Microarchitectural extrema. We evaluate
+search on Xeon-Harpertown [8, 14, 21] and Atom-
+Diamondville [10, 14] processors that represent end-
+points in the spectrum of x86 commodity processors.
+
+a power-optimized Harpertown provides an optimistic base-
+line, which favors server-class architectures.
+The Atom is representative of modern,
+
+low-power mi-
+croarchitectures. We consider a dual-core Diamondville [10,
+14]. Each core is designed to operate in the sub-1W to 2W
+range. Diamondville cores implement an in-order pipeline
+with power eﬃcient instruction decode and scheduling algo-
+rithms. The Diamondville datapath is also narrower than
+that of a Harpertown, issuing only two instructions per cy-
+cle. Furthermore, the Atom design avoids specialized execu-
+tion units and favors general-purpose logic that can provide
+multiple functionality. For example, the SIMD integer mul-
+tiplier and ﬂoating point divider are used to execute instruc-
+tions that would normally execute on separate, dedicated
+scalar equivalents [10]. Such strategies are intended to re-
+duce power, but also may have implications for performance
+as will be described in Section 4.
+
+Workload Setup. While search is a distributed activity
+across several nodes, in this paper we speciﬁcally target its
+activity within an ISN. We use the application currently in
+production and drive it with real queries from user activity.
+Of the search components illustrated in Figure 2, we specif-
+ically examine the darkened subset that ranks pages online
+and returns the sorted results to the aggregator.
+
+The quality of search or the relevance of pages depends
+upon ISN performance. CPU activity at an ISN ranges be-
+tween 60 to 70 percent, indicating ISNs are usually under
+heavy load. Consequently, an ISN’s performance depends on
+the capabilities of the underlying microarchitecture, which
+motivates our evaluation of the leaf-nodes within search. We
+neglect the aggregator, as well as the caption generators.
+From hereon, we loosely refer to the term “search engine” as
+the parts we are investigating.
+
+The ISN computes page ranks for forty thousand queries
+after warmup. Input queries are obtained from production
+runs. The query arrival rate is a parameter within our ex-
+periments. We sweep this rate to identify the maximum
+QPS an architecture can sustain without violating the QoS
+target. For each query, the ISN computes overall ranks for
+pages that match the query for a 1 GB production index, a
+subset of the global index distributed across several nodes.
+The index ﬁts in memory to eliminate page faults and
+minimize disk activity. In eﬀect, we consider the ﬁrst tier
+of a tiered index, which resides in memory. Subsequent
+tiers require accessing disk, but the tiers are organized such
+
+316Resource Stalls
+       36.5% 
+
+Front-end/Others
+       51.9% 
+
+RAT Stalls
+    8.5% 
+
+IFU Stalls
+   10.6% 
+
+L1 DCache
+     7.4% 
+
+Others
+ 52.5% 
+
+Floating Point
+        1.4% 
+
+Stores
+ 10.1% 
+
+IFetch
+18.9% 
+
+Loads
+20.9% 
+
+Stores
+  9.5% 
+
+Instruction Retirement
+            44.4% 
+
+(a)
+
+DTLB Misses
+       5.6% 
+
+L2 DCache
+    27.8% 
+
+Branch Misprediction
+              7.4% 
+(b)
+
+Branch
+ 15.6% 
+
+(c)
+
+ Loads
+ 71.1% 
+
+(d)
+
+Figure 3: Microarchitectural synopsis of search on Xeon. (a) Execution versus stall time. (b) Breakdown of
+stall activity. (c) Instruction mix of search. (d) Sources of L2 cache accesses.
+
+48.2x
+
+that this is extremely rare in practice. Therefore, it is the
+microarchitecture that determines application performance
+and not system-level conﬁguration.
+
+Additionally, to ensure fair comparison between Atom
+and Xeon, the total number of application threads servic-
+ing queries matches the number of hardware contexts avail-
+able. More speciﬁcally, simultaneous multithreading (SMT)
+is enabled on Atom and results are normalized to a single
+Harpertown socket unless stated otherwise. System software
+(application and server OS) is also conﬁgured such that our
+setup is representative of a typical deployment strategy, al-
+lowing core-level comparison.
+
+Microarchitectural and Power Measurements. We
+analyze the performance of the microarchitecture using de-
+tails collected via VTune [13], a toolbox that provides us
+an interface to hardware counters on the Xeon and Atom.
+These counters provide detailed insight into microarchitec-
+tural activity as various parts of the search engine execute.
+To relate this microarchitectural activity to energy consump-
+tion, we quantify power dissipated by the processor at the
+voltage regulator module. We identify the 12V lines entering
+the regulator, apply a Hall-eﬀect clamp ammeter (Agilent
+34134A), and collect power measurements at 1KHz using a
+digital multimeter (Agilent 34411A).
+
+3.2 Microarchitecture
+
+Let Xθ be Xeon’s sustainable throughput given the search
+application’s quality of service target θ. Figure 3 illustrates
+microarchitectural events as search executes at Xθ queries
+per second on the Xeon. As shown in Figure 3(a), 55.6 per-
+cent of execution time is spent stalled for either the register
+alias table (RAT), the front end (IFU), or other resources
+(e.g., cache and memory). These stalls suggest the datapath
+is not fully utilized with only 44.4 percent of execution time
+spent retiring instructions due to structural conﬂicts in the
+front end (fetch or decode) or long latency memory instruc-
+tions blocking instruction retirement. Figure 3(b) breaks
+down stall activity further.
+
+Stalls during instruction fetch arise from branches and
+instruction cache eﬀects. As illustrated in Figure 3(c), sub-
+stantial branch activity of 15.6 branches per 100 instructions
+makes the branch predictor a bottleneck. Moreover, the dat-
+apath sees a seven cycle penalty when the number of in-ﬂight
+speculative branches exceeds the capacity of the branch pre-
+dictor (e.g., branch history table) [13]. Furthermore, the
+instruction fetch often stalls for L2 cache activity with 18.9
+percent of L2 caches accesses attributed to instruction cache
+misses (Figure 3(d)).
+
+Other resource stalls may be attributed to memory activ-
+
+θ
+X
+
+12
+
+ 
+t
+
+ 
+
+a
+n
+o
+e
+X
+o
+
+ 
+
+t
+ 
+
+e
+v
+i
+t
+
+l
+
+a
+e
+R
+
+8
+
+4
+
+0
+
+e  
+
+ 
+
+e  
+
+ 
+
+ 
+ 
+
+ 
+
+n  
+o
+
+t
+c
+a
+p
+m
+
+I
+ 
+l
+l
+
+t
+
+a
+S
+ 
+h
+c
+t
+e
+F
+
+I
+ 
+
+t
+c
+a
+p
+m
+
+I
+ 
+
+n
+o
+
+i
+
+i
+
+i
+t
+c
+d
+e
+r
+p
+s
+M
+h
+c
+n
+a
+r
+B
+
+ 
+
+ 
+
+t
+
+a
+R
+n
+o
+
+ 
+
+i
+
+i
+
+i
+t
+c
+d
+e
+r
+p
+s
+M
+h
+c
+n
+a
+r
+B
+
+ 
+
+ 
+
+n
+o
+
+i
+t
+
+a
+z
+
+i
+l
+i
+t
+
+U
+ 
+s
+u
+B
+
+ 
+
+s
+d
+a
+e
+R
+
+ 
+t
+s
+r
+u
+B
+ 
+s
+u
+B
+
+ 
+
+n
+o
+
+i
+t
+
+a
+z
+
+i
+l
+i
+t
+
+U
+ 
+s
+u
+B
+a
+
+ 
+
+t
+
+a
+D
+
+ 
+
+i
+t
+
+a
+z
+
+i
+l
+i
+t
+
+U
+ 
+s
+u
+B
+ 
+k
+c
+a
+b
+e
+
+t
+i
+r
+
+W
+
+ 
+
+r
+e
+d
+v
+D
+
+i
+
+i
+
+ 
+
+e
+
+t
+
+i
+
+a
+R
+ 
+s
+s
+M
+B
+L
+T
+
+ 
+
+I
+ 
+
+t
+c
+a
+p
+m
+
+i
+
+I
+ 
+s
+s
+M
+B
+L
+T
+
+ 
+
+ 
+
+t
+
+i
+
+a
+R
+ 
+s
+s
+M
+B
+L
+T
+D
+
+ 
+
+ 
+
+e
+
+t
+
+i
+
+ 
+
+a
+R
+ 
+s
+s
+M
+e
+h
+c
+a
+C
+D
+1
+L
+
+ 
+
+ 
+
+i
+
+e
+t
+a
+R
+ 
+s
+s
+M
+e
+h
+c
+a
+C
+
+ 
+
+I
+ 
+
+1
+L
+
+ 
+
+t
+c
+a
+p
+m
+
+i
+
+ 
+
+I
+ 
+s
+s
+M
+e
+h
+c
+a
+C
+D
+1
+L
+
+ 
+
+ 
+
+I
+
+P
+C
+
+ 
+
+ 
+
+e  
+t
+a
+R
+ 
+n
+o
+i
+t
+c
+v
+E
+2
+L
+
+ 
+
+i
+
+ 
+
+i
+
+e
+t
+a
+R
+ 
+s
+s
+M
+e
+h
+c
+a
+C
+2
+L
+
+ 
+
+ 
+
+ 
+
+Figure 4: Atom with respect to Xeon.
+
+ity. According to Figure 3(c), a total of 30.4 percent of in-
+structions either load or store data, which leads to pressure
+on the cache hierarchy. Consequently, Figure 3(d) shows
+that loads and stores account for 81.2 percent of all cache
+accesses. L2 cache activity often translates into memory re-
+quests with 67.0 percent of bus activity attributed to mem-
+ory transactions (not shown). Application activity on Atom
+demonstrates similar behavior.
+
+Relative to Xeon, the Atom implements a simpler and
+deeper pipeline. As Figure 4 demonstrates, microarchitec-
+tural eﬀects are aggravated in the low-power Atom. This
+data corresponds to Atom at Aθ, the Atom’s sustainable
+throughput for quality-of-service target θ. The high fre-
+quency of branches and Atom’s deeper pipeline depth leads
+to a 10× increase in performance penalties from mispre-
+dicted branches. Atom divide time is 48.2× greater than
+that of the Xeon. These performance eﬀects may arise from
+the decision to favor generality over specialization for exe-
+cution units. Speciﬁcally, “the use of specialized execution
+units is minimized. For example, the SIMD integer multi-
+plier and Floating Point divider are used to execute instruc-
+tions that would normally require a dedicated scalar integer
+multiplier and integer divider respectively.” [10]
+
+Moreover, on a per core basis, the Atom implements a
+much smaller cache hierarchy. According to Table 1, the
+Atom data and L2 caches are 25 and 66 percent smaller
+per core than their Xeon counterparts. This smaller cache
+hierarchy translates into 1.5× and 8.0× the number of data
+and L2 cache misses. Collectively, these microarchitectural
+eﬀects lead to a 3× increase in cycles per instruction.
+
+Table 2 compares throughput for search at its quality-of-
+service target θ. Let Xθ and Aθ be the sustainable through-
+put of the Xeon and Atom in queries per second (QPS). At
+the same θ, Xeon sustains 3.9× the throughput sustained
+by an Atom (Xθ = 3.9×Aθ). On a per core basis, each of
+
+31780
+
+60
+
+40
+
+20
+
+0
+
+)
+
+W
+
+(
+ 
+r
+e
+w
+o
+P
+
+ Xeon
+ Atom
+
+5
+4
+3
+2
+1
+
+r
+e
+w
+o
+P
+m
+o
+A
+
+t
+
+ 
+
+60
+
+62
+
+64
+
+66
+
+68
+
+70x103
+
+Time (ms)
+
+Figure 5: Xeon consumes ∼62.5W, where as the low-
+power Atom consumes ∼3.2W on average.
+the four Xeon cores sustain 2.0× the throughput sustained
+by each of the two Atom cores. Sustainable throughput dif-
+fers from absolute CPI because some processing is wasted on
+failed queries (time-outs), therefore system-level throughput
+gains can be less than microarchitectural gains.
+
+3.3 Power
+
+Figure 5 illustrates the power time series for both Xeon
+and Atom as search is running. The Xeon operates with an
+idle power component of 38.5W. The substantial idle power
+dissipated is particularly problematic given that the proces-
+sor is stalled for 56.6 percent of its cycles. The Xeon exhibits
+a dynamic power range of 38.5 to 75W with a 95 percent dif-
+ference between the idle and peak power. In contrast, Atom
+has a low idle power component of 1.4W with a 168 percent
+diﬀerence between idle and peak power. The Atom gets a
+drastic power reduction of 9.8× relative to Xeon. Atom’s
+low idle power and large dynamic range is particularly at-
+tractive in the pursuit of energy proportional computing [4].
+
+3.4 Performance
+
+On a per core basis, the Atom is 5× more eﬃcient than
+the Xeon. We compute performance and power eﬃciency
+as sustainable QPS per watt. Table 2 compares the Xeon
+and Atom over a variety of metrics. The power diﬀerentials
+(19.5× per processor, 9.8× per core) dominate the perfor-
+mance diﬀerentials (3.9× per processor, 1.9× per core). The
+large power cost of the Xeon is not justiﬁed by relatively
+modest increases in sustainable throughput.
+
+Although this paper focuses primarily on power eﬃciency,
+we also mention area and price eﬃciency for comparison.
+Area eﬃciency is comparable between the two architectures,
+indicating the Xeon area overheads from dynamic instruc-
+tion scheduling and out-of-order execution produce a lin-
+ear improvement in throughput for search. However, Xeon
+price eﬃciency is 0.45× Atom price eﬃciency. Xeon prices
+are 8.4× Atom prices, but each Xeon sustains only 3.8×
+the number of queries per second. Note we consider price
+seen by the data center, not cost seen by processor manu-
+facturers; manufacturers may target higher proﬁt margins
+on server-class processors. Moreover, this analysis considers
+only equipment prices, not total cost of ownership. Periph-
+eral components (e.g., motherboard, network interface card)
+will also impact the analysis. Section 5 will further assess
+the sensitivity of these eﬀects.
+
+4. PRICE OF EFFICIENCY
+
+To understand the role of mobile-class architectures in
+data centers as workloads continue to emerge and evolve,
+we must identify and understand the price of exploiting
+small core eﬃciency. For search, we ﬁnd quality-of-service
+
+becomes less robust as small cores are less capable of absorb-
+ing even modest increases in query load. Greater variance
+in the per query latency distribution indicates more queries
+experience higher latencies, which limit the time available to
+perform additional computation and improve search result
+relevance and ranking. Both quality-of-service and latency
+eﬀects depend, in part, on the shifts in computational inten-
+sity and resource bottlenecks when using small cores.
+
+4.1 Robustness
+
+Quality-of-Service(QoS). Given a quality of service tar-
+get θ, Xeon and Atom sustain a throughput Xθ and Aθ, re-
+spectively. We consider QoS guarantees robust if target θ
+is met despite ﬂuctuations or temporary increases in query
+load. Robust QoS guarantees are a critical application re-
+quirement for search and data center applications. Robust-
+ness also determines the extent to which any one node can
+be utilized. If index server nodes can absorb activity spikes
+with little QoS degradation, they can operate closer to peak
+sustainable throughput.
+
+For a given increase in query load, Figure 6 indicates ro-
+bustness trends. The horizontal axis quantiﬁes QPS normal-
+ized to Xeon’s sustainable throughput Xθ. The vertical axis
+quantiﬁes QoS in terms of the percentage of successfully pro-
+cessed queries. Xeon processes the additional queries more
+robustly. Degradations in quality-of-service are modest and
+gradual. Atom is unable to absorb a large number of addi-
+tional queries and quickly violates its QoS target.2
+
+Latency.
+
+Increasing query load not only degrades the
+success rate in a quality-of-service metric, it also increases
+the latency at which that service is delivered. The search al-
+gorithm uses multiple strategies to reﬁne search results if the
+query latency has not yet exceeded a cutoﬀ latency LC . Fig-
+ure 7 illustrates latency trends with latencies normalized to
+the cutoﬀ latency LC . Using a logarithmic vertical axis, the
+ﬁgure indicates super-exponential increases in mean latency
+as query load increases on both Xeon and Atom. At their
+respective sustainable throughputs, Atom’s latency is nearly
+3× greater than that of the Xeon (0.33LC versus 0.12LC ).
+Relevance. QoS and latency shortcomings have a direct
+impact on search query relevance, which refers to a user’s
+utility from a set of search results. Search algorithms often
+have multiple strategies for reﬁning their results. However,
+load and cutoﬀ latency LC determine room for reﬁnement.
+In a tiered index, pages indexed in the ﬁrst tier are always
+ranked but indices in subsequent tiers may only be ranked
+if LC has not been exceeded. In such scenarios, lower per
+query latencies allow for multiple iterative reﬁnements of
+search results to improve page relevance. Moreover, lower
+latencies provide opportunities to search algorithm designers
+for exploring latency-relevance trade-oﬀs.
+
+Since the average latency on Atom at Aθ is higher than
+on the Xeon at Xθ (see Figure 7), search on the Atom is
+unable to reﬁne pages in a manner equivalent to the Xeon.
+Figure 8 shows how page relevance on the Atom compares
+to the Xeon at Xθ as load increases. The vertical axis com-
+pares matching pages returned by search on Xeon and Atom,
+deﬁning baseline relevance with Xeon search results. For
+example, 100 percent means 100 percent of Atom queries
+return search results that perfectly match those from Xeon
+2We study Xeon and Atom beyond sustainable throughput
+to characterize robustness. We do not assume sustainable
+operation under such loads.
+
+318Performance (QPS)
+Power (W)
+Power Eﬃciency (QPS/W, ×10
+6
+Area (T, ×10
+Area (mm
+Area Eﬃciency (QPS/mm
+Price ($)
+Price Eﬃciency (QPS/$, ×10
+
+)
+
+)
+
+2
+
+2
+
+−2
+
+)
+
+−2
+
+)
+
+, ×10
+
+−2
+
+)
+
+Per Processor
+
+Per Core
+
+Xeon
+3.86Aθ
+62.50
+6.17Aθ
+
+820
+214
+
+1.80Aθ
+
+380
+
+1.02Aθ
+
+Atom
+
+Aθ
+3.2
+
+31.25Aθ
+
+94
+50
+
+45
+
+2.00Aθ
+
+2.22Aθ
+
+∆X/A
+3.86×
+19.53×
+0.20×
+8.72×
+4.28×
+0.90×
+8.44×
+0.45×
+
+Xeon
+0.96Aθ
+15.63
+6.17Aθ
+
+n/a
+n/a
+n/a
+95
+
+1.02Aθ
+
+Atom
+0.5Aθ
+1.60
+
+31.25Aθ
+
+n/a
+n/a
+n/a
+22.50
+2.22Aθ
+
+∆X/A
+1.93×
+9.77×
+0.20×
+n/a
+n/a
+n/a
+4.22×
+0.45×
+
+Table 2: Search on Xeon versus Atom. Performance is quantiﬁed by sustainable throughput, which is the
+maximum number of queries arriving per second (QPS) that can be serviced successfully at the target quality-
+of-service θ. QPS is reported relative to Atom performance Aθ. Average power is used to compute eﬃciency.
+Area is reported per processor. Price is reported per unit purchased in orders of one thousand units.
+
+  Aθ 
+
+  Xθ 
+
+2Xθ 
+
+ Aθ 
+
+  Xθ 
+
+2Xθ 
+
+100
+
+80
+
+60
+
+40
+
+20
+
+0
+
+s
+e
+i
+r
+e
+u
+Q
+
+ 
+l
+u
+f
+s
+s
+e
+c
+c
+u
+S
+
+ 
+f
+o
+ 
+%
+
+100
+
+10
+
+1
+
+0.1
+
+0.01
+
+)
+ 
+c
+L
+
+ 
+
+o
+
+t
+ 
+
+d
+e
+z
+
+i
+l
+
+a
+m
+r
+o
+N
+
+ 
+(
+ 
+y
+c
+n
+e
+t
+a
+L
+
+100
+
+99
+
+98
+
+97
+
+96
+
+95
+
+q
+
+ 
+
+X
+g
+n
+h
+c
+t
+
+i
+
+a
+M
+ 
+s
+e
+g
+a
+P
+
+ 
+f
+
+o
+ 
+%
+
+ 0 
+ N-d
+4
+ N-d
+3  
+ N-d
+2
+ N-d
+1
+ N
+
+0.5
+
+1.0
+
+1.5
+
+2.0
+
+QPS ( Normalized to Xθ )
+
+0.5
+
+1.0
+
+1.5
+
+2.0
+
+QPS ( Normalized to Xθ )
+
+0.5
+
+1.0
+
+1.5
+
+2.0
+
+QPS ( Normalized to A
+q
+
+ )
+
+Figure 6: QoS on Xeon and
+Atom normalized to Xθ.
+
+Figure 7: Latency on Xeon and
+Atom normalized to Xθ.
+
+Figure 8: Bottlenecks on Atom
+limit the quality of page hits.
+
+search. At 98 percent, the vertical axis indicates 2 percent of
+Atom queries produce diﬀerent results relative to Xeon. A
+query’s results match perfectly across architectures if the top
+N results match. The magnitude of the diﬀerence is quan-
+tiﬁed by δ1 < δ2 < δ3 < δ4 < N where a reduced subset of
+N − δi of results match. In the worst case, none of the re-
+sults match. This measure of relevance is highly conservative
+since it assumes Xeon deﬁnes the best relevance and any re-
+sult mismatch degrades user perceived relevance. However,
+this metric facilitates the relevance analysis by quantifying
+search result diﬀerences.
+
+Even considering the case when the load is at an absolute
+minimum on the Atom, approximately 1 percent of queries
+produce diﬀerent results on Atom. Query latency on Atom
+at minimum load (e.g., 10 queries per second) is still higher
+than the latency on Xeon at Xθ (see Figure 7). Conse-
+quently, page reﬁning algorithms have a third of the time
+to complete their work, leading to diﬀerent search results
+from those on the Xeon. At Aθ about 1.5 percent of queries
+produce diﬀerent results and the number of diﬀering queries
+increases to 3 percent as load approaches 2Aθ.
+
+4.2 Flexibility
+
+A search engine frequently experiences user-generated ac-
+tivity spikes measured in absolute terms. Therefore, the un-
+derlying microarchitecture must be capable of adapting to
+rapid and signiﬁcant shifts in search activity. This is espe-
+cially the case in the presence of complex queries. Complex
+queries consist of multiple simpler queries that cannot be
+broken down and distributed across multiple nodes; each
+index serving node (ISN) must process the complex query.
+Even a modest spike in complex queries causes a signiﬁcant
+absolute activity spike within an ISN. Therefore, nodes sen-
+sitive to activity spikes must be overprovisioned by operating
+below sustainable throughput to provide a safety margin. To
+understand this sensitivity, we evaluate how query latency
+
+100
+
+80
+
+60
+
+40
+
+20
+
+0
+
+n
+o
+
+i
+t
+
+i
+
+u
+b
+i
+r
+t
+s
+D
+e
+v
+i
+t
+
+ 
+
+l
+
+a
+u
+m
+u
+C
+%
+
+ 
+
+100
+
+80
+
+60
+
+40
+
+20
+
+0
+
+n
+o
+
+i
+t
+
+i
+
+u
+b
+i
+r
+t
+s
+D
+e
+v
+i
+t
+
+ 
+
+l
+
+a
+u
+m
+u
+C
+%
+
+ 
+
+ Xθ
+ Xθ +   λ 
+ Xθ + 2λ  
+ Xθ + 3λ 
+
+ Aθ
+ Aθ +   λ 
+ Aθ + 2λ 
+ Aθ + 3λ 
+
+0.5
+
+1.0
+
+1.5
+
+2.0
+
+Latency ( Normalized to Lc )
+
+0.5
+
+1.0
+
+1.5
+
+2.0
+
+Latency ( Normalized to Lc )
+
+(a) Xeon
+
+(b) Atom
+
+Figure 9: Query latency distribution. The exper-
+iment allows queries to exceed LC and tracks the
+frequency in order to understand how the two pro-
+cessors handle sudden bursts in activity spikes.
+
+distribution changes as load increases in the presence of dif-
+ferent types of queries. We explain the behavior through
+microarchitectural eﬀects.
+
+Cutoﬀ Latencies. Figure 9 illustrates the latency distri-
+bution with latencies normalized to the cutoﬀ latency LC .
+The experiment allows queries to exceed LC and tracks the
+frequency to understand how the two processors handle sud-
+den bursts in activity spikes. Processing queries at Xθ, 89.4
+percent of queries are satisﬁed in less than 0.2LC , 98.2 per-
+cent of queries are satisﬁed before the cutoﬀ latency LC ,
+and less than 1.0 percent of queries require more than 2LC .
+Moreover, on the Xeon, these trends are modestly sensitive
+to activity spikes, which we quantify using λ. For an in-
+creased load of Xθ + 3λ, 82.7 and 96.4 percent of queries
+are still satisﬁed in less than 0.2LC and LC .
+
+Atom per query latency exhibits much greater variation
+and sensitivity to activity spikes (Figure 9(b)). Processing
+queries at Aθ on the Atom, only 68.2 percent of queries are
+satisﬁed in less than 0.2LC . At 93.4 percent, the number
+of queries completing before LC on the Atom is comparable
+to that on the Xeon. However, nearly 3.0 percent of queries
+
+319 Xθ + λ 
+
+ Xθ + 2λ 
+
+ Xθ + 3λ 
+
+t
+
+e  
+a
+R
+n
+o
+
+ 
+
+t
+c
+a
+p
+m
+
+I
+ 
+l
+l
+
+t
+
+a
+S
+h
+c
+t
+
+ 
+
+e
+F
+
+I
+ 
+
+t
+c
+a
+p
+m
+
+i
+
+I
+ 
+n
+o
+i
+t
+c
+d
+e
+r
+p
+s
+M
+ 
+h
+c
+n
+a
+r
+B
+
+i
+
+ 
+
+i
+
+i
+
+i
+t
+c
+d
+e
+r
+p
+s
+M
+h
+c
+n
+a
+r
+B
+
+ 
+
+ 
+
+n
+o
+
+i
+t
+
+a
+z
+
+i
+l
+i
+t
+
+U
+ 
+s
+u
+B
+
+ 
+
+s
+d
+a
+e
+R
+
+ 
+t
+s
+r
+u
+B
+ 
+s
+u
+B
+
+ 
+
+n
+o
+
+i
+t
+
+a
+z
+
+i
+l
+i
+t
+
+U
+ 
+s
+u
+B
+a
+
+ 
+
+t
+
+a
+D
+
+ 
+
+i
+t
+
+a
+z
+
+i
+l
+i
+t
+
+U
+ 
+s
+u
+B
+ 
+k
+c
+a
+b
+e
+
+t
+i
+r
+
+W
+
+ 
+
+n  
+o
+
+e  
+
+e  
+
+e
+
+t
+
+i
+
+a
+R
+ 
+s
+s
+M
+B
+L
+T
+
+ 
+
+I
+ 
+
+t
+c
+a
+p
+m
+
+i
+
+I
+ 
+s
+s
+M
+B
+L
+T
+
+ 
+
+ 
+
+t
+
+i
+
+a
+R
+ 
+s
+s
+M
+B
+L
+T
+D
+
+ 
+
+ 
+
+r  
+e
+d
+v
+D
+
+i
+
+i
+
+ 
+
+e
+
+t
+
+i
+
+ 
+
+a
+R
+ 
+s
+s
+M
+e
+h
+c
+a
+C
+D
+1
+L
+
+ 
+
+ 
+
+t
+
+i
+
+a
+R
+ 
+s
+s
+M
+e
+h
+c
+a
+C
+
+ 
+
+I
+ 
+
+1
+L
+
+ 
+
+t
+c
+a
+p
+m
+
+i
+
+I
+ 
+s
+s
+M
+ 
+e
+h
+c
+a
+C
+D
+ 
+1
+L
+ 
+
+I
+
+P
+C
+
+ 
+
+e  
+t
+a
+R
+ 
+n
+o
+i
+t
+c
+v
+E
+ 
+2
+L
+ 
+
+i
+
+i
+
+t
+
+e
+a
+R
+ 
+s
+s
+M
+e
+h
+c
+a
+C
+2
+L
+
+ 
+
+ 
+
+ 
+
+(a) Xeon
+
+ Aθ + λ 
+
+ Aθ + 2λ 
+
+Aθ + 3λ 
+
+2x
+
+θ
+X
+
+ 
+t
+
+a
+
+ 
+
+n
+o
+e
+X
+o
+
+ 
+
+t
+ 
+
+e
+v
+i
+t
+
+l
+
+a
+e
+R
+
+1.6
+1.4
+1.2
+1.0
+0.8
+0.6
+
+θ
+A
+
+ 
+t
+a
+ 
+m
+o
+t
+A
+ 
+o
+t
+ 
+e
+v
+i
+t
+a
+e
+R
+
+l
+
+1.6
+1.4
+1.2
+1.0
+0.8
+0.6
+
+t
+c
+a
+p
+m
+
+I
+ 
+l
+l
+
+t
+
+ 
+
+a
+S
+h
+c
+t
+e
+F
+
+I
+ 
+
+i
+
+ 
+
+t
+
+ 
+
+e  
+a
+R
+n
+o
+i
+t
+c
+d
+e
+r
+p
+s
+M
+ 
+h
+c
+n
+a
+r
+B
+
+i
+
+ 
+
+t
+c
+a
+p
+m
+
+I
+ 
+
+n
+o
+
+i
+
+i
+
+i
+t
+c
+d
+e
+r
+p
+s
+M
+h
+c
+n
+a
+r
+B
+
+ 
+
+ 
+
+n
+o
+
+i
+t
+
+a
+z
+
+i
+l
+i
+t
+
+U
+ 
+s
+u
+B
+
+ 
+
+s
+d
+a
+e
+R
+
+ 
+t
+s
+r
+u
+B
+ 
+s
+u
+B
+
+ 
+
+n
+o
+
+i
+t
+
+a
+z
+
+i
+l
+i
+t
+
+U
+ 
+s
+u
+B
+a
+
+ 
+
+t
+
+a
+D
+
+ 
+
+i
+t
+
+a
+z
+
+i
+l
+i
+t
+
+U
+ 
+s
+u
+B
+ 
+k
+c
+a
+b
+e
+
+t
+i
+r
+
+W
+
+ 
+
+ 
+
+n  
+o
+
+e  
+
+ 
+
+ 
+ 
+
+r
+e
+d
+v
+D
+
+i
+
+i
+
+ 
+
+e
+
+t
+
+i
+
+a
+R
+ 
+s
+s
+M
+B
+L
+T
+
+ 
+
+I
+ 
+
+t
+c
+a
+p
+m
+
+i
+
+I
+ 
+s
+s
+M
+B
+L
+T
+
+ 
+
+ 
+
+t
+
+i
+
+a
+R
+ 
+s
+s
+M
+B
+L
+T
+D
+
+ 
+
+ 
+
+e
+
+t
+
+i
+
+a
+R
+ 
+s
+s
+M
+ 
+e
+h
+c
+a
+C
+D
+ 
+1
+L
+ 
+
+e
+
+t
+
+i
+
+a
+R
+ 
+s
+s
+M
+e
+h
+c
+a
+C
+
+ 
+
+I
+ 
+
+1
+L
+
+ 
+
+t
+c
+a
+p
+m
+
+i
+
+ 
+
+I
+ 
+s
+s
+M
+e
+h
+c
+a
+C
+D
+1
+L
+
+ 
+
+ 
+
+I
+
+P
+C
+
+ 
+
+ 
+
+e  
+t
+a
+R
+ 
+n
+o
+
+i
+
+t
+
+e
+a
+R
+ 
+s
+s
+M
+e
+h
+c
+a
+C
+2
+L
+
+ 
+
+ 
+
+ 
+
+i
+
+i
+t
+c
+v
+E
+2
+L
+
+ 
+
+ 
+
+(b) Atom
+
+Figure 10: Activity beyond sustainable query load.
+
+require more than 2LC . Thus, compared to Xeon latency
+distributions, we observe a much larger spread in Atom’s
+minimum and maximum per query latencies. Furthermore,
+Atom latency distributions are highly sensitive to activity
+spikes. For an increased load of Aθ + 3λ, only 33.0 and 77.6
+percent of queries are satisﬁed in less than 0.2Lc and LC .
+
+Figure 10 examines microarchitectural activity to provide
+deeper insight into the ﬂexibility of the Xeon processor and
+the inﬂexibility of the Atom processor under load. Data is
+normalized with respect to activity on each processor at its
+sustainable throughput. Increases in query load minimally
+impacts the Xeon because next to added bus activity we see
+no other noticeable changes in Figure 10(a). However, query
+load increases of λ, 2λ and 3λ QPS beyond Aθ on the Atom
+degrades microarchitectural performance (CPI) by 7.5, 13.2,
+and 16.5 percent, respectively. These performance degrada-
+tions arise primarily from increasing contention in the cache
+hierarchy. The small 1 MB, 8-way L2 cache becomes a con-
+straint with L2 miss rate increasing by up to 22.2 percent
+and L2 eviction rate increasing by up to 100 percent. The
+increased eviction rate results in much higher bus utiliza-
+tion; writebacks increase linearly with the additional query
+load. As the memory subsystem becomes a bottleneck, the
+pipeline is more often stalled waiting for data. The divider
+utilization falls by 8 percent with an extra load of 3λ QPS.
+Query Complexity. Atom processor’s susceptibility to
+absolute load spikes is a function of query complexity. Query
+latency on the Atom takes a signiﬁcant hit at throughput
+rates higher than Aθ because certain types of queries require
+more computation than others. Search criteria (e.g., lan-
+guage speciﬁcation, conditional statements like ANDs, ORs
+etc.) determine query complexity, and how long it takes
+
+100
+
+98
+
+96
+
+94
+
+92
+
+s
+e
+i
+r
+e
+u
+Q
+
+ 
+l
+u
+f
+s
+s
+e
+c
+c
+u
+S
+
+ 
+f
+o
+ 
+
+90%
+
+ Query type A
+ Query type B
+ Query type C
+
+QPS
+(a) Xeon
+
+100
+
+98
+
+96
+
+94
+
+92
+
+s
+e
+i
+r
+e
+u
+Q
+
+ 
+l
+u
+f
+s
+s
+e
+c
+c
+u
+S
+
+ 
+f
+o
+ 
+
+90%
+
+ Query type A
+ Query type B
+ Query type C
+
+QPS
+(b) Atom
+
+Xθ
+
+ Xθ + λ   Xθ + 2λ   Xθ + 3λ 
+
+Aθ
+
+ Aθ + λ  Aθ + 2λ Aθ + 3λ
+
+Figure 11: QoS degradation by query complexity.
+Query type A has no search constraints. Query
+types B and C have increasing amounts of complex-
+ity, requiring more processing capability.
+
+to process a query. Complex queries are broken down into
+simpler multiple individual queries within the ISN, so the
+“eﬀective” query load is higher for complex queries.
+
+To demonstrate how query complexity aﬀects processor
+behavior and sustainable throughput, we isolate queries with
+diﬀerent search criteria from the pool of mixed queries we
+use for all other evaluation and label them as query types A,
+B and C in Figure 11. Query type A has no complex search
+criteria, and is therefore fast to process. Query types B
+and C impose search criteria. Query type C contains many
+more constraints than type B, and thus requires even more
+processing.
+
+Atom is able to sustain QoS equivalent to that of the Xeon
+
+for query type A even under high activity spikes (Aθ+3λ QPS)
+because of query simplicity. But the processor is unable to
+stay competitive for query types B and C as load increases
+beyond Aθ. At Aθ+3λ QPS the percentage of successful
+queries is only 90 percent when a stream of type C queries
+arrive back to back. These queries take longer to process,
+and consequently search queues begin to ﬁll up and new
+incoming queries are dropped until search completes some
+pending queries or exceeds cutoﬀ latencies .
+In contrast,
+Figure 11(a) shows Xeon does not suﬀer from this problem.
+Regardless of query complexity, Xeon is able to absorb ac-
+tivity spikes smoothly.
+
+4.3 Reliability
+
+Hardware or software-based failures are often threats in a
+data center. Therefore, we must understand how a homoge-
+neous deployment of servers comprising of only Atom pro-
+cessors performs when load is re-balanced to accommodate
+failures. Load redistribution due to node failures leads to
+fractional or relative increases of sustainable throughput for
+a given processor. For instance, a processor will experience
+a relative load of 1.2θ when a hypothetical rack consisting of
+ﬁve systems experiences one system failure. Since the same
+absolute load is more evenly distributed across many more
+Atom ISNs, as compared to a data center full of Xeons, we
+ﬁnd that on a per-node basis Atom achieves higher sustain-
+able fail-over throughput compared to a Xeon.
+
+Atom is more reliable for deploying search. To compare
+how QoS degrades due to fractional load increases across
+Atom and Xeon, we present the QoS data of each system
+normalized to its sustainable throughput in Figure 12. At
+loads slightly beyond sustainable throughput θ (1.0 QPS on
+the normalized axis), the Xeon latency trend line increases
+more sharply than that of the Atom. Atom QoS degrades to
+95 percent at 2Aθwhereas Xeon QoS degrades to 64.5 per-
+
+320100
+
+90
+
+80
+
+70
+
+60
+
+50
+
+s
+e
+i
+r
+e
+u
+Q
+
+ 
+l
+
+u
+f
+s
+s
+e
+c
+c
+u
+S
+
+ 
+f
+
+ 
+
+o
+%
+
+2A
+
+q 
+
+2X
+
+q 
+
+100
+
+10
+
+1
+
+0.1
+
+0.01
+
+c
+
+)
+ 
+
+L
+
+ 
+
+o
+
+t
+ 
+
+d
+e
+z
+
+i
+l
+
+a
+m
+r
+o
+N
+
+ 
+(
+ 
+y
+c
+n
+e
+
+t
+
+a
+L
+
+ A
+
+q 
+
+X
+
+q 
+
+1.0
+QPS
+
+0.5
+
+1.5
+
+2.0
+
+1.0
+QPS
+
+0.5
+
+1.5
+
+2.0
+
+Figure 12:
+Compar-
+ing QoS normalized to
+each system’s sustain-
+able throughput.
+
+Figure 13: Comparing
+latency normalized to
+each system’s sustain-
+able throughput.
+
+cent at 2Xθ. QoS degrades more gradually because the same
+fractional increase in load (e.g., 1.2×) on Atom corresponds
+to a smaller increase in the absolute number of queries on
+Xeon; Xθis larger than Aθ.
+
+Xeon is unable to handle load increases robustly because
+of latency violations. Compare the latency on Xeon versus
+Atom with respect to each machine’s sustainable through-
+put in Figure 13. Latency increases more gradually on the
+Atom than on the Xeon. Query latencies exceed LC on the
+Xeon beyond 1.5Xθ . This means that even though the pro-
+cessor eventually locates pages corresponding to a query, the
+results are invalid because the aggregator terminates after
+LC , assuming the ISN cannot produce the required pages.
+By comparison,
+latency on the Atom is still tolerable at
+0.5LC at Aθ, and thus its results are still valid.
+
+Xeon is unable to scale to higher loads because the mi-
+croarchitecture is saturated beyond 1.5Xθ. Figure 14 shows
+microarchitectural eﬀects across the Xeon and Atom proces-
+sors for relative load increases of 1.2×, 1.4×, 1.6×, 1.8×, and
+2× beyond sustainable throughput. On Xeon, the proces-
+sor’s microarchitectural event activity plateaus from 1.6Xθ
+onwards. Branch misprediction rates, bus utilization, TLB
+activity, cache activity all reach maximum levels. Therefore,
+the CPI increase is capped at ∼1.11x. While the Xeon sys-
+tem saturates at 1.6Xθ , Atom has more room for additional
+fail-over load, as indicated by increasing additional microar-
+chitectural activity and CPI for the same relative loads.
+
+Overall, these ﬁndings indicate that while Xeon is ca-
+pable of sustaining higher throughput, it must run signif-
+icantly under peak capacity to handle fail-overs, thus low-
+ering throughput-per-watt further on top of already high
+power costs. As fail-over load per Atom server is smaller,
+and as its load is more distributed than in a data center
+comprising of fewer but higher capacity Xeons, Atom-based
+search is more reliable and energy-eﬃcient. However, there
+are platform and system-level eﬀects, in addition to ﬂexibil-
+ity sensitivity that impact any transition to Atoms.
+
+5. MITIGATING THE PRICE OF
+
+EFFICIENCY
+
+Strategies are necessary to mitigate the price of eﬃciency
+in using small cores for our web search. In this section, we
+propose holistic system-level strategies, as well as microar-
+chitectural enhancements to individual cores to enhance ro-
+bustness, ﬂexibility and reliability guarantees.
+
+5.1 Over-provisioning and Under-utilization
+
+To improve QoS despite activity spikes, we might over-
+provision and underutilize Atom’s. If we ﬁnd an Atom node
+
+X
+
+q 
+
+ 1.2Xθ 
+
+ 1.4Xθ 
+
+ 1.6Xθ 
+
+ 1.8Xθ 
+
+ 2.0Xθ 2x
+
+θ
+X
+
+ 
+t
+a
+ 
+n
+o
+e
+X
+ 
+o
+t
+ 
+e
+v
+i
+t
+a
+e
+R
+
+l
+
+1.6
+1.4
+1.2
+1.0
+0.8
+0.6
+
+θ
+A
+
+ 
+t
+
+ 
+
+a
+m
+o
+A
+o
+
+ 
+
+t
+
+t
+ 
+
+e
+v
+i
+t
+
+l
+
+a
+e
+R
+
+1.6
+1.4
+1.2
+1.0
+0.8
+0.6
+
+e  
+
+n  
+o
+
+n
+o
+
+i
+t
+
+a
+z
+
+i
+l
+i
+t
+
+U
+ 
+s
+u
+B
+
+ 
+
+s
+d
+a
+e
+R
+
+ 
+t
+s
+r
+u
+B
+ 
+s
+u
+B
+
+ 
+
+n
+o
+i
+t
+a
+z
+
+i
+l
+i
+t
+
+U
+ 
+s
+u
+B
+ 
+a
+t
+a
+D
+
+ 
+
+i
+t
+
+a
+z
+
+i
+l
+i
+t
+
+U
+ 
+s
+u
+B
+ 
+k
+c
+a
+b
+e
+
+t
+i
+r
+
+W
+
+ 
+
+r  
+e
+d
+v
+D
+
+i
+
+i
+
+ 
+
+t
+c
+a
+p
+m
+
+i
+
+I
+ 
+s
+s
+M
+B
+L
+T
+
+ 
+
+ 
+
+e
+
+t
+
+i
+
+a
+R
+ 
+s
+s
+M
+B
+L
+T
+
+ 
+
+I
+ 
+
+i
+
+e  
+t
+a
+R
+ 
+s
+s
+M
+B
+L
+T
+D
+
+ 
+
+ 
+
+e  
+
+I
+
+P
+C
+
+ 
+
+t
+
+a
+R
+n
+o
+
+ 
+
+i
+
+i
+t
+c
+v
+E
+2
+L
+
+ 
+
+ 
+
+i
+
+t
+
+e  
+a
+R
+ 
+s
+s
+M
+e
+h
+c
+a
+C
+
+ 
+
+I
+ 
+
+1
+L
+
+ 
+
+e
+
+t
+
+i
+
+ 
+
+a
+R
+ 
+s
+s
+M
+e
+h
+c
+a
+C
+2
+L
+
+ 
+
+ 
+
+i
+
+e
+t
+a
+R
+ 
+s
+s
+M
+ 
+e
+h
+c
+a
+C
+D
+ 
+1
+L
+ 
+
+t
+c
+a
+p
+m
+
+i
+
+ 
+
+I
+ 
+s
+s
+M
+e
+h
+c
+a
+C
+D
+1
+L
+
+ 
+
+ 
+
+t
+c
+a
+p
+m
+
+I
+ 
+l
+l
+
+t
+
+ 
+
+a
+S
+h
+c
+t
+e
+F
+
+I
+ 
+
+t
+c
+a
+p
+m
+
+I
+ 
+
+n
+o
+
+i
+
+i
+
+i
+t
+c
+d
+e
+r
+p
+s
+M
+h
+c
+n
+a
+r
+B
+
+ 
+
+ 
+
+t
+
+a
+R
+n
+o
+
+ 
+
+i
+
+i
+
+i
+t
+c
+d
+e
+r
+p
+s
+M
+h
+c
+n
+a
+r
+B
+
+ 
+
+ 
+
+(a) Xeon
+
+ 1.2Aθ 
+
+ 1.4Aθ 
+
+ 1.6Aθ 
+
+ 1.8Aθ 
+
+ 2.0Aθ
+
+2x
+
+e  
+
+n  
+o
+
+n
+o
+
+i
+t
+
+a
+z
+
+i
+l
+i
+t
+
+U
+ 
+s
+u
+B
+
+ 
+
+s
+d
+a
+e
+R
+
+ 
+t
+s
+r
+u
+B
+ 
+s
+u
+B
+
+ 
+
+n
+o
+
+i
+t
+
+a
+z
+
+i
+l
+i
+t
+
+U
+ 
+s
+u
+B
+a
+a
+D
+
+t
+
+ 
+
+ 
+
+i
+t
+
+a
+z
+
+i
+l
+i
+t
+
+U
+ 
+s
+u
+B
+ 
+k
+c
+a
+b
+e
+
+t
+i
+r
+
+W
+
+ 
+
+r  
+e
+d
+v
+D
+
+i
+
+i
+
+ 
+
+t
+c
+a
+p
+m
+
+i
+
+I
+ 
+s
+s
+M
+B
+L
+T
+
+ 
+
+ 
+
+t
+
+e
+a
+R
+ 
+s
+s
+M
+B
+L
+T
+
+ 
+
+i
+
+I
+ 
+
+i
+
+e  
+t
+a
+R
+ 
+s
+s
+M
+B
+L
+T
+D
+
+ 
+
+ 
+
+e  
+
+I
+
+P
+C
+
+ 
+
+t
+
+a
+R
+n
+o
+
+ 
+
+i
+
+i
+t
+c
+v
+E
+2
+L
+
+ 
+
+ 
+
+i
+
+t
+
+e  
+a
+R
+ 
+s
+s
+M
+ 
+e
+h
+c
+a
+C
+
+I
+ 
+1
+L
+ 
+
+e
+
+t
+
+i
+
+ 
+
+a
+R
+ 
+s
+s
+M
+e
+h
+c
+a
+C
+2
+L
+
+ 
+
+ 
+
+i
+
+ 
+
+e
+t
+a
+R
+ 
+s
+s
+M
+e
+h
+c
+a
+C
+D
+1
+L
+
+ 
+
+ 
+
+t
+c
+a
+p
+m
+
+i
+
+ 
+
+I
+ 
+s
+s
+M
+e
+h
+c
+a
+C
+D
+1
+L
+
+ 
+
+ 
+
+t
+c
+a
+p
+m
+
+I
+ 
+l
+l
+
+a
+t
+S
+ 
+h
+c
+t
+e
+F
+
+I
+ 
+
+t
+c
+a
+p
+m
+
+i
+
+I
+ 
+n
+o
+i
+t
+c
+d
+e
+r
+p
+s
+M
+ 
+h
+c
+n
+a
+r
+B
+
+i
+
+ 
+
+t
+a
+R
+n
+o
+
+ 
+
+i
+
+i
+
+i
+t
+c
+d
+e
+r
+p
+s
+M
+h
+c
+n
+a
+r
+B
+
+ 
+
+ 
+
+(b) Atom
+
+Figure 14: Microarchitectural activity during load
+redistribution because of fail-overs.
+
+cannot tolerate a λ increase in QPS in a robust manner, we
+simply utilize the node at (1 − λ/Aθ) percent. While this re-
+duces throughput, the power diﬀerence between Atom and
+Xeon processors still favors mobile processors. Overprovi-
+sioning, however, incurs signiﬁcant power overheads and has
+implications for the total cost of ownership (TCO). We break
+down TCO into server costs, their average power consump-
+tion, and the associated infrastructure for cooling and power
+distribution to provide insight into the system-level costs of
+Xeons and Atoms. We also assess the sensitivity of Atom’s
+eﬃciency advantages to system-level costs.
+
+Platform Overheads. Although the Atom core itself
+typically dissipates anywhere between 1.5 to 4.5W when run-
+ning search, peripheral components on the motherboard con-
+tribute another 20 to 30W to platform power. To be success-
+ful, multiprocessor integration is necessary to help reduce
+these overheads. Through system engineering, Atom pro-
+cessors can deliver better platform-level performance-per-
+watt, since multiprocessor integration will amortize periph-
+eral penalties over a larger number of processors. Based
+on our peripheral component analysis in Table 3, Atom-
+Diamondvilles exhibit only 0.4× the platform-level cost and
+power eﬃciency of the Xeon. Although the Atom processor
+is itself much more power-eﬃcient, system engineering and
+optimization is required to reduce the overheads of periph-
+eral components, such as the motherboard, network inter-
+face card, memory, and storage.
+
+To reduce platform overheads, an amortization strategy is
+needed to integrate more Atom cores into a single processor
+
+321Xeon
+
+Harpertown
+
+4-core, 2-socket
+
+Atom
+
+Diamondville
+
+2-core, 1-socket
+
+Hypothetical
+
+8-core, 2-socket
+
+Cost ($)
+
+Power (W)
+
+Cost ($)
+
+Power (W)
+
+Cost ($)
+
+Power (W)
+
+Processor
+Motherboard
+Network Interface
+Memory (4GB)
+Storage (HDD)
+Total Server Cost
+
+Normalized Eﬃciency
+
+760
+200
+
+0
+
+150
+100
+1210
+1.0
+
+125
+30
+5
+8
+10
+178
+1.0
+
+45
+80
+0
+
+150
+100
+375
+0.4
+
+3.2
+30
+5
+8
+10
+56.2
+0.4
+
+760
+200
+
+0
+
+150
+100
+1210
+1.0
+
+25.6
+30
+5
+8
+10
+78.6
+2.3
+
+QPS/$
+
+QPS/W
+
+QPS/$
+
+QPS/W
+
+QPS/$
+
+QPS/W
+
+Table 3: Peripheral component costs. Xeon motherboard cost and power is quoted for the Intel S5000PAL
+[12] and Atom is quoted for the Intel D945GCLF2 [6]. Memory data is reported from Micron power speciﬁ-
+cations [16]. Storage data is reported from Seagate data sheets [19]. Processor and motherboard cost of the
+hypothetical Atom is based on the Xeon-Harpertown. Its power corresponds to the Atom-Diamondville.
+
+die. We compute the cost of building a two socket system
+consisting of Atom-Diamondville processors by evaluating
+the number of Atom cores that ﬁt in the area budget of a
+Xeon processor. Four dual-core Atom-Diamondville proces-
+sors ﬁt into the area of a single socket Xeon-Harpertown pro-
+cessor (50 sq-mm into 214 sq-mm). This hypothetical sce-
+nario is based on industry trends towards multiple in-order
+x86 CPU cores [20]. We assume processor and motherboard
+costs for the multiprocessor-based Atom are equivalent to
+the Xeon-Harpertown platform. As manufacturing costs are
+driven by die area and not by the number of cores for a given
+die size, we assume the same processor cost. Similarly, be-
+cause of socket compatibility, we assume motherboard cost
+is the same. System memory and storage costs are indepen-
+dent of processor speciﬁcs, and therefore equivalent across
+all three platforms.
+
+To test the beneﬁts of multiprocessor integration, we com-
+pare the costs of a two-socket Xeon-Harpertown platform,
+a single-socket Atom-Diamondville platform (representative
+of current experimental systems), and a dual-socket Atom-
+Hypothetical platform (representative of projected integra-
+tion). By integrating up to eight Diamondville cores into a
+single chip and building a system with two sockets, amor-
+tization once again highlights Atom eﬃciency. As per our
+computed cost in Table 3, an integrated low-power multi-
+processors would be competitive with a cost and power ef-
+ﬁciency advantage of 1.03× and 2.3× over the Xeon.
+In
+summary, our analysis prompts us towards better system in-
+tegration to enable successful overprovisioning, while achiev-
+ing much better performance-per-watt for approximately the
+same performance-per-dollar.
+
+Eﬃciency Sensitivity. Depending upon application ro-
+bustness, ﬂexibility and reliability characteristics on a plat-
+form, a certain degree of overprovisioning is necessary. How-
+ever, overprovisioning degrades eﬃciency by reducing the
+operational load on the processor. Therefore, while Table 3
+reports eﬃciency diﬀerences at maximum sustainable load
+on Xeon and Atoms, there are cost and power eﬃciency
+trade-oﬀs that require careful consideration while underuti-
+lizing and overprovisioning processors.
+
+We present overprovisioning analysis of search in Figure 15.
+At peak throughput utilization, or 0 percent overprovision-
+ing, the integrated Atom-Hypothetical is 1.0× as cost eﬃ-
+cient and 2.3× as power eﬃcient as the Xeon-Harpertown
+(see Figure 15(a) and Figure 15(b), respectively). However,
+when considering ﬂexibility requirements, Harpertown eﬃ-
+ciency improves. For example, if search requires a tolerance
+
+8
+
+6
+
+4
+
+2
+
+0
+
+)
+$
+/
+S
+P
+Q
+(
+ 
+y
+c
+n
+e
+c
+i
+f
+f
+E
+
+i
+
+ Xeon   (Harpertown)
+ Atom (Diamondville)
+ Atom (Hypothetical)
+
+ Xeon   (Harpertown)
+ Atom (Diamondville)
+ Atom (Hypothetical)
+
+120
+
+80
+
+40
+
+0
+
+)
+
+W
+/
+S
+P
+Q
+(
+ 
+y
+c
+n
+e
+c
+i
+f
+f
+E
+
+i
+
+0
+
+20
+
+40
+
+60
+
+80
+
+100
+
+% of Overprovisioning
+
+0
+
+20
+
+40
+
+60
+
+80
+
+100
+
+% of Overprovisioning
+
+(a) QPS-per-Dollar
+
+(b) QPS-per-Watt
+
+Figure 15: Eﬃciency sensitivity to overprovisioning
+when processors are underutilized for robustness,
+ﬂexibility and reliability service requirements.
+
+of λ QPS against activity spikes, the Harpertown requires
+only 7.4 percent overprovisioning, whereas every core within
+the hypothetical Atom requires a 28.6 percent margin. Con-
+sequently, cost and power eﬃciency of Harpertown with re-
+spect to the hypothetical Atom improves by 25 percent and
+12 percent to 1.25× and 0.55×, respectively. Based on the
+sensitivity analysis in Figure 15, we invite readers to identify
+target utilization levels that best ﬁt production-level robust-
+ness, ﬂexibility and reliability requirements.
+
+Capital and Operational Costs. To study the costs of
+managing Xeons versus Atoms at the scale of an entire data
+center, we quantify TCO in terms of aggregate sustainable
+throughput-per-TCO dollar. We assume search is running
+on either the Xeon or Atom processors. We evaluate the
+Atom-Diamondville and Atom-Hypothetical.
+
+We use a publicly available cost model to estimate data
+center capital and operational costs [11]. The model as-
+sumes $200M facility costs based on 15MW of critical power
+with a data center power usage eﬃciency (PUE) of 1.7. The
+model amortizes power distribution and cooling infrastruc-
+ture costs over ﬁfteen years and the purchase cost of servers
+over three years. The total cost of operating and manag-
+ing the data center is presented on a monthly basis. The
+model categorizes the TCO into the following: power (elec-
+tricity bill for running all servers), servers (purchase cost),
+cooling and power distribution (data center infrastructure
+power cost) and others (miscellaneous costs). To maintain
+our focus on platform overheads and power eﬃciency only,
+we constrain our TCO analysis by omitting discussion about
+network, software licensing, and personnel costs, assuming
+they are uniform across all deployments.
+
+Figure 16 proportionally illustrates TCO costs associated
+with using Atom processors instead of Xeon-Harpertowns.
+
+322In going from the Xeon-Harpertowns (Figure 16(a)) to the
+Atom-Diamondvilles (Figure 16(b)), we suﬀer a 56 percent
+loss in performance-per-dollar spent managing the data cen-
+ter. Despite spending the same amount of money purchasing
+servers (51.4 percent on the Xeons versus 51.1 percent on
+the Atom-Diamondvilles), we get lower aggregate through-
+put from the Atom-Diamondvilles.
+
+The loss in eﬃciency is mainly because of power ineﬃcien-
+cies at the system-level, which limit the number of Atom
+systems per data center. For a ﬁxed critical power bud-
+get of 15MW, the data center houses 84,269 Xeons, which
+is far fewer than the 267,857 Atom-Diamondvilles possible
+within that same power envelope. But the Xeons generate
+59 percent more throughput than the Atom-Diamondvilles.
+To match that throughput, the data center requires 650,000
+Atom-Diamondvilles, far exceeding the data center’s critical
+power budget by a factor of 3×.
+
+With better system integration, however, an Atom-based
+data center can achieve approximately 1.5× the throughput-
+per-TCO dollar of Xeons. Figure 16(c) illustrates better
+throughput-per-dollar improvement through sheer increase
+in pie size with respect to the Xeons. Notice that this is
+a signiﬁcant improvement at the data center-level in con-
+trast to the system-level where the diﬀerence between Xeon-
+Harpertown and Atom-Hypothetical is negligible (see Ta-
+ble 3). The larger advantage at the data center-level arises
+from issues like power and cooling distribution. For instance,
+a multiprocessor-based Atom consumes approximately 3×
+less power than Xeons, and therefore its cooling require-
+ments are lower, which beneﬁts data center density.
+
+System integration achieves better value per dollar spent
+managing the data center. Consider the distribution changes
+between the slices corresponding to Figure 16(a) and Fig-
+ure 16(c). In the hypothetical Atom, server purchase cost is
+a signiﬁcant portion of the monthly TCO, increasing from
+51.4 percent for Xeons to 70.5 percent for Atoms. Despite
+this increase, using Atoms is opportune for two reasons.
+First, aggregate throughput using multiprocessor-based Atoms
+increases by over 2.3×. Second, considering the same critical
+power envelope of the data center, we are able to accommo-
+date many more servers that are delivering higher aggregate
+throughput. By better integration, we void the need to ex-
+pand or build newer data centers with higher power bud-
+gets, since we are capable of exploiting existing infrastruc-
+ture more eﬀectively. Moreover, compared to the purchase
+cost of additional servers, the overall operational and man-
+agement costs of Atoms increase by only 60 percent relative
+to the Xeons. These trends, combined with lower expendi-
+tures for power and cooling infrastructure, indicate invest-
+ment value will improve by transitioning to small cores.
+
+5.2 Microarchitectural Enhancements
+
+While overprovisioning addresses robustness QoS concerns
+at the system level, achieving lower latency per query is still
+essential on the Atom, especially for ﬂexibility requirements
+in the presence of complex query load. Otherwise, the qual-
+ity of search results will deteriorate as explained in Figure 8.
+To eﬀectively achieve lower latency, we require microarchi-
+tectural enhancements to the Atom core. In Section 3, we
+found the Atom experiences particular stress on the divider,
+branch predictor, and cache hierarchy. Enhancing the Atom
+core based on those ﬁndings implies designing small cores us-
+ing unconventional strategies in which, for example, a light-
+
+ Manager
+   42.4% 
+
+)
+n
+o
+e
+X
+o
+
+ 
+
+t
+ 
+
+d
+e
+
+i
+l
+
+a
+m
+r
+o
+N
+
+(
+ 
+I
+
+P
+C
+
+3.0
+
+2.0
+
+1.0
+
+0.0
+
+Ranker
+ 33.3% 
+
+ Streams
+   18.2% 
+
+NeuralNet
+     6.1% 
+
+(a)
+
+ 
+
+ 
+
+Manager
+
+Ranker
+
+ 
+ 
+
+ 
+ 
+
+NeuralNet
+
+Streams
+
+(b)
+
+Figure 17: Search execution activity. (a) Execution
+time distribution across search phases. (b) Cycles-
+per-instruction (CPI) normalized to Xeon across the
+diﬀerent phases of search computation on Atom.
+
+weight datapath is paired with a disproportionately large
+cache hierarchy, at least for applications like search. These
+subtle modiﬁcations are likely to be more power eﬃcient
+than transitioning to an out-of-order datapath.
+
+To understand Atom bottlenecks and their root causes in
+the design, we must breakdown and analyze the diﬀerent
+parts of search in isolation. Figure 17(a) illustrates that ex-
+ecution time is fairly distributed across all phases of search
+computation. This distribution gathered on a Xeon is iden-
+tical to search on Atom. Additionally, Figure 17(b) suggests
+the most important functions exist throughout the phases of
+computation; all four major components of the search engine
+experience signiﬁcant microarchitectural latency increases
+between 1.5× and 2.8× relative to Xeon performance. Atom
+performance degradation is broadly distributed and cannot
+be attributed to any one function or phase of computation.
+Bottlenecks are limited to a few functions within each
+phase of search computation. We observe a signiﬁcant over-
+lap within the top 20 functions across both Xeon and Atom,
+indicating function importance depends more on the appli-
+cation and less on the architecture. Given the 20 most im-
+portant functions and our knowledge of computation phases,
+we identify a representative function from each phase (Man-
+ager, NeuralNet, Ranker, and Streams). Figure 18 illus-
+trates the microarchitectural events that aﬀect the perfor-
+mance of those four representative functions. The events
+illustrate a broad range of performance limitations when
+adopting the small Atom cores. Just as no single function
+or single phase of computation accounts for Atom’s perfor-
+mance limitations, no single microarchitectural event can be
+identiﬁed as the performance constraint.
+
+Each function representing a diﬀerent phase of search ex-
+ercises diﬀerent parts of the microarchitecture. Atom re-
+sources are constrained and particular stress is exerted on
+the divider, branch predictor, and cache hierarchy. The neu-
+ral network stresses the divider and L2 cache. This function
+exhibits a 64× increase in division time, which seems to
+arise from a design decision regarding SIMD versus scalar
+dividers; scalar division is performed in a SIMD execution
+unit [10]. Atom’s small 1MB, 8-way L2 cache leads to a
+14× increase in L2 cache misses. The net eﬀect is a 4.8×
+increase in CPI. In contrast, other parts of the ranker stress
+the branch predictor and L1 data cache. The performance
+impact of branch misprediction increases by 142× from a
+very low Xeon baseline. Such penalties may arise from
+the ranker’s algorithmic components, which apply diﬀerent
+strategies depending on the query and cutoﬀ latencies. The
+
+323  Power
+ 21.9% 
+
+   Power Distribution &
+ Cooling Infrastructure
+            21.8% 
+
+ Others
+  4.8% 
+
+ Servers
+  51.4% 
+
+ Power 
+ 22.1%
+
+  Power Distribution &
+Cooling Infrastructure 
+              22%
+
+ Others 
+  4.8%
+
+ Servers 
+   51.1%
+
+  Power Distribution &
+Cooling Infrastructure 
+           13.3%
+
+ Power 
+13.3%
+
+ Others 
+  2.9%
+
+ Servers 
+  70.5%
+
+(a) Xeon (Harpertown)
+
+(b) Atom (Diamondville)
+
+(c) Atom (Hypothetical)
+
+Figure 16: Total Cost of Operation (TCO) dollar. Each chart illustrates the breakdown of capital and
+operational expenses associated with sustainable throughput per monthly TCO dollar. With Xeon-based
+systems (a) as the baseline, pie charts (b) and (c) proportionally illustrate the return value per dollar spent
+managing the data center using either Atom-Diamondvilles, or our proposed integrated Atoms.
+
+Top function from
+
+ Manager 
+
+ NeuralNet  
+
+ Ranker 
+
+ Streams
+
+ 
+102
+ 
+100
+ 
+10-2
+
+q
+
+X
+
+ 
+t
+a
+ 
+n
+o
+e
+X
+ 
+o
+
+t
+ 
+
+e
+v
+i
+t
+
+l
+
+a
+e
+R
+
+t
+
+e  
+a
+R
+n
+o
+
+ 
+
+t
+c
+a
+p
+m
+
+I
+ 
+l
+l
+
+t
+
+a
+S
+h
+c
+t
+
+ 
+
+e
+F
+
+I
+ 
+
+t
+c
+a
+p
+m
+
+I
+ 
+
+n
+o
+
+i
+
+i
+
+i
+t
+c
+d
+e
+r
+p
+s
+M
+h
+c
+n
+a
+r
+B
+
+ 
+
+ 
+
+i
+
+i
+
+i
+t
+c
+d
+e
+r
+p
+s
+M
+h
+c
+n
+a
+r
+B
+
+ 
+
+ 
+
+n
+o
+
+i
+t
+
+a
+z
+
+i
+l
+i
+t
+
+U
+ 
+s
+u
+B
+
+ 
+
+s
+d
+a
+e
+R
+
+ 
+t
+s
+r
+u
+B
+ 
+s
+u
+B
+
+ 
+
+n
+o
+
+i
+t
+
+a
+z
+
+i
+l
+i
+t
+
+U
+ 
+s
+u
+B
+a
+a
+D
+
+ 
+
+t
+
+ 
+
+i
+t
+
+a
+z
+
+i
+l
+i
+t
+
+U
+ 
+s
+u
+B
+ 
+k
+c
+a
+b
+e
+
+t
+i
+r
+
+W
+
+ 
+
+n  
+o
+
+e  
+
+r  
+e
+d
+v
+D
+
+i
+
+i
+
+ 
+
+e
+
+t
+
+i
+
+a
+R
+ 
+s
+s
+M
+B
+L
+T
+
+ 
+
+I
+ 
+
+t
+c
+a
+p
+m
+
+i
+
+I
+ 
+s
+s
+M
+B
+L
+T
+
+ 
+
+ 
+
+t
+
+i
+
+a
+R
+ 
+s
+s
+M
+B
+L
+T
+D
+
+ 
+
+ 
+
+e
+
+t
+
+i
+
+ 
+
+a
+R
+ 
+s
+s
+M
+e
+h
+c
+a
+C
+D
+1
+L
+
+ 
+
+ 
+
+i
+
+e
+t
+a
+R
+ 
+s
+s
+M
+ 
+e
+h
+c
+a
+C
+
+I
+ 
+1
+L
+ 
+
+t
+c
+a
+p
+m
+
+i
+
+ 
+
+I
+ 
+s
+s
+M
+e
+h
+c
+a
+C
+D
+1
+L
+
+ 
+
+ 
+
+I
+
+P
+C
+
+ 
+
+t
+
+e  
+a
+R
+n
+o
+
+ 
+
+i
+
+e
+t
+a
+R
+ 
+s
+s
+M
+ 
+e
+h
+c
+a
+C
+ 
+2
+L
+ 
+
+i
+
+i
+t
+c
+v
+E
+2
+L
+
+ 
+
+ 
+
+Figure 18: Identifying bottlenecks across phases of
+search using a representative functions.
+
+impact of L1 data cache misses increases by 79× from a very
+low Xeon baseline. The net eﬀect is a 2.9× increase in CPI.
+Also stressing the branch predictor, streams manipulate
+an iterator data structure containing indices that match
+words within the query. Finding a particular element within
+the iterator requires non-trivial control ﬂow, which exercises
+the branch predictor with a 49× penalty relative to Xeon.
+Therefore, CPI increases by 2.8×. Lastly, the manager co-
+ordinates the movement of index ﬁles to and from memory.
+The smaller L2 cache limits opportunities to exploit locality
+and produces a 14× increase in misses. The smaller cache
+also increases memory subsystem activity by 20 to 22×, thus
+causing a 4.6× increase in CPI. Overall, although we ob-
+serve comparable performance degradations between 2.8×
+and 4.8× in representative functions across the four major
+phases of computation in search, the microarchitectural bot-
+tlenecks diﬀer signiﬁcantly.
+
+Despite the near-term shortcomings, the ideal eﬃcient mi-
+croprocessor seems closer to the mobile-class end of the mi-
+croarchitectural spectrum. For instance, reﬂecting back on
+the microarchitectural eﬀects shown for activity spikes in
+Figure 10, we observe that the Xeon is signiﬁcantly over-
+provisioned since activity spikes do not have any noticeable
+eﬀect on the branch predictor, divider or the cache hierar-
+chy. In migrating to simpler cores, some of that logic or area
+overhead can be redirected towards our proposal for (tradi-
+tionally) disproportional structures like large caches and bus
+bandwidth for mobile cores to reduce latency.
+
+5.3 Towards Heterogeneous Cores or
+
+Accelerated Multiprocessors
+
+Looking further beyond microarchitectural enhancements,
+heterogeneous multiprocessors might provide accelerators to
+mitigate computational bottlenecks. Prior eﬀorts have been
+made to combine large and small cores into a single chip
+multiprocessor (Section 6). However, when considering task-
+level division (Manager, NeuralNet, Ranker, Streams) across
+big and small cores, our analysis indicates that such a solu-
+tion is ineﬃcient for our version of web search.
+
+Search has no single function or phase of computation
+that can be carved out to execute eﬃciently on a large core,
+such as the Xeon. Consider the four phases of computation
+(Manager, NeuralNet, Ranker, Streams) and their potential
+performance gains on Xeon (4.8×, 4.6×, 2.9×, 2.8×) from
+Figure 18. Furthermore, pessimistically assume the Atom
+operates at its measured peak (4.3W) and optimistically as-
+sume Xeon operates at its measured idle (38.5W). Thus, we
+derive the minimum power increase of 16.3× when perform-
+ing computation on Xeon versus Atom; the power increase
+will always be larger in practice. Even in this optimistic
+scenario, the power diﬀerential of 16.3× dominates the per-
+formance diﬀerential of 2.8-4.8×.
+
+Speeding up the Manager, NeuralNet, Ranker, and Streams
+with a Xeon core in an heterogeneous multiprocessor would
+lead to 0.29×, 0.17×, 0.18×, and 0.29× the Atom eﬃciency,
+indicating the diﬃculty of eﬃcient acceleration with hetero-
+geneous multiprocessors comprised of general-purpose archi-
+tectures. While it may be possible to extract parallelism at
+a granularity ﬁner than computational phases, doing so re-
+quires signiﬁcant re-engineering of our production web search,
+which is a complicated and costly task.
+It might also be
+feasible to direct complex queries to Xeon instead of Atom,
+since Xeon can handle ISN-level internal absolute load spikes
+more gracefully than Atom (see Section 4.2). However, the
+cost to eﬃciency is high.
+
+In the future, more eﬃcient acceleration may arise from
+application-speciﬁc accelerators targeting computational ker-
+nels (e.g., neural network). Such accelerators may incur low
+power costs, while recovering performance lost by low-power,
+mobile-class architectures.
+
+6. RELATED WORK
+
+The landscape of data center workloads is changing. Ran-
+ganathan and Jouppi discuss the changing workload mix and
+
+324usage patterns, motivating the need for integrated analysis
+of microarchitectural eﬃciency and application service-level
+agreements in their survey of enterprise information tech-
+nology trends [17]. We complement their prior work by ex-
+amining the role of power eﬃciency from small cores with
+in-depth microarchitectural analysis relating to application
+robustness, ﬂexibility, and reliability constraints.
+
+Power eﬃcient data center design is an active area of re-
+search. Barroso et al. make the case for energy propor-
+tional computing in which data center components utilize
+energy proportional to the amount of computation [3]. Ran-
+ganathan et al. propose power management schemes across
+an ensemble of systems to mitigate costs associated with
+power and heat [18]. Eﬃcient microarchitectures are inte-
+gral components of such eﬀorts and we further our under-
+standing of microarchitectural eﬀects in this work.
+
+Piranha and Niagara make the case for small cores to im-
+prove design eﬃciency and throughput for memory and I/O
+bound workloads, such as transaction processing [1, 7, 9].
+In contrast, we quantify limitations of small cores, speciﬁ-
+cally mobile processors, for more computationally intensive
+data center workloads, such as online web search. Lim et al.
+take a system view of warehouse-computing environments
+and propose uniﬁed systems, which transition from high-end
+server-class processors to mobile and embedded processors
+[15]. Similarly, Vasudevan et al., propose using fast arrays
+of wimpy nodes (FAWN) to achieve energy eﬃciencies in
+data intensive computing [22]. Both eﬀorts emphasize low-
+power embedded processors for performance (queries per
+second) and power eﬃciency, using system power measured
+at the electrical socket. In contrast, we take a microarchitec-
+tural view of the diﬀerences between server- and mobile-class
+processors and measure, in addition to system power, core
+power by tracking current activity at the voltage regulator.
+Making the case for chip multiprocessors, Barroso quan-
+tiﬁes the economic price of high-performance, high-power
+platforms as compared to smaller cores [2]. While small
+cores reduce the economic price, they increase the applica-
+tion’s perceived price of eﬃciency as we quantify in terms
+of quality-of-service robustness, ﬂexibility, and reliability.
+As emerging data center workloads exercise the data path
+more extensively, the application perceived price of eﬃciency
+raises qualiﬁcations and caveats in the case for small cores in
+data centers. Once these limitations are understood, micro-
+processor and system architects can better navigate the in-
+herent trade-oﬀs between performance and power eﬃciency.
+
+7. CONCLUSION
+
+Emerging data center applications exercise the proces-
+sor more signiﬁcantly than traditional enterprise and on-
+line transaction processing (OLTP) applications. Thus, we
+deeply examine the role of small cores, speciﬁcally mobile
+processors, for an Internet-scale workload: web search. In
+particular, we study the challenges with respect to robust-
+ness ﬂexibility and reliability of search. The price of eﬃ-
+ciency has implications on system design, implementation
+and deployment strategies. For example, in the future, re-
+ducing platform power overheads associated with peripheral
+components is essential. In the longer term, microarchitec-
+tural enhancements, heterogeneous multiprocessors, or ac-
+celerators customized to mitigate bottlenecks may be instru-
+mental in reducing the price of small core power eﬃciency.
+
+8. ACKNOWLEDGMENTS
+
+We are extremely grateful to several people for helping us
+with this research undertaking, including the reviewers. We
+would like to speciﬁcally thank Preet Bawa, William Casper-
+son, Utkarsh Jain, Paul England, Mark Shaw, CJ Williams,
+Tanj Bennett, David Brooks, Qiang Wu, Dan Connors and
+Michael D. Smith. We are also grateful to the National
+Science Foundation under Grant #0937060 to the Comput-
+ing Research Association for the CIFellows Project. Any
+opinions, ﬁndings, and conclusions or recommendations ex-
+pressed in this material are those of the author(s) and do not
+necessarily reﬂect the view of the National Science Founda-
+tion or the Computing Research Association.
+
+9. REFERENCES
+[1] L. Barroso, K. Gharachorloo, R. McNamara, A. Nowatzyk,
+
+S. Qadeer, B. Sano, S. Smith, R. Stets, and B. Verghese.
+Piranha: A scalable architecture based on single-chip
+multiprocessing. In ISCA’00.
+
+[2] L. A. Barroso. The price of performance: An economic case for
+
+chip multiprocessing. Queue, ACM, 2005.
+
+[3] L. A. Barroso, J. Dean, and U. Holzle. Web search for a planet:
+
+The Google cluster architecture. Micro, IEEE, 2003.
+
+[4] L. A. Barroso and U. Holzle. The case for energy-proportional
+
+computing. Computer, IEEE, 2007.
+
+[5] S. Brin and L. Page. The anatomy of a large-scale hypertextual
+
+web search engine. In WWW7, 1998.
+
+[6] I. Corporation. Technical product speciﬁcation. Intel Desktop
+
+Board D945GCLF2, 2008.
+
+[7] J. Davis, J. Laudon, and K. Olukotun. Maximizing CMP
+
+throughput with mediocre cores. In PACT’05.
+
+[8] V. George, S. Jahagirdar, C. Tong, K. Smits, S. Damaraju,
+
+S. Siers, V. Naydenov, T. Khondker, S. Sarkar, and P. Singh.
+Penryn: 45-nm next generation intel core 2 processor. In
+ASSCC’07, 2007.
+
+[9] L. Geppert. Sun’s big splash: Niagara multiprocessor chip.
+
+IEEE Spectrum’05.
+
+[10] G. Gerosa, S. Curtis, M. D’Addeo, B. Jiang, B. Kuttanna,
+
+F. Merchant, B. Patel, M. Tauﬁque, and H. Samarchi. A
+sub-1W to 2W low-power IA processor for mobile internet
+devices and ultra-mobile pcs in 45nm hi-K metal gate CMOS.
+In ISSCC’08.
+
+[11] J. Hamilton. Cost of power in large-scale data centers. In
+
+http://perspectives.mvdirona.com.
+
+[12] Intel Corporation. Thermal/mechanical design guide. Intel
+
+5000 Series Chipset Memory Controller Hub (MCH), 2006.
+
+[13] Intel Corporation. 45nm Intel Core 2 Duo Processor: BAClears.
+
+Intel VTune Performance Analyzer 9.1 Help, 2008.
+
+[14] Intel Corporation. Volume 1 basic architecture. Intel 64 and
+
+IA-32 Architectures: Software Developers Manual, 2009.
+
+[15] K. Lim, P. Ranganathan, J. Chang, C. Patel, T. Mudge, and
+
+S. Reinhardt. Understanding and designing new server
+architectures for emerging warehouse-computing environments.
+In ISCA’08.
+
+[16] Micron. Technical note TN-47-04: Calculating memory system
+
+power for DDR2. In www.micron.com, 2006.
+
+[17] P. Ranganathan and N. Jouppi. Enterprise IT trends and
+implications for architecture research. In HPCA-11, 2005.
+
+[18] P. Ranganathan, P. Leech, D. Irwin, and J. Chase.
+
+Ensemble-level power management for dense blade servers. In
+ISCA’06.
+
+[19] Seagate. Barracuda 7200.12 data sheet. In www.seagate.com,
+
+2009.
+
+[20] L. Seiler, D. Carmean, E. Sprangle, T. Forsyth, M. Abrash,
+
+P. Dubey, S. Junkins, A. Lake, J. Sugerman, R. Cavin,
+R. Espasa, E. Grochowski, T. Juan, and P. Hanrahan.
+Larrabee: a many-core x86 architecture for visual computing.
+ACM Trans. Graph., 2008.
+
+[21] R. Swinburne. Intel Core i7 - Nehalem architecture dive. In
+
+www.bit-tech.net, 2008.
+
+[22] V. Vasudevan, J. Franklin, D. Anderson, A. Phanishayee,
+
+L. Tan, M. Kaminsky, and I. Morau. FAWNdamentally
+power-eﬃcient clusters. In HotOS-XII, 2009.
+
+[23] VMware. Vmmark benchmark. In
+
+www.vmware.com/products/vmmark, 2009.
+
+325

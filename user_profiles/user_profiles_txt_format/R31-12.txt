@@ -1,0 +1,1472 @@
+Automated Physical Design in Database Caches
+
+Tanu Malik1, Xiaodan Wang1, Randal Burns1, Debabrata Dash2, Anastasia Ailamaki2
+
+1 Johns Hopkins University, USA
+
+ftmalik,xwang,randalg@cs.jhu.edu
+
+2 Carnegie Mellon University, USA
+fddash,natassag@cs.cmu.edu
+
+Abstract(cid:151) Performance of proxy caches for database federa-
+tions that serve a large number of users is crucially dependent on
+its physical design. Current techniques, automated or otherwise,
+for physical design depend on the identi(cid:2)cation of a repre-
+sentative workload. In proxy caches, however, such techniques
+are inadequate since workload characteristics change rapidly.
+This is remarkably shown at the proxy cache of SkyQuery, an
+Astronomy federation, which receives a continuously evolving
+workload. We present novel techniques for automated physical
+design that adapt with the workload and balance the performance
+bene(cid:2)ts of physical design decisions with the cost of implementing
+these decisions. These include both competitive and incremental
+algorithms that optimize the combined cost of query evaluation
+and making physical design changes. Our techniques are general
+in that they do not make assumptions about the underlying
+schema nor the incoming workload. Preliminary experiments on
+the TPC-D benchmark demonstrate signi(cid:2)cant improvement in
+response time when the physical design continually adapts to
+the workload using our online algorithm compared with of(cid:3)ine
+techniques.
+
+I. INTRODUCTION
+
+The performance of a database application crucially depends
+on the underlying physical design of the database. Physical
+design is often determined using a representative workload.
+However, many applications such as proxy caches [1][2][3]
+and content distribution networks [4] serve a continuous
+stream of queries from tens and thousands of users such that
+identifying a representative workload is dif(cid:2)cult. Workload-
+based physical design techniques [5][6][7] are useful additions
+to these applications because they enable the exploration of
+physical design alternatives that suit the current workload.
+However, current
+techniques, automated or otherwise, are
+of(cid:3)ine in nature: they are invoked by the system administrator
+using a representative workload and provide a static design
+for the entire workload. Such applications will bene(cid:2)t from
+online physical design techniques that detect changes in the
+workload and adapt the physical design automatically.
+
+We are particularly interested in the physical design of
+Bypass cache [8], a proxy database cache for the SkyQuery
+[9] federation of Astronomy databases. In fact, performance
+of Bypass cache critically depends upon its physical design.
+Bypass caches store database objects such as tables or columns
+close to users, providing dramatic reduction in both network
+traf(cid:2)c and query response time [8]. However, the physical
+design of cached objects is static in that it mirrors the design
+at the backend databases. For instance, columns belonging
+to the same physical table in the backend database are also
+
+stored together in the cache. Grouping columns in this manner
+translates into poor query execution performance in the cache,
+which may offset the response time bene(cid:2)t of serving queries
+locally.
+
+in particular,
+
+Several techniques such as vertical partitioning [10][11] and
+index selection [5] can be applied to improve the physical
+design. Vertical partitioning,
+is an attractive
+solution for improving the physical design of Bypass caches.
+Construction of auxiliary data structures such as indices and
+materialized views present a trade-off between the alloca-
+tion of cache space for creating auxiliary structures or for
+caching more data. Vertical partitioning achieves performance
+bene(cid:2)ts for queries by grouping columns from the same
+logical table into separate, non-overlapping physical relations.
+Thus, vertical partitioning reduces the amount of I/O incurred
+without
+introducing any redundant data that compete for
+cache space. However,
+the application of current vertical
+partitioning techniques to SkyQuery is dif(cid:2)cult because they
+require the identi(cid:2)cation of a representative workload. Finding
+a representative workload in SkyQuery is hard; Astronomy
+workloads exhibit considerable evolution (i.e. the manner in
+which attributes are grouped by queries can change drastically
+within a week).
+
+In this paper, we analyze physical design issues associated
+with Bypass caches and develop algorithms for online vertical
+partitioning that are sensitive to workload evolution. Using
+Bypass caches as a case study, we examine its sensitivity to
+physical design decisions, determine the degree of evolution
+in the workload, and quantify the cost of of(cid:3)ine vertical
+partitioning in a cache. We also describe an online vertical
+partitioning solution that is inspired by task systems [12].
+Task systems are general systems that capture the cost of
+transitioning between two states in addition to the cost of
+executing a task in a given state. The transition cost prevents
+oscillations into states that are sub-optimal in the long run.
+
+Our contributions include a three-competitive algorithm
+when there are only two alternatives for grouping attributes.
+We also provide a workload-adaptive, incremental algorithm
+for vertical partitioning when there are N possible alternatives.
+Both algorithms minimize the combined cost of query execu-
+tion and of making physical design changes. Our algorithms
+are general in that they can improve the physical design,
+using vertical partitioning, of proxy database caches but do not
+make assumptions about the underlying physical design or the
+incoming workload. As a (cid:2)rst step towards evaluating these al-
+
+Queries
+
+Mediator
+
+Bypass
+Cache
+
+N
+A
+L
+
+N
+A
+W
+
+Sub−Queries
+
+DB
+
+DB
+
+DB
+
+Fig. 1. Proxy caching in SkyQuery.
+
+Query Execution Performance
+
+ 
+
+p
+u
+t
+e
+S
+m
+e
+t
+s
+y
+S
+
+Cache (w/
+AutoPart)
+
+Cache
+
+0
+
+1000
+
+2000
+
+3000
+
+4000
+
+Avg Response Time (ms)
+
+Fig. 2. Average response time of queries.
+
+gorithms, we implemented them using queries from the TPC-D
+benchmark. We compare our solution with a workload-based,
+of(cid:3)ine vertical partitioning tool. Our experiments show a 17%
+improvement in average query response time when a single
+relation is continually reorganized in an online manner that
+adapts to workload changes. We are currently implementing
+our solution within SkyQuery and expect similar performance
+bene(cid:2)ts compared with of(cid:3)ine approaches.
+
+II. VERTICAL PARTITIONING FOR BYPASS CACHING
+
+In this section we (cid:2)rst describe the Bypass cache application
+[8] and explain why caching provides an interesting case
+study for physical design. We then consider the advantages
+of physical design and examine the degree of evolution in the
+workload.
+
+Bypass caches are proxy caches that reside at the mediator
+site in the SkyQuery federation (Figure 1). A database cache
+is manifested for each participating member of the federation.
+Queries are submitted to the mediator which divides them
+into sub-queries for member databases. Each sub-query is
+either satis(cid:2)ed locally at the cache or bypassed to the remote
+database. A query is satis(cid:2)ed if all columns 1 that it accesses
+are cached, else it
+is bypassed. Our vertical partitioning
+module is collocated at the cache and suggests physical design
+changes independently for each sub-database. The module sees
+only a subset of queries that are received by the cache, since
+some are bypassed due to caching decisions.
+
+Databases in the SkyQuery federation possess complex
+schema designs that often comprise of several star-schemas.
+The database schema is (cid:2)xed after the initial public release of
+the data [13] and remains static thereafter. Thus, any changes
+to the schema have to be done outside the repository. Most
+relations in the published schema are bulky in that hundreds
+of columns are grouped together. For instance, two frequently
+accessed relations, P hotoObjAll and F ield, consist of 446
+and 422 columns respectively. While columns belonging to
+the same relation are logically related, Astronomy queries do
+not use all columns together. Moreover, the subsets of columns
+that are used together by queries change over time such that
+making workload-adaptive physical design decisions become
+dif(cid:2)cult. Figure 9 in the Appendix shows the most frequent
+queries from the SkyQuery workload for three consecutive
+weeks. The columns that are accessed together during each
+week changes and differs drastically from the grouping present
+in the original schema.
+
+1Bypass caches have lower response times when columns, instead of tables,
+
+are cached.
+
+We quantify the impact of vertical partitioning in Bypass
+caches by measuring improvements in query response time.
+Figure 2 compares the performance of the cache for a given
+workload in two instances: when vertical partitioning is not
+applied and the cached columns are grouped according to the
+physical design at the backend database, and when the columns
+are grouped using AutoPart [10], an of(cid:3)ine, workload-based
+tool for vertical partitioning. For this experiment we maintain
+the cache at 30% of the database size and use a month
+long (February 2006) workload from the Sloan Digital Sky
+Survey (SDSS) [14], a participant in the SkyQuery federation.
+In Figure 2, AutoPart
+illustrates the advantage of vertical
+partitioning when performed in an online manner. To suit this
+experiment for Bypass caches, we use AutoPart in an online
+manner by re-partitioning the cached objects prior to each
+incoming query using the most recent, single query as input to
+AutoPart. The result demonstrates a signi(cid:2)cant improvement
+in response time for Bypass caches that is solely attributed to
+online vertical partitioning. It does not take into account the
+cost of implementing physical design changes nor the overhead
+of running an of(cid:3)ine partitioning tool. These costs become
+signi(cid:2)cant if the column groupings change drastically over
+time. While column grouping are re-evaluated on a per query
+basis in Figure 2, our next experiment examines the periodicity
+and frequency at which column groupings change.
+
+We take the SDSS workload and plot an af(cid:2)nity matrix
+of the column groupings. The basic premise is that columns
+that occur together and have similar frequencies should be
+grouped together in the same relation [15]. In Figure 3, we
+show the af(cid:2)nity matrix for ten attributes from a single table
+in which each grid entry corresponds to the frequency with
+which a pair of attributes are accessed together (ordering of
+attributes are the same along the row and column). Figure 3
+demonstrates that column groupings change on a weekly basis.
+This means that re-partitioning columns over time can bene(cid:2)t
+query performance in Bypass caches. While a static analysis of
+the workload shows that groupings change on a weekly basis,
+an entirely different workload may re(cid:3)ect changes within the
+span of a day. Thus, it is dif(cid:2)cult to ascertain a (cid:2)xed time
+span for regrouping columns. An online algorithm, which
+weighs the bene(cid:2)t amongst various column groupings with
+each incoming query, can decide when to make this change.
+Section IV provides a formal framework for making online
+decisions.
+
+An online vertical partitioning problem should include the
+the cost of changing the physical
+
+transition cost;
+
+that
+
+is,
+
+May 2006
+2/8-2/14
+
+Data Release 3
+
+July 2006
+2/15-2/21
+
+2/22-2/28
+
+exprad_r
+modelmag_u
+flags
+extinction_u
+obj
+type
+camcol
+cx
+r
+z
+
+Frequency
+
+9000
+
+4500
+
+0
+
+Fig. 3. Af(cid:2)nity matrix (co-access frequency) for ten select attributes from the P hotoP rimary table.
+
+i
+
+)
+r
+h
+(
+ 
+
+rosat.match
+rosat.hard1err
+rosat.exposure
+rosat.poserr
+rosat.hard1
+rosat.extent
+rosat.objid
+rosat.delta
+rosat.hard2
+rosat.hard2err
+rosat.cpserr
+rosat.detectlike
+specphoto.zstatus
+specphoto.zwarning
+specphoto.primtarget
+
+e
+m
+T
+ 
+t
+n
+e
+d
+s
+e
+R
+g
+v
+A
+
+i
+
+ 
+
+700
+600
+500
+400
+300
+200
+100
+0
+
+2 23.89104
+3 23.89104
+4 23.89104
+5 23.89104
+6 23.89104
+7 23.89104
+8 23.89104
+9 23.89104
+10 23.89104
+11 23.89104
+12 23.89104
+13 23.89104
+201
+251
+14 34.35168
+15 34.35168
+16
+40.3776
+
+1
+
+51
+
+101
+
+151
+
+Attributes
+
+Fig. 4. Average cache resident times.
+
+organization of columns through vertical partitioning [11][16].
+Similar to query execution cost, transition cost can be quan-
+ti(cid:2)ed in terms of I/O. In Bypass caches, this cost should
+be considered along with the cache resident time of each
+column, which varies signi(cid:2)cantly across columns (Figure 4).
+For instance, there is little advantage to reorganizing short-
+lived columns, while other columns can amortize the transition
+cost over a longer period of time. The results from Figure 4
+show that many columns fall in the latter category.
+
+III. RELATED WORK
+
+Physical design is de(cid:2)ned a priori in several proxy caching
+systems [1][2][17]. In Cache Tables [2] a table, column, or
+materialized view is declared using the declarative cache
+tables construct. Similar (cid:3)exibility is available in TimesTen
+[17] through the de(cid:2)nition of cache groups and MTCache [1]
+through the use of select-project views. The schema elements
+that are materialized in the cache are speci(cid:2)ed during cache
+initialization, and do not adapt to workload changes.
+
+Vertical partitioning groups columns that are accessed to-
+gether in order to improve memory and disk performance
+[10][11][15][18][19][20]. Early work [15] derived af(cid:2)nity
+measurements from the workload as an indicator for grouping
+columns together. Columns are grouped by applying clustering
+algorithms on the af(cid:2)nity values. However, af(cid:2)nity values
+are decoupled from actual I/O cost, and thus are poor pre-
+dictors of query performance. Recently, cost estimates from
+the optimizer or analytical cost-based models that capture
+the I/O of database operations are used to evaluate vertical
+partitions [10][11][19]. For instance AutoPart[10] interfaces
+with a commercial optimizer to obtain cost estimates for
+queries. However, existing solutions are of(cid:3)ine, requires a
+representative workload, and provides a single, static physical
+design for the entire workload.
+
+Identifying a representative workload is easy in applications
+in which the workload is fairly stable or is template-based [3]
+(i.e. users generate queries from pre-de(cid:2)ned templates). How-
+ever, these properties do not exist in SkyQuery for Astronomy
+workloads. Even if a representative workload is found, the
+process of evaluating when to run physical design tools is
+DBA dependent. Current research emphasizes the need for
+design tools that are always-on and can continuously adapt
+the physical design to changes in the workload [7]. Such tools
+have been studied for index selection [16], but not for vertical
+partitioning.
+
+IV. ONLINE VERTICAL PARTITIONING
+
+We provide a formulation for online vertical partitioning that
+captures the cost of physical design decisions in addition to
+query evaluation. Let Q = fq1; : : : ; qmg be an online sequence
+of queries, and let C = fc1; : : : ; cng be the set of possible
+vertical partitions. In this section, we refer to each vertical
+partition cx 2 C as a con(cid:2)guration. Let a query qi incur cost
+qi(cx) if evaluated in con(cid:2)guration cx 2 C, and let a transition
+from con(cid:2)guration cx 2 C to cy 2 C incur cost d(cx; cy).
+Finally, let (cid:30) be a function [1; m] !C in which (cid:30)(i) is the
+database con(cid:2)guration prior to the evaluation of qi.
+
+Given a database, a cache space constraint, and an initial
+con(cid:2)guration s, the goal of the online vertical partitioning
+problem is to (cid:2)nd a (cid:30) that minimizes the cost of processing
+Q:
+
+cost((cid:30); Q) =
+
+qi((cid:30)(i)) + d((cid:30)(i (cid:0) 1); (cid:30)(i))
+
+n
+
+X
+i=1
+
+in which (cid:30)(0) = s.
+The above formulation is similar to that of task systems
+introduced by Borodin et al. [12]. Task systems have been
+researched extensively, particularly when the transition costs
+form a metric [21][22]. Our costs are not symmetric and do
+not form a metric; that is, provided con(cid:2)gurations cx and
+cy, d(cx; cy) is not necessarily equivalent to d(cy; cx). This
+is true because the sequence of operations (i.e. insertion or
+deletion of tables or columns) required for making physical
+design changes in a database exhibit different costs.
+
+An online algorithm ALG chooses from con(cid:2)gurations in
+C = fc1; : : : ; cng without seeing the complete workload Q =
+fq1; : : : ; qmg. In particular, prior to evaluating query qk, it
+decides on a con(cid:2)guration from C using only knowledge of
+queries fq1; : : : ; qkg. ALG is said to be (cid:11)-competitive if there
+exists a constant b such that for every (cid:2)nite query sequence Q,
+
+2Conf(qk :query)
+// initially (cid:14)max(0) = 0, C =current config,
+// C = opposite config
+01
+02
+03
+04
+05
+
+(cid:25)(k) = qk(C) - qk(C)
+(cid:14)max(k) = maxf(cid:25)(k); (cid:14)max(k (cid:0) 1) + (cid:25)(k)g
+if (cid:14)max(k) > D
+
+(cid:14)max(k) = 0
+Transition to C
+
+Fig. 5. Online Algorithm for Two Con(cid:2)gurations.
+
+cost((cid:30)ALG;Q) (cid:20) (cid:11) (cid:3) cost((cid:30)OP T ;Q) + b. OP T is the of(cid:3)ine
+optimal that has entire knowledge of Q.
+
+In the remainder of this section, we describe a three-
+competitive online algorithm for the two-con(cid:2)guration sce-
+nario and extend our solution to N -con(cid:2)gurations. For sim-
+plicity, our analysis is restricted to the partitioning of a single
+table T .
+
+A. Two-Con(cid:2)guration Scenario
+
+Given a relation T with n attributes, we restrict the solution
+to two con(cid:2)gurations: con(cid:2)guration S in which each attribute
+is stored in a separate physical relations, and con(cid:2)guration
+M in which all attributes are merged into a single physical
+relation. In terms of query evaluation, S reduces the cost of
+scanning unused attributes while M minimizes join overhead
+for queries accessing many attributes. We make no assump-
+tions about the transition costs d(S; M ) and d(M; S).
+
+Borodin et al.[12] give a general algorithm for metrical
+task systems that can be extended to task systems that are
+non-metric. We present a three-competitive algorithm 2Conf
+designed speci(cid:2)cally for the two-con(cid:2)guration scenario. Our
+main observation is that 2Conf should transition to the
+opposite con(cid:2)guration if remaining in the current con(cid:2)gura-
+tion incurs a substantial amount of (cid:147)extra cost(cid:148) from query
+execution.
+
+Let D denote d(S; M ) + d(M; S), qk be the current query,
+and C and C denote the current and opposite con(cid:2)gurations
+respectively. The penalty (cid:25)(k) of remaining in C is de(cid:2)ned
+as qk(C) (cid:0) qk(C) (i.e. the difference between the cost of
+evaluating qk in C compared with the opposite con(cid:2)guration
+C). Let qi be the earliest query before qk such that no transition
+occurs from qi onwards. For any j in which i (cid:20) j (cid:20)
+k
+k, de(cid:2)ne cumulative penalty (cid:14)(j; k) as P
+x=j (cid:25)(x). Further,
+de(cid:2)ne the maximum cumulative penalty (cid:14)max(k) at qk as
+maxi(cid:20)j(cid:20)k (cid:14)(j; k). We are interested in the cumulative penalty
+incurred by a contiguous sequence of queries from qj to qk
+such that (cid:14)(j; k) is maximized. In other words, for all j 0 in
+which j (cid:20) j0 (cid:20) k, (cid:14)(j; j0) (cid:21) 0.
+
+The pseudo-code for 2Conf is provided in Figure 5. 2Conf
+makes a transition before evaluating the current query qk if
+(cid:14)max(k) > D.
+
+Theorem 1: 2Conf is three-competitive.
+
+Proof: Consider any (cid:2)nite query sequence Q. in which
+the ith query is qi. Modify Q into the sequence Q0: the ith
+query q0
+i(S) = maxfqi(S)(cid:0)
+
+i corresponds to qi and has costs q0
+
+qi(M ); 0g and q0
+i(M ) = maxfqi(M ) (cid:0) qi(S); 0g. In other
+words, q0
+i subtracts the cost of qi in each con(cid:2)guration by
+the cost of qi in the cheapest con(cid:2)guration. This means that
+under Q0, cumulative penalty is monotonically increasing and
+more transitions are incurred. It is easy to verify that the ratio
+cost((cid:30)ALG; Q0)=cost((cid:30)OP T ; Q0) is at least as large as the
+corresponding ratio with respect to Q. For the rest of the proof
+we consider Q0 instead of Q.
+
+In Q0, there can be queries in which 2Conf happens to be
+in the cheaper con(cid:2)guration. For such queries, 2Conf incurs
+no cost and the OP T may incur a cost depending on the
+con(cid:2)guration it is in. In our accounting of the costs, we assume
+that OP T incurs no cost for such queries, irrespective of the
+con(cid:2)guration it is in.
+
+Without
+
+loss of generality, assume 2Conf starts in S.
+Let it make k (cid:21) 0 (k is even) transitions before ending
+at con(cid:2)guration S. After transition k, 2Conf incurs k=2
+cycles of migrating from con(cid:2)guration S to M and back,
+resulting in transition cost of (k=2)(d(S; M ) + d(M; S)).
+Additionally, 2Conf incurs a total query evaluation cost of
+k(d(S; M ) + d(M; S)), which follows from the de(cid:2)nition of
+2Conf in which a transition occurs if maximum cumulative
+penalty exceeds d(S; M ) + d(M; S). Thus, 2Conf incurs cost
+(3k=2)(d(S; M ) + d(M; S)) after k transitions.
+
+To lower bound the cost
+
+incurred by OP T during the
+the (cid:2)rst k transitions of 2Conf , note that OP T incurs no
+cost as long as it is in the con(cid:2)guration opposite of 2Conf ,
+but migrating there incurs a transition cost. If OP T remains
+in the same con(cid:2)guration as 2Conf , it will incur a cost
+of d(S; M ) + d(M; S) prior to the decision by 2Conf to
+change con(cid:2)gurations. Thus, it is always better for OP T
+to move to the opposite con(cid:2)guration when it (cid:2)nds itself
+in the same con(cid:2)guration as 2Conf . In summary, the cost
+of OP T for Q0 during the (cid:2)rst k transitions of 2Conf is
+(k=2)(d(S; M )+d(M; S)), which is the same as the transition
+cost incurred by 2Conf . Hence, the cost of 2Conf on Q0 is
+at most three times that of OP T .
+
+B. N -Con(cid:2)guration Scenario
+
+We extend 2Conf to N -con(cid:2)gurations and describe two
+heuristics that deal with an exponential number of con(cid:2)g-
+urations. In the N -con(cid:2)guration scenario, our N Conf al-
+gorithm must consider, for each incoming query, all N (cid:0) 1
+possible transitions with respect to the current con(cid:2)guration.
+This requires tracking the cumulative penalty of remaining in
+the current con(cid:2)guration relative to to every alternative and
+picking the one that bene(cid:2)t query performance the most. Let
+x 2 C be the current con(cid:2)guration and y 2 C be an alternative
+in which y 6= x. De(cid:2)ne (cid:14)y
+max(k) as the maximum cumulative
+penalty of remaining in x rather than transitioning to y at query
+qk (the penalty of remaining in x for qk is qk(x)(cid:0)qk(y)). In the
+two-con(cid:2)guration scenario, a transition is made when (cid:14)max(k)
+exceeds a constant threshold D. In N Conf , this threshold
+is no longer constant and is a function of the con(cid:2)guration
+immediately prior to x and the alternative con(cid:2)guration being
+considered. Let z be the con(cid:2)guration immediately prior to
+
+x in which the threshold required for transitioning to an
+alternative con(cid:2)guration y is d(z; x) + d(x; y). The decision
+to transition to a new con(cid:2)guration by N Conf is greedy; that
+is, N Conf transitions to the (cid:2)rst con(cid:2)guration y that satis(cid:2)es
+(cid:14)y
+max(k) > d(z; x) + d(x; y).
+
+N Conf is not three-competitive because it transitions im-
+mediately to the (cid:2)rst con(cid:2)guration in which the cumulative
+penalty exceeds the threshold. This greedy approach is sus-
+ceptible to oscillations among con(cid:2)gurations that exhibit low
+migration cost, which is a problem in multi-con(cid:2)guration
+scenarios. In particular, N Conf may transition between con-
+(cid:2)gurations that yield short-lived bene(cid:2)ts with respect to query
+performance and overlook con(cid:2)gurations with a higher cu-
+mulative bene(cid:2)t but incurs a large, one-time transition cost.
+In practice, we expect minor oscillations after N Conf (cid:2)nds
+candidates that perform almost as well as the con(cid:2)guration
+chosen by OP T because Astronomy workloads do not exhibit
+rapid changes, such as on an hourly basis. Furthermore,
+con(cid:2)gurations that are separated by low migration cost tend
+to yield similar performance on the same queries.
+
+Since con(cid:2)guration changes are performed online, an ex-
+haustive evaluation of every alternative con(cid:2)guration for each
+incoming query is infeasible (e.g. over 51 trillion ways exist
+to vertically partition a table with 20 attributes). We adopt
+two heuristics to restrict the search space. First, consider a
+con(cid:2)guration x 2 C, which partitions attributes from one
+logical relation into separate physical tables. Let each phys-
+ical grouping of attributes from the same logical relation
+be denoted as a fragment. Thus, no two con(cid:2)guration will
+have the same set of fragments. Next, we de(cid:2)ne a neighbor
+relationship that describes the easiness, in terms of migration
+cost, of transitioning between con(cid:2)gurations. Denote Nx as
+the set of neighboring con(cid:2)gurations with respect to x in
+which a con(cid:2)guration y 2 Nx is considered a neighbor of
+x if transitioning from x to y requires coalescing at most two
+fragments in x or splitting exactly one fragment of x into two
+disjoint fragments. Provided x is the current con(cid:2)guration,
+our heuristic only considers the set of con(cid:2)gurations in Nx
+for transitioning.
+
+Enumeration-based, of(cid:3)ine vertical partitioning algorithms
+[18][10] provide an intuition for neighboring con(cid:2)gurations.
+For instance, AutoPart [10] starts from a con(cid:2)guration in
+which each attribute is a separate fragment and enumerates
+candidate con(cid:2)gurations by coalescing existing fragments in
+a pairwise manner. The search space is restricted to small
+permutations of the current con(cid:2)guration at each iteration,
+producing candidates that gradually reduce the expected query
+I/O cost for the workload. This approach to of(cid:3)ine vertical par-
+titioning produces con(cid:2)gurations that perform well in practice.
+Neighboring con(cid:2)gurations are similar in that each transition
+changes at most two fragments from the current con(cid:2)guration,
+which does not incur a high I/O cost. However, restricting
+the immediate solution to neighbors does not prevent
+the
+exploration of the entire space, albeit via small, incremental
+transitions. Neighboring con(cid:2)gurations also provide two de-
+sirable properties. First, since the cost of transitioning to a
+
+neighbor is relatively low, there is a lower threshold to over-
+come, which allows N Conf to respond quickly to workload
+changes. Moreover, transitions based on small permutations
+of the current con(cid:2)guration amortizes the I/O impact of
+partitioning physical tables so as to limit disruption on the
+normal operations of a database.
+
+in N Conf ,
+
+We introduce a pruning heuristic that further reduce the
+set of neighboring con(cid:2)gurations. Workload-based, of(cid:3)ine
+partitioning algorithms [10] invoke the query optimizer to
+estimate the I/O cost of each query on each hypothetical
+con(cid:2)guration. Cost estimates for the workload are then used
+to evaluate candidate con(cid:2)gurations. Similarly, to accurately
+calculate penalty cost
+the query optimizer is
+consulted for each incoming query against every neighboring
+con(cid:2)guration. Since the set of neighbors is on the order of
+O(2n), cost estimation is a major overhead for an online
+system such as SkyQuery in which query response time is
+often less than a second. Our approach minimizes invocations
+of the query optimizer by identifying promising con(cid:2)gurations
+based on groups of attributes that are used frequently in the
+workload. Cost estimation is only performed for con(cid:2)gurations
+that are expected to have a large impact on query performance.
+Our pruning heuristic is based on the observation that few
+attribute groupings (on the order of thousands) will dominate
+because Astronomy workloads are template-based [23], which
+allows us to ef(cid:2)ciently (cid:2)lter from a large pool of neighboring
+con(cid:2)guration. (While many queries are template-based, the set
+of templates change over time as new templates are introduced
+and gain importance). This approach is similar to association
+rules mining [24], which identi(cid:2)es sets of related products in
+a store based on the purchasing pattern of customers.
+
+To illustrate our pruning heuristic, consider a relation con-
+sisting of four attributes, a1-a4. Let Ak denote the set of
+attributes accessed by query qk. A set of attributes g is an
+attribute group of qk if g (cid:18) Ak. Thus, g indicates a potential
+grouping which is bene(cid:2)cial; that is, keeping attributes from
+g in the same physical table lowers the cost of evaluating qk.
+Given a query qk which accesses fa1; a3; a4g, the pruning
+heuristic (cid:2)rst enumerates all attribute groups of qk, producing
+subsets a1, a3, a4, a1a3, a1a4, a3a4 , and a1a3a4. We then
+identify groups that guide transitioning decisions and ignore
+the rest. Speci(cid:2)cally, attribute groups which show that tran-
+sitioning to a neighboring con(cid:2)gurations reduces the cost of
+evaluating qk. This includes splitting a fragment to reduces the
+cost of scanning extraneous attributes or merging fragments to
+reduce the join cost of selecting data from several attributes.
+To illustrate this process, let the current con(cid:2)guration con-
+sists of three fragments fa1a2g, fa3g, and fa4g. The attribute
+groups of import for qk are a3a4, which supports the coalesc-
+ing of fragments fa3g and fa4g to reduce join cost, and a1,
+which supports the splitting of fragment fa1a2g to eliminate
+the cost of scanning attribute a2. Attribute groups a3 and a4
+are ignored because they correspond to existing fragments and
+do not indicate a better alternative. a1a3a4 is pruned to avoid
+double counting because physically manifesting this grouping
+requires changing more than two fragments from the current
+
+if n:weight > prevT + d(c; n) and n =2 neighbors
+
+NConf(qk :query, c :current configuration)
+// initially neighbors = fg, prevT = 0
+u neighbors = updateWeight(qk,c)
+01
+02
+for each n in u neighbors
+03
+04
+05
+06
+07
+08
+09
+10
+
+(cid:25)(k) = qk(c) - qk(n)
+(cid:14)n
+max(k) = maxf(cid:25)(k); (cid:14)n
+if (cid:14)n
+
+neighbors = fg, prevT = d(c; n)
+Transition to n
+
+for each n in neighbors
+
+neighbors = neighbors [ n
+
+max(k) > prevT + d(c; n)
+
+max(k (cid:0) 1) + (cid:25)(k)g
+
+Fig. 6. Online Algorithm for N Con(cid:2)gurations
+
+con(cid:2)guration (recall that neighbors are formed by coalescing
+at most two fragments or splitting one existing fragment).
+
+Once attribute groups are evaluated and the neighboring
+con(cid:2)gurations of import are found, weights are assigned to
+each neighbor that bene(cid:2)ts qk. Weights should capture changes
+in the relative importance, with respect to expected bene(cid:2)t
+to query performance, of neighbors as queries evolve over
+time. N Conf uses the I/O cost of evaluating queries against
+the current con(cid:2)guration for weights so that transitioning to
+a neighbor with more weight is expected to have a greater
+impact on query performance than a neighbor with less
+weight. Thus, if qk supports a neighbor n, then n’s weight is
+incremented by qk(c) in which c is the current con(cid:2)guration.
+Calculating weights based on the current con(cid:2)guration helps
+bias optimization efforts toward queries that bene(cid:2)t from re-
+partitioning. Namely, if a group of queries performs poorly on
+the current con(cid:2)guration and continues to incur high I/O costs,
+then neighbors that bene(cid:2)t these queries receive higher weight.
+In N Conf , optimization efforts are focused on neighbors
+that may have suf(cid:2)cient weight to overcome the threshold for
+transitioning.
+
+Figure 6 provides the pseudo-code for N Conf . Lines 1-4
+employ the pruning heuristic in which updateWeight incre-
+ments the weights of neighbors that bene(cid:2)t qk. Neighbors
+that have accumulated suf(cid:2)cient weight are considered as
+candidates for transitioning (line 3). The threshold is prevT +
+d(c; n) in which prevT is the cost of the previous transition
+and c is the current con(cid:2)guration. Lines 5-10 update the
+maximum cumulative penalty for each neighbor and transitions
+to the (cid:2)rst neighbor n satisfying the threshold or (cid:14)n
+max(k) >
+prevT + d(c; n).
+
+V. EXPERIMENTS
+
+In this section, we present an initial evaluation of our online-
+partitioning algorithm. To prove the validity and generality of
+our algorithm, we conduct experiments on the TPC-D [25]
+database and query workload. We are still in the process of
+evaluating our algorithm in SkyQuery databases. The size of
+the datasets and the complexity of the workload require a
+robust framework that we are currently working to establish.
+The online partitioning algorithm is evaluated on the 500MB
+con(cid:2)guration of the TPC-D benchmark [25]. Secondary in-
+dices were dropped from the raw database to isolate the
+bene(cid:2)ts of vertical partitioning on query performance. Of the
+
+22 decision support queries from the benchmark, we took a
+subset of those queries that referenced the Orders relation.
+(These include queries: Q3, Q4, Q5, Q7, Q8, Q9, Q12, and
+Q13). The Orders relation consists of 750,000 rows and eight
+attributes. One column in particular, o comment, occupies over
+half of the relation’s total size and is accessed only by Q13.
+Vertical partitioning is performed on the Orders table using
+two 10k query workloads that consist of the eight query
+types. In the (cid:2)rst workload Wkld Rand, queries are generated
+randomly and each query occurs with equal probability. The
+second workload Wkld Dom represents a query access pattern
+that closely matches the SkyQuery workload. In this workload,
+a few queries dominate with equal probability for a certain
+length of query sequence. In the current workload, TPC
+queries Q3, Q4 and Q12 dominate in the initial one-third of
+the query sequence, queries Q5, Q8, and Q9 dominate for the
+next one third of the query sequence, and Q13 dominates in
+the last one-third. The dominance factor is 80%.
+
+We evaluate the NConf algorithm against AutoPart [10],
+a workload-based, of(cid:3)ine partitioning tool. The unpartitioned
+Orders relation serves as our base table. We use query re-
+sponse time as the metric for comparing the performance of
+each approach. To make the comparison fair, we adapt the
+cost estimation module from AutoPart for evaluating queries
+against the various candidate con(cid:2)gurations. Thus, the module
+provides, for a query qi, an estimate for qi(x) in which x
+can be any candidate con(cid:2)guration. AutoPart relies on the
+query optimizer for estimating the I/O cost of a query against
+the various con(cid:2)gurations. The con(cid:2)gurations are virtual in
+that the cost module creates the schema for each candidate
+con(cid:2)guration but does not populate the con(cid:2)guration with
+data. To ensure accurate estimates, AutoPart’s cost estimation
+tool supplies the query optimizer with up-to-date system
+catalog entries and table statistics on the partitioned schema.
+The statistics are generated from full table scans such that
+the estimates for virtual con(cid:2)gurations track closely with that
+of real con(cid:2)gurations [10]. To account for transition cost, we
+assumed a (cid:2)xed cost for every transition of 30,000 logical
+page reads (for 8KB page size). Logical page reads allow us to
+compare directly with the I/O cost of query execution. We rely
+on a (cid:2)xed cost because we are still developing a framework
+for estimating transition cost. In particular, it is dif(cid:2)cult to
+accurately estimate migration cost that includes write overhead
+and the cost of data de(cid:2)nition operations (i.e. alter table) for
+which estimates cannot be obtained from the query optimizer.
+All experiments for the 500MB con(cid:2)guration of the TPC-
+D database ran on Microsoft’s SQL Server 2000. Our main
+workstation is a 3GHz Pentium IV machine with 1GB of main
+memory and two SATA disks. For performance reasons, we
+assign logging to one disk and store the database on a second
+500GB disk.
+
+Figure 7 shows the average query response time for the
+online partitioning algorithm compared with AutoPart. On
+Wkld Rand, AutoPart performs slightly better than the online
+algorithm. This is due to the warm-up time required by the
+online algorithm to migrate to the same con(cid:2)guration as that
+
+Wkld_Rand
+Wkld_Dom
+
+)
+s
+m
+
+(
+ 
+
+i
+
+ 
+
+e
+m
+T
+e
+s
+n
+o
+p
+s
+e
+R
+g
+v
+A
+
+ 
+
+3000
+
+2500
+
+2000
+
+1500
+
+1000
+
+500
+
+0
+
+t
+s
+o
+C
+O
+
+ 
+
+/
+I
+ 
+
+t
+
+d
+e
+a
+m
+
+i
+t
+s
+E
+
+None
+
+AutoPart
+
+Online
+
+0
+
+3333
+
+6666
+
+10000
+
+Partitioning Strategy
+
+Query Sequence for Wkld_Dom
+
+Fig. 7. Query performance by partitioning strategy.
+
+Fig. 8. Estimated I/O Cost for queries in Wkld Dom.
+
+obtained by running AutoPart of(cid:3)ine. The online algorithm
+incurs just seven con(cid:2)guration changes prior to arriving at
+a stable con(cid:2)guration for the remainder of the workload.
+For Wkld Dom, the online algorithm outperforms AutoPart
+by 17%. In fact, AutoPart suggests the same con(cid:2)guration
+for both workloads. It is not able to detect changes in the
+workload sequence. In contrast, our online algorithm made
+thirteen con(cid:2)guration changes during the course of evaluating
+Wkld Dom. It adapts the con(cid:2)guration based on queries that
+dominate the workload sequence.
+
+Figure 8 shows, for the online algorithm, the estimated
+I/O cost of a subset of queries from Wkld Dom (each data
+point corresponds to the estimated I/O cost of a query in the
+workload sequence). In the (cid:2)gure, each vertical line denotes
+a con(cid:2)guration change. To better illustrate the performance
+impact before and after each transition, we only plot
+the
+I/O cost of Q3 in the (cid:2)rst
+third of the sequence, Q5 in
+the second third, and Q13 in the (cid:2)nal third. Recall that the
+workload evolves in that queries which dominate the initial
+third of the workload differs from those that dominate in
+the second and last third. The online algorithm detects these
+changes and adapts the physical con(cid:2)guration accordingly.
+Seven transitions occur in the initial
+third in which the
+con(cid:2)guration oscillates rapidly during the (cid:2)rst 500 queries
+as the algorithm attempts to re-group each attribute in the
+unpartitioned Orders relation. Similarly, in the second and
+(cid:2)nal third of the workload, the algorithm detects the change
+and makes the appropriate transitions early on. This result
+illustrates two things: the online algorithm successfully detects
+changes in the workload and once it adapts to a change, the
+con(cid:2)guration remains relatively stable thereafter.
+
+is not without
+
+limitations. First,
+
+The TPC-D benchmark results provide an initial validation
+of our approach but
+the
+impact of caching is ignored in which column insertions and
+deletions by the caching algorithm may change both workload
+performance and transition cost. Further, our experiments
+are limited to a single table with eight attributes, which
+leaves several questions unanswered. While we observed low
+optimization overhead (only a few dozen con(cid:2)gurations are
+evaluated) on the TPC-D benchmark, it is unclear how the
+
+algorithm scales to diverse workloads and larger tables since
+relations in SDSS can contain several hundred attributes. Also,
+we assume a (cid:2)xed migration cost in our experiments and have
+yet to explore both the proper metric for the cost of migrating
+between con(cid:2)gurations and how this cost can be accurately
+estimated. Thus, deriving accurate cost estimates with low
+overhead remains an important focus.
+
+VI. SUMMARY AND FUTURE WORK
+
+In this paper, we have shown the need for a workload-
+adaptive physical design solution in Bypass caches. Vertical
+partitioning is an important
+technique for physical design
+as it
+improves physical design without adding redundant
+data. Bypass caches receive a continually evolving Astronomy
+workload, and therefore need an online vertical partitioning
+technique. We presented online and workload-adaptive al-
+gorithms for the vertical partitioning problem that balances
+improvements in query execution performance with the cost
+of physical design changes.
+
+The effectiveness of physical design decisions depends on a
+good cost estimation module. Cost-estimation in caches should
+take into account the fact that objects exhibit varying cache
+resident times. Further, caches are constrained resources, so
+cost estimation must be ef(cid:2)cient but accurate. We plan to
+integrate fast techniques [26], which cache query plans to
+improve the ef(cid:2)ciency of cost estimation. Currently, these
+techniques are suited to index selection. While vertical parti-
+tioning is an attractive solution for physical design in caches,
+it may be useful to consider constructing indices for long-
+lived objects. We plan to study the impact of index selection
+given that indices will also compete for the same cache space.
+Constructing indices will reduce the response time of queries
+on objects in the cache but will increase the response time of
+queries on objects that were evicted because they are bypassed
+to the backend database. Addressing this trade-off is crucial
+to the integration of indices.
+
+REFERENCES
+
+[1] P. Larson, J. Goldstein, H. Guo, and J. Zhou, (cid:147)MTCache: Mid-Tier
+
+Database Caching for SQL Server,(cid:148) in ICDE, 2004.
+
+[2] M. Altinel, C. Bornhvd, S. Krishnamurthy, C. Mohan, H. Pirahesh, and
+B. Reinwald, (cid:147)Cache Tables: Paving the Way for An Adaptive Database
+Cache,(cid:148) in VLDB, 2003.
+
+[3] M. Altinel, Q. Luo, S. Krishnamurthy, C. Mohan, H. Pirahesh, B. G.
+Lindsay, H. Woo, and L. Brown, (cid:147)DBCache: Database Caching for Web
+Application Servers,(cid:148) in SIGMOD, 2002.
+
+[4] L. Wang, K. Park, R. Pang, V. S. Pai, and L. Peterson, (cid:147)Reliability and
+Security in the CoDeeN Content Distribution Network,(cid:148) in USENIX,
+2004.
+
+[5] S. Chaudhuri and V. R. Narasayya, (cid:147)An Ef(cid:2)cient Cost-Driven Index
+
+Selection Tool for Microsoft SQL Server,(cid:148) in VLDB, 1997.
+
+[6] S. Agrawal, S. Chaudhuri, and V. R. Narasayya, (cid:147)Automated Selection
+of Materialized Views and Indexes in SQL Databases,(cid:148) in VLDB, 2000.
+[7] S. Agrawal, E. Chu, and V. Narasayya, (cid:147)Automatic Physical Design
+
+Tuning: Workload as a Sequence,(cid:148) in SIGMOD, 2006.
+
+[8] T. Malik, R. Burns, and A. Chaudhary, (cid:147)Bypass Caching: Making
+
+Scienti(cid:2)c Databases Good Network Citizens,(cid:148) in ICDE, 2005.
+
+[9] T. Malik, A. S. Szalay, A. S. Budavri, and A. R. Thakar, (cid:147)SkyQuery: A
+
+Web Service Approach to Federate Databases,(cid:148) in CIDR, 2003.
+
+[10] S. Papadomanolakis and A. Ailamaki, (cid:147)AutoPart: Automating Schema
+Design for Large Scienti(cid:2)c Databases Using Data Partitioning,(cid:148) in
+SSDBM, 2004.
+
+[11] S. Agrawal, V. R. Narasayya, and B. Yang, (cid:147)Integrating Vertical and
+Horizontal Partitioning Into Automated Physical Database Design,(cid:148) in
+SIGMOD, 2004.
+
+[12] A. Borodin, N. Linial, and M. E. Saks, (cid:147)An Optimal On-line Algorithm
+for Metrical Task System,(cid:148) J. ACM, vol. 39, no. 4, pp. 745(cid:150)763, 1992.
+[13] A. Szalay, J. Gray, A. Thakar, P. Kuntz, T. Malik, J. Raddick,
+C. Stoughton, and J. Vandenberg, (cid:147)The SDSS SkyServer - Public Access
+to the Sloan Digital Sky Server Data,(cid:148) in SIGMOD, 2002.
+
+[14] The Sloan Digital Sky Survey. [Online]. Available: http://www.sdss.org
+[15] S. Navathe, S. Ceri, G. Wiederhold, and J. Dou, (cid:147)Vertical Partitioning
+Algorithms for Database Design,(cid:148) ACM Trans. Database Syst., vol. 9,
+no. 4, pp. 680(cid:150)710, 1984.
+
+[16] N. Bruno and S. Chaudhuri, (cid:147)An Online Approach to Physical Design
+
+[17] The TimesTen Team, (cid:147)Mid-tier Caching: The TimesTen Approach,(cid:148) in
+
+[18] M. Hammer and B. Niamir, (cid:147)A Heuristic Approach to Attribute Parti-
+
+Tuning,(cid:148) in ICDE, 2007.
+
+SIGMOD, 2002.
+
+tioning,(cid:148) in SIGMOD, 1979.
+
+[19] W. W. Chu and I. T. Ieong, (cid:147)A Transaction-Based Approach to Vertical
+Partitioning for Relational Database Systems,(cid:148) IEEE Trans. Software
+Eng., vol. 19, no. 8, pp. 804(cid:150)812, 1993.
+
+[20] D. W. Cornell and P. S. Yu, (cid:147)An Effective Approach to Vertical
+Partitioning for Physical Design of Relational Databases,(cid:148) IEEE Trans.
+Software Eng., vol. 16, no. 2, pp. 248(cid:150)258, 1990.
+
+[21] W. R. Burley and S. Irani, (cid:147)On Algorithm Design for Metrical Task
+
+Systems,(cid:148) in SODA, 1995.
+
+[22] W. Bein, L. L. Larmore, and J. Noga, (cid:147)Uniform Metrical Task Systems
+with a Limited Number of States,(cid:148) Inf. Process. Lett., vol. 104, no. 4,
+pp. 123(cid:150)128, 2007.
+
+[23] X. Wang, T. Malik, R. Burns, S. Papadomanolakis, , and A. Ailamaki,
+(cid:147)A Workload-Driven Unit of Cache Replacement for Mid-Tier Database
+Caching,(cid:148) in DASFAA, 2007.
+
+[24] R. Agrawal, T. Imielinski, and A. Swami, (cid:147)Mining Association Rules
+
+between Sets of Items in Large Databases,(cid:148) in SIGMOD, 1993.
+
+[25] TPC-D Benchmark. [Online]. Available: http://www.tpc.org
+[26] S. Papadomanolakis, D. Dash, and A. Ailamaki, (cid:147)Ef(cid:2)cient Use of the
+Query Optimizer for Automated Database Design,(cid:148) in VLDB, 2007, pp.
+1093(cid:150)1104.
+
+APPENDIX
+
+Date
+
+Top 2 Queries 
+
+ 
+)
+s
+e
+i
+r
+e
+u
+q
+ 
+k
+7
+1
+(
+
+4
+1
+/
+2
+0
+-
+8
+0
+/
+2
+0
+
+ 
+)
+s
+e
+i
+r
+e
+u
+q
+ 
+k
+9
+1
+(
+
+1
+2
+/
+2
+0
+-
+5
+1
+/
+2
+0
+
+ 
+)
+s
+e
+i
+r
+e
+u
+q
+ 
+k
+9
+1
+(
+
+8
+2
+/
+2
+0
+-
+2
+2
+/
+2
+0
+
+SELECT ’<a target=cas.sdss.org/dr4/en/ 
+explore/obj.asp’  + cast(p.objId as 
+varchar(20)) + ’>’ + cast(p.objId 
+as varchar(20)) + ’</a>’ as objID, 
+p.run, p.rerun, p.camcol, p.field, 
+p.obj, p.type, p.ra, p.dec, p.u, 
+p.g, p.r, p.i, p.z, p.Err_u, 
+p.Err_g, p.Err_r, p.Err_i, p.Err_z
+
+FROM fGetNearbyObjEq(185,-0.5,3) n, 
+
+PhotoPrimary p
+
+WHERE n.objID=p.objID 
+
+SELECT distinct p.run, p.rerun, 
+
+1864
+
+p.camcol, p.field
+
+FROM
+
+fGetNearbyObjEq(77.699896,64.913318
+,15.0) n, PhotoPrimary p
+
+WHERE n.objID=p.objID 
+
+SELECT p.objID, rc.name, s.name, p.ra, 
+p.dec, ph.name, p.u, p.g, p.r, p.i, 
+p.z, o.distance
+
+FROM (((PhotoPrimary p inner join 
+
+PhotoType ph on p.type = ph.value) 
+left join RC3 rc on p.objid = 
+rc.objid) left join Stetson s on 
+p.objid = s.objid), 
+dbo.fGetNearbyObjEq(18.87837,-
+0.86083,0.5) o
+
+WHERE o.objid = p.objid and p.type = 
+
+ph.value order by o.distance 
+
+SELECT ra, dec, type, flags, status, 
+primTarget, probPSF, run, rerun, 
+camcol, field, obj, psfMag_u, 
+extinction_u, psfMagErr_u, 
+psfMag_g, extinction_g, 
+psfMagErr_g, psfMag_r, 
+extinction_r, psfMagErr_r, 
+psfMag_i, extinction_i, 
+psfMagErr_i, psfMag_z, 
+extinction_z, psfMagErr_z, 
+texture_u, texture_g, texture_r, 
+texture_i, texture_z, lnLStar_u, 
+lnLStar_g, lnLStar_r, lnLStar_i, 
+lnLStar_z, mE1_i, ME2_i, mRrCc_i, 
+mCr4_i, isoA_i, isoB_i, isoPhi_i, 
+rowv, rowvErr, colv, colvErr
+
+FROM PhotoPrimary
+WHERE (type = 6) and (ra >= 160.000000 
+
+and ra < 161.000000) and (dec >= -
+2.000000 and dec < -1.000000) 
+
+SELECT ’<a target=cas.sdss.org/dr4/en/ 
+explore/obj.asp’  + cast(p.objId as 
+varchar(20)) + ’>’ + cast(p.objId 
+as varchar(20)) + ’</a>’ as objID, 
+p.run, p.rerun, p.camcol, p.field, 
+p.obj, p.type, p.ra, p.dec, p.u, 
+p.g, p.r, p.i, p.z, p.Err_u, 
+p.Err_g, p.Err_r, p.Err_i, p.Err_z
+
+FROM fGetNearbyObjEq(185,-0.5,3) n, 
+
+PhotoPrimary p
+
+WHERE n.objID=p.objID 
+
+SELECT ra, dec, type, flags, status, 
+primTarget, probPSF, run, rerun, 
+camcol, field, obj, modelMag_u, 
+extinction_u, modelMagErr_u, 
+modelMag_g, extinction_g, 
+modelMagErr_g, modelMag_r, 
+extinction_r, modelMagErr_r, 
+modelMag_i, extinction_i, 
+modelMagErr_i, modelMag_z, 
+extinction_z, modelMagErr_z
+
+FROM PhotoPrimary
+WHERE (type = 3) and (ra >= -0.737262 
+
+and ra < 1.262757) and (dec >= -
+0.750681 and dec < 1.249319) 
+
+Freq
+
+5585
+
+PhotoPrimary
+
+Attributes
+
+camcol, cx, cy, 
+cz, dec, err_g, 
+err_i, err_r, 
+err_u, err_z, 
+field, g, htmid, 
+i, obj, objid, 
+r, ra, rerun, 
+run, type, u, z 
+
+7229
+
+2259
+
+5460
+
+4279
+
+camcol, colv,
+colverr, cx, 
+dec,
+extinction_g,
+extinction_i,
+extinction_r,
+extinction_u,
+extinction_z,
+field, flags,
+g, i, isoa_i,
+isob_i,
+isophi_i,
+lnlstar_g,
+lnlstar_i,
+lnlstar_r,
+lnlstar_u,
+lnlstar_z,
+mcr4_i, me1_i, 
+me2_i, mrrcc_i,
+obj, objid, 
+primtarget,
+probpsf,
+psfmag_g,
+psfmag_i,
+psfmag_r,
+psfmag_u,
+psfmag_z,
+psfmagerr_g,
+psfmagerr_i,
+psfmagerr_r,
+psfmagerr_u,
+psfmagerr_z, r, 
+ra, rerun, rowv,
+rowverr, run,
+status,texture_g
+, texture_i, 
+texture_r,
+texture_u,
+texture_z, type,
+u, z
+
+camcol, cx, cy, 
+cz, dec, err_g, 
+err_i, err_r, 
+err_u,
+err_z,
+extinction_g,
+extinction_i,
+extinction_r,
+extinction_u,
+extinction_z,
+field, flags, g, 
+htmid, i, 
+modelmag_g,
+modelmag_i,
+modelmag_r,
+modelmag_u,
+modelmag_z,
+modelmagerr_g,
+modelmagerr_i,
+modelmagerr_r,
+modelmagerr_u,
+modelmagerr_z,
+obj, objid, 
+primtarget,
+probpsf, r, ra, 
+rerun, run, 
+status, type, u, 
+z
+
+Fig. 9. Top two most frequent query types during each week. The right-most
+column lists attributes from the PhotoPrimary relation that are accessed by
+these queries.
+
+

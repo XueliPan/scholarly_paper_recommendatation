@@ -1,0 +1,1606 @@
+Doi:10.1145/1378727.1378747 
+
+TxLinux and MetaTM: 
+Transactional Memory and  
+the Operating System
+
+By Christopher J. Rossbach, hany E. Ramadan, owen S. hofmann, Donald E. Porter,  
+Aditya Bhandari, and Emmett Witchel
+
+abstract
+TxLinux is the first operating system to use hardware trans-
+actional memory (HTM) as a synchronization primitive, and 
+the  first  to  manage  HTM  in  the  scheduler.  TxLinux,  which 
+is a modification of Linux, is the first real-scale benchmark 
+for transactional memory (TM). MetaTM is a modification of 
+the x86 architecture that supports HTM in general and TxLi-
+nux specifically.
+
+This paper describes and measures TxLinux and MetaTM, 
+the  HTM  model  that  supports  it.  TxLinux  greatly  benefits 
+from  a  new  primitive,  called  the  cooperative  transactional 
+spinlock (cxspinlock) that allows locks and transactions to 
+protect  the  same  data  while  maintaining  the  advantages 
+of  both  synchronization  primitives.  Integrating  the  TxLi-
+nux scheduler with the MetaTM’s architectural support for 
+HTM  eliminates  priority  inversion  for  several  real-world 
+benchmarks.
+
+1. intRoDuction
+To  increase  performance,  hardware  manufacturers  have 
+turned away from scaling clock speed and are  focusing on 
+scaling  the  number  of  cores  on  a  chip.  Increasing  perfor-
+mance on new hardware will require finding ways to take ad-
+vantage of the parallelism made available by multiple hard-
+ware processing contexts—a burden placed directly on the 
+software programmer. New generations of hardware will not 
+increase the performance of user applications unless some-
+thing  is  done  to  make  concurrent  programming  easier,  so 
+the need for accessible approaches to parallel programming 
+is increasingly urgent.
+
+The  current  approach  to  achieving  concurrency  using 
+parallel programming relies heavily on threading. Multiple 
+sequential  flows  of  control  (threads)  execute  at  the  same 
+time using locks to protect critical sections. Locks guarantee 
+mutually exclusive access to shared resources. Unfortunate-
+ly,  parallel  programming  using  threads  and  locks  remains 
+quite  difficult,  even  for  experienced  programmers.  Locks 
+suffer  from  a  number  of  well-known  and  long- lamented 
+problems  such  as  deadlock,  convoys,  and  priority  inver-
+sion;  they  compose  poorly  and  require  complex  ordering 
+disciplines to coordinate the use of multiple locks. There is 
+also an unattractive performance-complexity trade-off asso-
+ciated with locks. Coarse-grain locking is simple to reason 
+about  but  sacrifices  concurrent  performance.  Fine-grain 
+locking  may  enable  high  performance,  but  it  makes  code 
+more complex, harder to maintain because it is dependent 
+
+on invariants that are difficult to express or enforce. TM has 
+been the focus of much recent research attention as a tech-
+nique that can provide the performance of fine-grain lock-
+ing with the code complexity of coarse-grain locking.
+
+TM  is  a  programming  model  that  can  greatly  simplify 
+parallel  programming.  A  programmer  demarcates  critical 
+sections that may access shared data as transactions, which 
+are  sequences  of  memory  operations  that  either  execute 
+completely  (commit)  or  have  no  effect  (abort).  The  system 
+is responsible for ensuring that transactions execute atomi-
+cally (either completely or not at all), and in isolation, mean-
+ing that a transaction cannot see the effects of other active 
+transactions,  and  its  own  operations  are  not  visible  in  the 
+system until it commits. While transactions provide the ab-
+straction  of  completely  serial  execution  of  critical  section, 
+the  system  actually  executes  them  optimistically,  allowing 
+multiple  transactions  to  proceed  concurrently,  as  long  as 
+atomicity  and  isolation  are  not  violated.  The  programmer 
+benefits  because  the  system  provides  atomicity:  reasoning 
+about partial failures in critical sections is no longer neces-
+sary. Because transactions can be composed, and do not suf-
+fer from deadlock, programmers can freely compose thread-
+safe libraries based on transactions.
+
+HTM provides an efficient hardware implementation of 
+TM that is appropriate for use in an OS. Operating systems 
+benefit from using TM because TM provides a simpler pro-
+gramming model than locks. For instance, operating system 
+has locking disciplines that specify the order in which locks 
+must  be  acquired  to  avoid  deadlock.  These  disciplines  be-
+come complex over time and are difficult for programmers 
+to master; transactions require no ordering disciplines. Be-
+cause many applications spend a significant fraction of their 
+runtime in the kernel (by making system calls, e.g., to read 
+and write files), another benefit of TM in the OS is increased 
+performance for user programs without having to modify or 
+recompile them.
+
+However, management and support of HTM in an oper-
+ating  system  requires  innovation  both  in  the  architecture 
+and  the  operating  system.  Transactions  cannot  simply 
+replace  or  eliminate  locks  in  an  operating  system  for  two 
+main reasons. The first is that many kernel critical sections 
+perform I/O, actually changing the state of devices like the 
+disk or network card. I/O is a problem for TM because TM 
+systems  assume  that  if  a  conflict  occurs,  one  transaction 
+can  be  aborted,  rolled  back  to  its  start,  and  re-executed. 
+However, when the OS performs I/O it actually changes the 
+
+se pt ember 2008  |   vol.  51  |   n o. 9  |   communications  of   the  acm     83
+
+1_CACM_V51.9.indb   83
+
+8/14/08   1:39:33 PM
+
+research highlights 
+
+state of a device (e.g., by writing data to the network). Most 
+devices cannot revert to a previous state once a write opera-
+tion completes, so a transaction that performs I/O cannot 
+be rolled back  and re-executed. The second reason  is that 
+some kernel critical sections are highly contended and cur-
+rently locks are more efficient than transactions for highly 
+contended  critical  sections.  Under  contention,  the  opti-
+mism of transactions is unwarranted and the rollbacks and 
+back-off performed by the TM system can significantly re-
+duce performance.
+
+The  cxspinlock  (cooperative  transactional  spinlock)  is  a 
+new  primitive  that  addresses  the  problem  of  I/O  in  trans-
+actions,  allowing  locks  and  transactions  to  work  together 
+to  protect  the  same  data  while  maintaining  both  of  their 
+advantages.  Previous  HTM  proposals  require  every  execu-
+tion of a critical section to be protected by either a lock or 
+a  transaction,  while  cxspinlocks  allow  a  critical  section  or 
+a data structure accessed from different critical sections to 
+sometimes be protected by a lock and sometimes by a trans-
+action.  Cxspinlocks  dynamically  and  automatically  choose 
+between locks and transactions. Cxspinlocks attempt to ex-
+ecute critical sections as transactions by default, but when 
+the  processor  detects  an  I/O  attempt,  the  transactions  are 
+rolled back, and the cxspinlock will ensure that the thread 
+re-executes  the  critical  section  exclusively,  blocking  other 
+transactional  and  non-transactional  threads.  Additionally, 
+cxspinlocks  provide  a  convenient  API  for  converting  lock-
+based code to use transactions.
+
+HTM enables a solution to the long-standing problem of 
+priority inversion due to locks. Priority inversion occurs when 
+a  high  priority  thread  waits  for  a  lock  held  by  a  low  priority 
+thread.  We  demonstrate  the  modifications  necessary  in  the 
+TxLinux scheduler and the TM hardware to nearly eliminate 
+priority and policy inversion. Moreover, the OS can improve 
+its  scheduling  algorithms  to  help  manage  high  contention 
+by  leveraging  a  thread’s  transaction  history  to  calculate  the 
+thread’s dynamic priority or de-schedule conflicting threads.
+
+This paper makes the following contributions:
+
+1. 
+
+2. 
+
+3. 
+
+4. 
+
+Creation of a transactional operating system, TxLinux, 
+based on the Linux kernel. TxLinux is among the larg-
+est  real-life  programs  that  use  HTM,  and  the  first  to 
+use HTM inside a kernel.
+Novel  mechanism  for  cooperation  between  transac-
+tional  and  lock-based  synchronization  of  a  critical 
+region. The cooperative transactional spinlock (cxspin-
+lock)  can  be  called  from  a  transactional  or  non- 
+transactional  thread,  and  it  exploits  the  greater 
+parallelism enabled by transactions.
+Novel  mechanism  for  handling  I/O  within  transac-
+tions:  transactions  that  perform  I/O  are  restarted  by 
+the  hardware  and  acquire  a  conventional  lock  in 
+software.
+HTM mechanism to nearly eliminate priority inversion.
+
+2. htm PRimeR
+This  section  provides  background  on  parallel  program-
+ming with locks and gives an overview of programming with 
+HTM.
+
+84    c om munic ations of the  acm   |   september 2008  |   vol. 51  |   no. 9
+
+ 
+
+2.1. threads, synchronization, and locks
+Current parallel programming practices rely heavily on the 
+thread abstraction. A thread is a sequential flow of control, 
+with  a  private  program  counter  and  call  stack.  Multiple 
+threads  may  share  a  single  address  space,  allowing  them 
+to  communicate  through  memory  using  shared  variables. 
+Threads make it possible for a single logical task to take ad-
+vantage of multiple hardware instruction processors, for ex-
+ample, by moving subsets of the task to different processing 
+contexts  and  executing  them  in  parallel.  Threads  allow  an 
+application to remain responsive to users or get other work 
+done  while  waiting  for  input  from  a  slow  device  such  as  a 
+disk  drive  or  a  human  beings.  Multiple  processors  are  the 
+parallel computing resource at the hardware level, multiple 
+threads are the parallel computing resource at the operating 
+system level.
+
+Threads  require  synchronization  when  sharing  data  or 
+communicating through memory to avoid race conditions. 
+A race condition occurs when threads access the same data 
+structure  concurrently  in  a  way  that  violates  the  invariants 
+of the data structure. For instance, a race condition between 
+two  threads  inserting  into  a  linked  list  could  create  a  loop 
+in  the  list.  Synchronization  is  the  coordination  that  elimi-
+nates  race  conditions  and  maintains  data  structure  invari-
+ants (like every list is null terminated). Locks allow threads to 
+ synchronize concurrent accesses to a data structure. A lock 
+protects a data structure by enforcing mutual exclusion, en-
+suring that only one thread can access that data structure at 
+a time. When a thread has exclusive access to a data struc-
+ture, it is guaranteed not to see partially completed changes 
+made by other threads. Locks thus help maintain consisten-
+cy over shared variables and resources.
+
+Locks  introduce  many  challenges  into  the  program-
+ming  model,  such  as  deadlock  and  priority  inversion. 
+Most  importantly  though,  they  are  often  a  mismatch  for 
+the programmer’s real needs and intent: a critical section 
+expresses  a  consistency  constraint,  while  a  lock  provides 
+ exclusion.  Ultimately,  when  a  programmer  encloses  a  set 
+of instructions in a critical section, it represents the assess-
+ment that those instructions must be executed atomically 
+(either completely, or not at all), and in isolation (without 
+visible partial updates) in order to preserve the consistency 
+of  the  data  manipulated  by  the  critical  section.  HTM  pro-
+vides  hardware  and  software  support  for  precisely  that 
+ abstraction: atomic, isolated execution of critical sections. 
+Locks can provide that abstraction conservatively by ensur-
+ing that no two threads are ever executing in the critical sec-
+tion concurrently. By contrast, TM provides this abstraction 
+optimistically, by allowing concurrent execution of critical 
+sections, detecting violations of isolation dynamically, and 
+restarting  one  or  more  transactions  in  response,  revert-
+ing  state  changes  done  in  a  transaction  if  the  transaction 
+does not commit. The result is a globally consistent order 
+of transactions.
+
+There  are  many  lock  variants,  like  reader/writer  locks 
+and sequence locks. These lock variants reduce the amount 
+of  exclusion  for  a  given  critical  section  which  can  improve 
+performance  by  allowing  more  threads  to  concurrently  ex-
+ecute a critical region. However these variants can be used 
+
+1_CACM_V51.9.indb   84
+
+8/14/08   1:39:33 PM
+
+only in particular situations, such as when a particular criti-
+cal region only reads a data structure. While lock variations 
+can reduce the performance problems of locks, they do not 
+reduce complexity, and in fact increase complexity as devel-
+opers and code maintainers must continue to reason about 
+whether a particular lock variation is still safe in a particular 
+critical region.
+
+xbegin 
+xend 
+xretry 
+xgettxid 
+
+hardware tm concepts in metatm.
+
+Primitive 
+
+Definition
+
+instruction to begin a transaction.
+
+instruction to commit a transaction.
+
+instruction to restart a transaction.
+
+2.2. synchronization with transactions
+HTM is a replacement for synchronization primitives such 
+as spinlocks and sequence locks. Transactions are simpler 
+to  reason  about  than  locks.  They  improve  performance  by 
+eliminating lock variables and the coherence cache misses 
+associated with them, and they improve scalability by allow-
+ing concurrent execution of threads that do not attempt to 
+update the same data.
+
+Transactions  compose  a  thread  executing  a  transaction 
+can call into a module that starts another transaction. The 
+second  transaction  nests  inside  the  first.  In  contrast,  most 
+lock implementations do not compose. If one function takes 
+a lock and then calls another function which eventually tries 
+to take the same lock, the thread will deadlock. Research on 
+transaction nesting semantics is an active area,13,15,16 but flat 
+nesting, in which all nested transactions are subsumed by 
+the  outermost  transaction,  is  easy  to  implement.  MetaTM 
+uses flat nesting, but all patterns of transaction nesting are 
+free from deadlock and livelock.
+
+HTM designs share a few key high level features: primi-
+tives for managing transactions, mechanisms for detecting 
+conflicts between transactions, called conflict detection, and 
+mechanisms for handling conflicts when they occur, or con-
+tention management.
+
+The table here provides an HTM glossary, defining impor-
+tant concepts, and listing the primitives MetaTM adds to the 
+x86  ISA.  The  machine  instructions  not  shown  in  italics  are 
+those which are generic to any HTM design. Those shown in 
+italics are specific to MetaTM. The xbegin and xend instruc-
+tions start and end transactions, respectively. Starting a trans-
+action causes the hardware to enforce isolation for reads and 
+writes to memory until the transaction commits; the updates 
+become visible to the rest of the system on commit. The xretry 
+instruction provides a mechanism for explicit restart.
+
+The  set  of  memory  locations  read  and  written  during  a 
+transaction are called its read-set and write-set, respectively. 
+A  conflict  occurs  between  two  transactions  when  there  is  a 
+non-empty intersection between the write-set of one trans-
+action and the union of the read- and write-sets of another 
+transaction. Informally, a conflict occurs if two transactions 
+access the same location and at least one of those accesses 
+is a write-set.
+
+When  two  transactions  conflict,  one  of  those  transac-
+tions will proceed, while the other will be selected to discard 
+its changes and restart execution at xbegin: implementation 
+of a policy to choose the losing transaction is the responsi-
+bility  of  a  contention  manager.  In  MetaTM,  the  contention 
+manager is implemented in hardware. The policies underly-
+ing contention management decisions can have a first-order 
+impact  on  performance.24  Advanced  issues  in  contention 
+management  include  asymmetric conflicts,  in  which  one  of 
+
+ instruction to get the current transaction identifier, which is 
+
+0 if there is no currently active transaction.
+
+xpush 
+
+ instruction to save transaction state and suspend current 
+
+transaction. used on receiving an interrupt.
+
+xpop 
+
+ instruction  to  restore  previously  saved  transaction  state 
+
+and  continue  xpushed  transaction.  used  on  an  interrupt 
+
+return.
+
+xtest 
+
+ if the value of the variable equals the argument, enter the 
+
+variable  into  the  transaction  read-set  (if  a  transaction  ex-
+
+ists)  and  return  true.  otherwise,  return  false,  and  do  not 
+
+enter the variable in the read-set.
+
+xcas 
+
+ A compare and swap instruction that subjects non-transac-
+
+tional threads to contention manager policy.
+
+Conflict 
+
+ one transactional thread writes an address that is read or 
+
+written by another transactional thread.
+
+Asymmetric  A  non-transactional  thread  reads  (writes)  an  address  
+
+conflict  
+
+ written  (read  or  written)  by  a  transactional  thread.  (Also 
+
+Contention 
+
+known as a violation of strong isolation.)
+ multiple threads attempt to acquire the same resource, e.g., 
+
+access to a particular data structure.
+
+transaction  encodes 
+
+information  about 
+
+the  current 
+
+transaction,  
+
+status word  
+
+ including  reason  for  most  recent  restart.  returned  from 
+
+xbegin.
+
+the conflicting accesses is performed by a thread outside a 
+transaction.
+
+3. htm anD oPeRatinG sYstems
+This section discusses motivation for using TM for synchro-
+nization  in  an  operation  system,  and  considers  the  most 
+common approach to changing lock-based programs to use 
+transactions.
+
+3.1. Why use htm in an operating system?
+Modern  operating  systems  use  all  available  hardware  pro-
+cessors in parallel, multiplexing the finite resources of the 
+hardware among many user processes concurrently. The OS 
+delegates  critical  tasks  such  as  servicing  network  connec-
+tions or swapping out unused pages to independent kernel 
+threads that are scheduled intermittently. A process is one 
+or  more  kernel  threads,  and  each  kernel  threads  is  sched-
+uled directly by the OS scheduler.
+
+The result of aggressive parallelization of OS work is sub-
+stantial  sharing  of  kernel  data  structures  across  multiple 
+threads within the kernel itself. Tasks that appear unrelated 
+can create complex synchronization in the OS. Consider, for 
+example,  the  code  in  Figure  1,  which  is  a  simplification  of 
+the  Linux  file  system’s  dparent_notify  function.  This 
+function is invoked to update the parent directory’s modify 
+time when a file is accessed, updated, or deleted. If two sepa-
+rate user processes write to different files in the same direc-
+tory concurrently, two kernel threads can call this function 
+
+se pt ember 2008  |   vol. 51  |   no. 9  |   communication s  of  t he acm     85
+
+1_CACM_V51.9.indb   85
+
+8/14/08   1:39:34 PM
+
+research highlights 
+
+ 
+
+at the same time to update the parent directory modify time, 
+which will manifest as contention not just for the dentry 
+->d_lock but for the parent directory’s p->d_lock, and 
+p->d_count, as well as the dcache->lock). While an OS 
+provides  programmers  with  the  abstraction  of  a  single  se-
+quential operation involving a single thread of control, all of 
+these threads coexist in the kernel. Even when the OS man-
+ages access to different files for different programs, resources 
+can be used concurrently as a result, and the OS must syn-
+chronize its own accesses to ensure the integrity of the data 
+structures involved.
+
+To  maintain  good  performance  in  the  presence  of  such 
+sharing patterns, many OSes have required great program-
+mer effort to make synchronization fine-grained—i.e., locks 
+only protect the minimum possible data. However, synchro-
+nization makes OS programming and maintenance difficult. 
+In one comprehensive study of Linux bugs, 346 of 1025 bugs 
+(34%)  involved  synchronization,  and  another  study7  found 
+four  confirmed  and  eight  unconfirmed  deadlock  bugs  in 
+the  Linux  2.5  kernel.  The  complexity  of  synchronization  is 
+evident in the Linux source file mm/filemap. c that has a 
+50  line  comment  on  the  top  of  the  file  describing  the  lock 
+ordering used in the file. The comment describes locks used 
+at a calling depth of four from functions in the file. Locking 
+is not composable; a component must know about the locks 
+taken by another component in order to avoid deadlock.
+
+TM  can  help  reduce  the  complexity  of  synchronization 
+in  contexts  like  the  dparent_notify  function.  Because 
+multiple  locks  are  involved,  the  OS  must  follow  a  locking 
+ordering  discipline  to  avoid  deadlock,  which  would  be  un-
+necessary  with  TM.  The  fine-grain  locking  illustrated  by 
+dparent_notify’s release of the dentry->d_lock and 
+subsequent  acquisition  of  the  p->d_lock  and  dcache 
+_lock  could  be  elided  with  transactions.  If  the  function 
+is  called  with  different  parent  directories,  the  lock-based 
+code still forces some serialization because of the dcache 
+->lock. However, transactions can allow concurrent execu-
+tions  of  critical  sections  when  they  do  not  contend  for  the 
+
+same data. TM is more modular than locks and can provide 
+greater  concurrency  with  simpler/coarser  locks;  operating 
+systems can benefit.
+
+3.2. converting linux to txlinux-ss
+Figure 1 also illustrates the most common paradigm for in-
+troducing transactions into a lock-based program: mapping 
+lock acquires and releases to transaction begin and end, re-
+spectively. This was the first approach taken to using trans-
+actions in Linux, called TxLinux-SS. Linux features over 2000 
+static instances of spinlocks, and most of of the transactions 
+in  TxLinux-SS  result  from  converted  spinlocks.  TxLinux-SS 
+also converts reader/writer spinlock variants and se-qlocks 
+to transactions. Based on profiling data collected from the 
+Syncchar tool,18 the locks used in nine subsystems were con-
+verted to use transactions. TxLinux-SS took six developers a 
+year to create, and ultimately converted approximately 30% 
+of the dynamic locking calls in Linux (in our benchmarks) to 
+use transactions.
+
+The TxLinux-SS conversion of the kernel exposes several 
+serious  challenges  that  prevent  rote  conversion  of  a  lock-
+based  operating  system  like  Linux  to  use  transactions,  in-
+cluding idiosyncratic use of lock functions, control flow that 
+is difficult to follow because of heavy use of function point-
+ers, and most importantly, I/O. In order to ensure isolation, 
+HTM systems must be able to roll back the effects of a trans-
+action that has lost a conflict. However, HTM can only roll 
+back processor state and the contents of physical memory. 
+The effects of device I/O, on the other hand, cannot be rolled 
+back, and executing I/O operations as part of a transaction 
+can  break  the  atomicity  and  isolation  that  transactional 
+systems  are  designed  to  guarantee.  This  is  known  as  the 
+“output commit problem.”6 A computer system cannot un-
+launch missiles.
+
+If  the  dentry_iput  function  in  Figure  1,  performs 
+I/O,  the  TxLinux-SS  transactionalization  of  the  kernel  will 
+not  function  correctly  if  the  transaction  aborts.  TM  alone 
+is  insufficient  to  meet  all  the  synchronization  needs  of  an 
+
+figure 1: three adapted versions of the linux file system dparent_notify () function, which handles update of a parent directory when a 
+file is accessed, updated, or deleted. the leftmost version uses locks, the middle version uses bare transactions and corresponds to the code 
+in txlinux-ss, and the rightmost version uses cxspinlocks, corresponding to txlixux-cX. note that the dentry_iput function can do i/o.
+
+void 
+dnotify_parent(dentry_t *dentry, 
+                  ulong evt) { 
+ spin_lock(&dentry->d_lock); 
+ dentry_t * p = dentry->d_parent; 
+ dget(p); 
+ spin_unlock(&dentry->d_lock); 
+ inode_dir_notify(p->d_inode,evt); 
+ spin_lock(&dcache_lock); 
+ if(!(––p->d_count))  { 
+    spin_lock(&p->d_lock); 
+    dentry_iput(p); 
+    d_free(p); 
+    spin_unlock(&p->d_lock); 
+ } 
+ spin_unlock(&dcache_lock); 
+} 
+
+void 
+dnotify_parent(dentry_t *dentry, 
+                  ulong evt) { 
+ xbegin; 
+ dentry_t *p = dentry->d_parent; 
+ dget(p); 
+ inode_dir_notify(p->d_inode,evt); 
+ if(!(--p->d_count)) { 
+    dentry_iput(p); 
+    d_free(p); 
+ } 
+ xend; 
+} 
+ 
+ 
+ 
+ 
+
+void
+dnotify_parent(dentry_t *dentry,
+                  ulong evt) {
+ cx_optimistic(&dentry->d_lock);
+ dentry_t * p = dentry->d_parent;
+ dget(p);
+ cx_end(&dentry->d_lock);
+ inode_dir_notify(p->d_inode,evt);
+ cx_optimistic(&dcache_lock);
+ if(!(--p->d_count)){
+    cx_optimistic(&p->d_lock);
+    dentry_iput(p);
+    d_free(p);
+    cx_end(&p->d_lock);
+ }
+ cx_end(&dcache_lock );
+}
+
+86    c omm unications of the acm   |   september 2008  |   vol. 51  |   no. 9
+
+1_CACM_V51.9.indb   86
+
+8/14/08   1:39:34 PM
+
+operating  system.  Critical  sections  protected  by  locks  will 
+not restart and so may freely perform I/O. There will always 
+be a need for some locking synchronization in an operating 
+system, but operating systems should be able to take advan-
+tage  of  TM  wherever  possible.  Given  that  transactions  and 
+locks  will  have  to  coexist  in  any  realistic  implementation, 
+cooperation between locks and transactions is essential.
+
+4. cooPeRation BetWeen locKs anD 
+ tRansactions
+In order to allow both transactions and conventional locks 
+in the operating system, we propose a synchronization API 
+that  affords  their  seamless  integration,  called  cooperative 
+transactional  spinlocks,  or  cxspinlocks.  Cxspinlocks  allow 
+different  executions  of  a  single  critical  section  to  be  syn-
+chronized  with  either  locks  or  transactions.  This  freedom 
+enables  the  concurrency  of  transactions  when  possible 
+and  enforces  the  safety  of  locks  when  necessary.  Locking 
+may be used for I/O, for protection of data structures read 
+by  hardware  (e.g.,  the  page  table),  or  for  high-contention 
+access  paths  to  particular  data  structures  (where  the  per-
+formance  of  transactions  might  suffer  from  excessive  re-
+starts). The cxspinlock API also provides a simple upgrade 
+path to let the kernel use transactions in place of existing 
+synchronization.
+
+Cxspinlocks are necessary for the kernel only; they allow 
+the  user  programming  model  to  remain  simple.  Users  do 
+not  need  them  because  they  cannot  directly  access  I/O  de-
+vices (in Linux and most operating systems, users perform 
+I/O by calling the OS). Blocking direct user access to devices 
+is a common OS design decision that allows the OS to safely 
+multiplex devices among noncooperative user programs. So-
+phisticated user programs that want transactions and locks 
+to coexist can use cxspinlocks, but it is not required.
+
+Using conventional Linux spinlocks within transactions 
+is  possible  and  will  maintain  mutual  exclusion.  However, 
+conventional spinlocks reduce the concurrency of transac-
+tions  and  lacks  fairness.  Conventional  spinlocks  prevent 
+multiple  transactional  threads  from  executing  a  critical 
+ region concurrently. All transactional threads in a critical re-
+gion must read the spinlock memory location to obtain the 
+lock and must write it to obtain the lock and release it. This 
+write sharing among transactional threads will prevent con-
+current execution, even if concurrent execution of the “real 
+work” in the critical section is safe. Moreover, conventional 
+spinlocks do not help with the I/O problem. A transactional 
+thread that acquires a spinlock can restart, therefore it can-
+not perform I/O.
+
+The  progress  of  transactional  threads  can  be  unfairly 
+throttled  by  non-transactional  threads  using  spinlocks.  In 
+MetaTM  conflicts  between  transactional  and  non-transac-
+tional  threads  (asymmetric  conflicts)  are  always  resolved 
+in  favor  of  the  non-transactional  thread.  To  provide  isola-
+tion, HTM systems guarantee either that non-transactional 
+threads  always  win  asymmetric  conflicts  (like  MetaTM),  or 
+transactional threads always win asymmetric conflicts (like 
+Log-TM14).  With  either  convention,  traditional  spinlocks 
+will cause unfairness between transactional and non-trans-
+actional threads.
+
+4.1. cooperative transactional spinlocks
+Cxspinlocks  allow  a  single  critical  region  to  be  safely  pro-
+tected by either a lock or a transaction. A non-transactional 
+thread  can  perform  I/O  inside  a  protected  critical  section 
+without concern for undoing operations on a restart. Many 
+transactional threads can simultaneously enter critical sec-
+tions  protecting  the  same  shared  data,  improving  perfor-
+mance.  Simple  return  codes  in  MetaTM  allow  the  choice 
+between  locks  and  transactions  to  be  made  dynamically, 
+simplifying  programmer  reasoning.  Cxspinlocks  ensure 
+a  set  of  behaviors  that  allow  both  transactional  and  non-
+ transactional code to correctly use the same critical section 
+while maintaining fairness and high concurrency:
+
+•	 Multiple transactional threads may enter a single criti-
+cal  section  without  conflicting  on  the  lock  variable. 
+A  non-transactional  thread  will  exclude  both  transac-
+tional and other non-transactional threads from enter-
+ing the critical section.
+
+•	 Transactional  threads  poll  the  cxspinlock  using  the 
+xtest  instruction,  which  allows  a  thread  to  check  the 
+value of a lock variable without entering the lock vari-
+able into the transaction’s read-set, enabling the trans-
+action  to  avoid  restarting  when  the  lock  is  released 
+(another thread writes the lock variable). This is espe-
+cially important for acquiring nested cxspinlocks where 
+the thread will have done transactional work before the 
+attempted acquire.
+
+•	 Non-transactional threads acquire the cxspinlock using 
+an  instruction  (xcas)  that  is  arbitrated  by  the  transac-
+tional  contention  manager.  This  enables  fairness 
+between  locks  and  transactions  because  the  conten-
+tion  manager  can  implement  many  kinds  of  policies 
+favoring 
+threads,  non-transactional 
+threads, readers, writers, etc.
+
+transactional 
+
+Figure  2  shows  the  API  and  implementation.  Cxspinlocks 
+are  acquired  using  two  functions:  cx_exclusive  and 
+cx_optimistic. Both functions take a lock address as an 
+argument.
+
+cx_optimistic is a drop-in replacement for spinlocks 
+and is safe for almost all locking done in the Linux kernel 
+(the  exceptions  are  a  few  low-level  page  table  locks  and 
+locks whose ownership is passed between threads, such as 
+that protecting the run queue). cx_optimistic optimis-
+tically  attempts  to  protect  a  critical  section  using  transac-
+tions.  If  a  code  path  within  the  critical  section  protected 
+by  cx_optimistic  requires  mutual  exclusion,  then  the 
+transaction  restarts  and  acquires  the  lock  exclusively.  The 
+code in Figure 1, which can fail due to I/O with bare transac-
+tions, functions with cxspinlocks, taking advantage of opti-
+mism with transactions when the dentry_iput function 
+does  no  I/O,  and  retrying  with  with  exclusive  access  when 
+it does.
+
+Control  paths  that  will  always  require  mutual  exclusion 
+(e.g.,  those  that  always  perform  I/O)  can  be  optimized  with 
+cx_exclusive. Other paths that access the same data struc-
+ture  may  execute  transactionally  using  cx_optimistic. 
+ Allowing different critical regions to synchronize with a mix of 
+
+se pt ember 2008  |   vol. 51  |   no. 9  |   communication s  of  t he acm     87
+
+1_CACM_V51.9.indb   87
+
+8/14/08   1:39:34 PM
+
+research highlights 
+
+figure 2: the cxspinlock aPi and implementation. the cx_optimistic aPi attempts to execute a critical section by starting a transaction, 
+and using xtest to spin until the lock is free. if the critical section attempts i/o, the hardware will retry the transaction, returning the NEED_
+EXCL flag from the xbegin instruction. this will result in a call to the cx_exclusive aPi, which waits until the lock is free, and acquires the 
+lock using the xcas instruction to atomically compare and swap the lock variable, and which invokes the contention manager to arbitrate any 
+conflicts on the lock. the cx_end aPi exits a critical section, either by ending the current transaction, or releasing the lock.
+
+cx_optimistic 
+Use transactions, restart on I/O attempt 
+
+cx_exclusive 
+Acquire a lock, with contention manager 
+
+cx_end
+Release a critical section
+
+ 
+
+void cx_optimistic(lock) { 
+ status = xbegin; 
+ if(status==NEED_EXCL) { 
+  xend ; 
+  if(gettxid) 
+     xrestart(NEED_EXCL); 
+  else 
+     cx_exclusive(lock); 
+  return; } 
+ while(!xtest(lock,1)); 
+} 
+
+void cx_exclusive(lock) { 
+ while(1) { 
+  while(*lock != 1); 
+  if(xcas(lock, 1, 0)) 
+     break; 
+ } 
+} 
+ 
+ 
+ 
+ 
+
+void cx_end(lock) {
+ if(xgettxid)
+  xend;
+ else
+  *lock = 1;
+}
+
+cx_optimistic and cx_exclusive assures the maximum 
+concurrency while maintaining safety.
+
+4.2. converting linux to txlixux-cX
+While  the  TxLinux-SS  conversion  of  the  kernel  replaces 
+spinlocks  in  selected  subsystems  with  bare  transactions, 
+TxLixux-CX replaces all spinlocks with cxspinlocks. The API 
+addresses the limitations of transactions in an OS context, 
+which not only made it possible to convert more locks, but 
+made it possible to do it much more quickly: in contrast to 
+the  six  developer  years  required  to  create  TxLinux-SS,  Tx-
+Lixux-CX required a single developer-month.
+
+5. htm aWaRe scheDulinG
+This section describes how MetaTM allows the OS to com-
+municate its scheduling priorities to the hardware conflict 
+manger, so the TM hardware does not subvert OS schedul-
+ing priorities or policy.
+
+5.1. Priority and policy inversion
+Locks can invert OS scheduling priority, resulting in a high-
+er-priority thread waiting for a lower-priority thread. Some 
+OSes, like Solaris, have mechanisms to deal with priority in-
+version such as priority inheritance, where a waiting thread 
+temporarily  donates  its  priority  to  the  thread  holding  the 
+lock.  Recent  versions  of  RT  (Real-Time)  Linux  implement 
+priority  inheritance  as  well.  Priority  inheritance  is  compli-
+cated, and while the technique can shorten the length of pri-
+ority inversion, it cannot eliminate it. In addition, it requires 
+conversion of busy-waiting primitives such as spinlocks into 
+blocking primitives such as mutexes. Conversion to mutex-
+es provides an upper bound on latency in the face of priority 
+inversion, but it slows down response time overall and does 
+not eliminate the problem.
+
+Simple hardware contention management policies for TM 
+can invert the OS scheduling priority. HTM researchers have 
+focused on simple hardware contention management that is 
+guaranteed free from deadlock and livelock, e.g., timestamp, 
+where  the  oldest  transaction  wins.20  The  timestamp  policy 
+
+88    c omm unications of the acm   |   september 2008  |   vol.  51  |   n o. 9
+
+does  not  deadlock  or  livelock  because  timestamps  are  not 
+refreshed  during  transactional  restarts—a  transaction  will 
+eventually  become  the  oldest  in  the  system,  and  it  will  suc-
+ceed. But if a process with higher OS scheduler priority can 
+start  a  transaction  after  a  process  with  lower  priority  starts 
+one and those transactions conflict, the timestamp policy will 
+allow the lower priority process to continue if a violation oc-
+curs, and the higher priority process will be forced to restart.
+
+Locks  and  transactions  can  invert  not  only  scheduling 
+priority, but scheduling policy as well. OSes that support soft 
+real-time  processes,  like  Linux,  allow  real-time  threads  to 
+synchronize with non-real-time threads. Such synchroniza-
+tion can cause policy inversion where a real-time thread waits 
+for a non-real-time thread. Policy inversion is more serious 
+than priority inversion. Real-time processes are not just reg-
+ular processes with higher priority, the OS scheduler treats 
+them differently (e.g., if a real-time process exists, it will al-
+ways  be  scheduled  before  a  non-real-time  process).  Just  as 
+with priority inversion, many contention management poli-
+cies  bring  the  policy  inversion  of  locks  into  the  domain  of 
+transactions. A contention manager that respects OS sched-
+uling policy can largely eliminate policy inversion.
+
+The  contention  manager  of  an  HTM  system  can  nearly 
+eradicate policy and priority inversion. The contention man-
+ager  is  invoked  when  the  write-set  of  one  transaction  has 
+a  non-empty  intersection  with  the  union  of  the  read-  and 
+write-set of another transaction. If the contention manager 
+resolves  this  conflict  in  favor  of  the  thread  with  higher  OS 
+scheduling  priority,  then  transactions  will  not  experience 
+priority inversion.
+
+5.2. contention management using os priority
+To  eliminate  priority  and  policy  inversion,  MetaTM-
+provides  an  interface  for  the  OS  to  communicate  schedul-
+ing priority and policy to the hardware contention manager 
+(a mechanism suggested by other researchers14,22). MetaTM 
+ implements  a  novel  contention  management  policy  called 
+os_prio.  The  os_prio  policy  is  a  hybrid  of  contention  man-
+agement policies. The first prefers the transaction with the 
+
+1_CACM_V51.9.indb   88
+
+8/14/08   1:39:34 PM
+
+greatest scheduling value to the OS. Given the small number 
+of scheduling priority values, ties in conflict priority will not 
+be rare, so os_prio next employs timestamp. This hybrid con-
+tention management policy induces a total order on trans-
+actions and is therefore livelock-free.
+
+A single register in the MetaTM architecture allows the OS 
+to communicate its scheduling priorities to the contention 
+manager.  TxLinux  encodes  a  process’  dynamic  scheduling 
+priority and scheduling policy into a single integer called the 
+conflict priority, which it writes to a privileged status register 
+during  the  process  of  scheduling  the  process.  The  register 
+can only be written by the OS so the user code cannot change 
+the value. The value of the register does not change during 
+a scheduling quantum. For instance, the scheduling policy 
+might  be  encoded  in  the  upper  bits  of  the  conflict  priority 
+and the scheduling priority in the lower bits. An 8-bit value is 
+sufficient to record the policies and priority values of Linux 
+processes. Upon detecting a conflict, the os_prio contention 
+manager favors the transaction whose conflict priority value 
+is the largest.
+
+The os_prio policy is free from deadlock and livelock be-
+cause  the  conflict  priority  is  computed  before  the  xbegin 
+instruction is executed, and the OS never changes the con-
+flict priority during the lifetime of the transaction (some de-
+signs allow transactions to continue for multiple scheduling 
+quanta). When priorities are equal, os_prio defaults to Size-
+Matters,  which  defaults  to  timestamp  when  read–write  set 
+sizes  are  equal.  Hence,  the  tuple  (conflict priority, size, age) 
+induces a total order, making the os_prio policy free of dead-
+lock and livelock.
+
+6. eValuation
+Linux and TxLinux versions 2.6.16.1 run on the Simics ma-
+chine simulator version 3.0.27. In the following experiments, 
+Simics models an x86 SMP machine with 16 and 32 proces-
+sors and an IPC of one instruction per cycle. The memory hi-
+erarchy uses per-processor split instruction and data caches 
+(16 KB  with  4-way  associativity,  64-byte  cache  lines,  1-cycle 
+cache  hit  and  16-cycle  miss  penalties).  The  level  one  data 
+cache has extra tag bits to manage transactional data. There 
+is a unified second level cache that is 4 MB, 8-way associative, 
+with 64-byte cache lines, and a 200 cycle miss penalty to main 
+memory. Coherence is maintained with a transactional MESI 
+snooping protocol, and main memory is a single shared 1 GB. 
+The  disk  device  models  PCI  bandwidth  limitations,  DMA 
+data transfer, and has a fixed 5.5 ms access latency. All bench-
+marks are scripted, requiring no user interaction.
+
+6.1. Workloads
+We evaluated TxLinux-SS and TxLixux-CX on a number of ap-
+plication benchmarks. Where P denotes the number of pro-
+cessors, these are:
+
+•	 pmake  (make  -j  P  to  compile  part  of  libFLAC  source 
+
+•	 MAB  (modififed  andrew  benchmark,  P  instances,  no 
+
+•	 configure  (configure  script  for  a  subset  of  TeTeX,  P 
+
+tree)
+
+compile phase)
+
+instances)
+
+•	 find  (Search  78MB  directory  (29  dirs,  968  files),  P 
+
+•	 bonnie++ (models filesystem activity of a web cache, P 
+
+instances)
+
+instances)
+
+•	 dpunish (a filesystem stress test, with operations split 
+
+across P processes)
+
+It is important to note that none of these benchmarks uses 
+transactions  directly;  the  benchmarks  exercise  the  kernel, 
+which in turn, uses transactions for synchronization.
+
+6.2. Performance
+Figure 3 shows the synchronization performance for Linux, 
+Tx-Linux-SS  (using  bare  transactions)  and  TxLixux-CX  (us-
+ing cxspin-locks) for 16 CPUs, broken down into time spent 
+spinning  on  locks  and  time  spent  aborting  and  retrying 
+transactions.  Linux  spends  between  1%  and  6%  of  kernel 
+time synchronizing, while TxLinux spends between 1% and 
+12% of kernel time synchronizing. However, on average, Tx-
+Linux  reduces  synchronization  time  by  34%  and  40%  with 
+transactions  and  cxspinlocks,  respectively.  While  HTM 
+generally  reduces  synchronization  overhead,  it  more  than 
+double the time lost for bonnie++. This loss is due to trans-
+actions that restart, back-off, but continue to fail. Since bon-
+nie++ does substantial creation and deletion of small files 
+in a single directory, the resulting contention in file system 
+code  paths  results  in  pathological  restart  behavior  in  the 
+file system code that handles updates  to  directories. High 
+contention on kernel data structures causes a situation in 
+which repeated back-off and restart effectively starves a few 
+transactions. Using back-off before restart as a technique to 
+handle such high contention may be insufficient for com-
+plex  systems:  the  transaction  system  may  need  to  queue 
+transactions that consistently do not complete.
+
+Averaged over all benchmarks, TxLinux-SS shows a 2% slow-
+down over Linux for 16 CPUs and a 2% speedup for 32 CPUs. 
+The slowdown in the 16 CPU case results from the pathologi-
+cal  restart  situation  in  the  bonnie++  benchmark,  discussed 
+above; the pathology is not present in the 32 CPU case with 
+
+figure 3: synchronization performance for 16 cPus, txlinux-ss, and 
+txlinux-cX.
+
+aborts
+
+spins
+
+g
+n
+i
+z
+i
+n
+o
+r
+h
+c
+n
+y
+s
+ 
+t
+n
+e
+p
+s
+e
+m
+
+ 
+
+i
+t
+ 
+l
+e
+n
+r
+e
+K
+ 
+f
+o
+ 
+t
+n
+e
+c
+r
+e
+P
+
+14
+
+12
+
+10
+
+8
+
+6
+
+4
+
+2
+
+0
+
+x
+u
+n
+L
+
+i
+
+x
+u
+n
+L
+
+i
+
+s
+x
+-
+x
+u
+n
+L
+x
+T
+
+i
+
+x
+c
+-
+x
+u
+n
+L
+x
+T
+
+i
+
+x
+u
+n
+L
+
+i
+
+s
+x
+-
+x
+u
+n
+L
+x
+T
+
+i
+
+x
+c
+-
+x
+u
+n
+L
+x
+T
+
+i
+
+s
+x
+-
+x
+u
+n
+L
+x
+T
+
+i
+
+x
+c
+-
+x
+u
+n
+L
+x
+T
+
+i
+
+x
+u
+n
+L
+
+i
+
+s
+x
+-
+x
+u
+n
+L
+x
+T
+
+i
+
+x
+c
+-
+x
+u
+n
+L
+x
+T
+
+i
+
+x
+u
+n
+L
+
+i
+
+x
+u
+n
+L
+
+i
+
+s
+x
+-
+x
+u
+n
+L
+x
+T
+
+i
+
+x
+c
+-
+x
+u
+n
+L
+x
+T
+
+i
+
+s
+x
+-
+x
+u
+n
+L
+x
+T
+
+i
+
+x
+c
+-
+x
+u
+n
+L
+x
+T
+
+i
+
+pmake
+
+bonnie++
+
+mab
+
+find
+
+config
+
+dpunish
+
+se pt ember 2008  |   vol.  51  |   n o. 9  |   communications  o f  the  acm     89
+
+1_CACM_V51.9.indb   89
+
+8/14/08   1:39:34 PM
+
+research highlights 
+
+bare  transactions,  and  without  bonnie++,  TxLinux-SS  shows 
+the same speedup for 16 CPUs as 32 CPUs. TxLixux-CX sees 
+2.5% and 1% speedups over Linux for 16 and 32 CPUs. These 
+performance deltas are negligible and do not demonstrate a 
+conclusive performance increase. However, the argument for 
+HTM in an operating system is about reducing programming 
+complexity. These  results show that HTM can enhance pro-
+grammability without a negative impact on performance.
+
+6.3. Priority inversion performance
+Figure  4  shows  how  frequently  transactional  priority  inver-
+sion occurs in TxLinux. In this case, priority inversion means 
+that the default SizeMatters contention management policy21 
+favors the process with the lower OS scheduling priority when 
+deciding  the  winning  transaction  in  a  conflict.  Results  for 
+timestamp-based contention management are similar. Most 
+benchmarks  show  that  a  significant  percentage  of  transac-
+tional  conflicts  result  in  a  priority  inversion,  with  the  aver-
+age 9.5% across all kernel and CPU configurations we tested, 
+with as has 25% for find. Priority inversion tends to decrease 
+with larger numbers of processors, but the trend is not strict. 
+The  pmake  and  bonnie++  benchmarks  show  an  increase 
+with  higher  processor  count.  The  number  and  distribution 
+of transactional conflicts is chaotic, so changing the number 
+of processors can change the conflict behavior. The os_prio 
+contention management policy eliminates priority inversion 
+entirely in our benchmarks, at a performance cost under 1%. 
+By  contrast,  techniques  for  ameliorating  priority  inversion 
+with locks such as priority inheritance only provide an upper 
+bound  on  priority  inversion,  and  require  taking  the  perfor-
+mance hit of turning polling locks into blocking locks.
+
+The frequency with which naïve contention management 
+violates OS scheduling priority argues strongly for a mecha-
+nism that lets the OS participate in contention management, 
+e.g., by communicating hints to the hardware.
+
+7. RelateD WoRK
+Due  to  limited  space,  we  refer  the  interested  reader  to  the 
+complete discussions,21,23 and survey the related literature in 
+
+figure 4: Percentage of transaction restarts decided in favor of a 
+transaction started by the processor with lower process priority, 
+resulting in “transactional” priority inversion. Results shown are for 
+all benchmarks, for 16 and 32 processors, txlinux-ss.
+
+Transactional priority inversion
+
+30
+
+25
+
+20
+
+15
+
+10
+
+5
+
+0
+
+p m ake
+
+bonnie+ +
+
+m ab
+
+find
+
+dpunish
+
+config
+
+16 cpus
+32 cpus
+
+90    c om munic ations of the  acm   |   september 2008  |   vol. 51  |   n o. 9
+
+ 
+
+brief. Larus and Rajwar provide a thorough reference on TM 
+research through the end of 2006.12
+
+HTM. Herlihy and Moss10 gave one of the earliest designs 
+for  HTM;  many  proposals  since  have  focused  on  architec-
+tural  mechanisms  to  support  HTM,5,8,13,14,25  and  language-
+level  support  for  HTM.  Some  proposals  for  TM  virtualiza-
+tion  (when  transactions  overflow  hardware  resources) 
+involve the OS,2,5 but no proposals to date have allowed the 
+OS  itself  to  use  transactions  for  synchronization.  This  pa-
+per, however, examines the systems issues that arise when 
+using HTM in an OS and OS support for HTM. Rajwar and 
+Goodman explored speculative19 and transactional20 execu-
+tion of critical sections. These mechanisms for falling back 
+on locking when isolation is violated are similar to (but less 
+general  than)  the  cxspinlock  technique  of  executing  in  a 
+transactional context and reverting to locking when I/O is 
+detected.
+
+I/O in transactions. Proposals for  I/O  in  transactions fall 
+into three basic camps: give transactions an isolation escape 
+hatch,15–17 delay the I/O until the transaction commits,8,9 and 
+guarantee that the thread performing I/O will commit.2,8 All 
+of these strategies have serious drawbacks.11. Escape hatch-
+es  introduce  complexity  and  correctness  conditions  that 
+restrict  the  programming  model  and  are  easy  to  violate  in 
+common programming idioms. Delaying I/O is not possible 
+when the code performing the I/O depends on its result, e.g., 
+a device register read might return a status word that the OS 
+must  interpret  in  order  to  finish  the  transaction.  Finally, 
+guaranteeing  that  a  transaction  will  commit  severely  lim-
+its scheduler flexibility, and can, for long-running or highly 
+contended transactions, result in serial bottlenecks or dead-
+lock. Non-transactional threads on other processors which 
+conflict the guaranteed thread will be forced to stall until the 
+guaranteed thread commits its work. This will likely lead to 
+lost timer interrupts and deadlock in the kernel.
+
+Scheduling.  Operating  systems  such  as  Microsoft  Win-
+dows, Linux, and Solaris implement sophisticated, priority-
+based, pre-emptive schedulers that provide different classes 
+of priorities and a variety of scheduling techniques for each 
+class.  The  Linux  RT  patch  supports  priority  inheritance  to 
+help  mitigate  the  effects  of  priority  inversion:  while  our 
+work  also  addresses priority  inversion,  the Linux RT patch 
+implementation converts spinlocks to mutexes. While these 
+mechanisms  guarantee  an  upper  bound  on  priority  inver-
+sion, the os_prio policy allows the contention manager to ef-
+fectively  eliminate  priority  inversion  without  requiring  the 
+primitive to block or involve the scheduler.
+
+8. conclusion
+This  paper  is  the  first  description  of  an  operating  system 
+that  uses  HTM  as  a  synchronization  primitive,  and  pres-
+ents innovative techniques for HTM-aware scheduling and 
+cooperation between locks and transactions. TxLinux dem-
+onstrates  that  HTM  provides  comparable  performance  to 
+locks,  and  can  simplify  code  while  coexisting  with  other 
+synchronization primitives in a modern OS. The cxspinlock 
+primitive enables a solution to the long-standing problem of 
+I/O in transactions, and the API eases conversion from lock-
+ing primitives to transactions significantly. Introduction of 
+
+1_CACM_V51.9.indb   90
+
+8/14/08   1:39:35 PM
+
+transactions as a synchronization primitive in the OS reduc-
+es time wasted synchronizing on average, but can cause pa-
+thologies that do not occur with traditional locks under very 
+high contention or when critical sections are large enough 
+to  incur  the  overhead  of  HTM  virtualization.  HTM  aware 
+scheduling  eliminates  priority  inversion  for  all  the  work-
+loads we investigate. 
+
+References
+
+  1.  Adl-Tabatabai, A.-R., Lewis, B. T., 
+Menon, V., Murphy, B. R., Saha, B., 
+and Shpeisman, T. Compiler and 
+runtime support for efficient software 
+transactional memory. In PLDI,  
+June 2006.
+
+  2.  Blundell, C., Devietti, J., Lewis,  
+
+E. C., and Martin, M. M. K. Making 
+the fast case common and the 
+uncommon case simple in unbounded 
+transactional memory. In ISCA, 2007.
+
+  3.  Carlstrom, B., McDonald, A., Chafi, H.,  
+Chung, J., Cao Minh, C., Kozyrakis, C.,  
+and Olukotun, K. The Atomos 
+transactional programming language. 
+In PLDI, June 2006.
+
+  4.  Chou, A., Yang, J., Chelf, B., Hallem, S., 
+
+and Engler, D. An emprical study of 
+operating systems errors. In SOSP, 2001.
+
+  5.  Chuang, W., Narayanasamy, S.,  
+
+Venkatesh, G., Sampson, J., 
+Biesbrouck, M. V., Pokam, G., Calder, B., 
+and Colavin, O. Unbounded page-
+based transactional memory.  
+In ASPLOS-XII, 2006.
+
+  6.  Elnozahy, E., Johnson, D., and Wang, Y. 
+
+A survey of rollback-recovery protocols 
+in message-passing systems, 1996.
+
+  7.  Engler, D. and Ashcraft, K. Racer-X: 
+
+Effective, static detection of race 
+conditions and deadlocks. In SOSP, 2003.
+
+  8.  Hammond, L., Wong, V., Chen, M.,  
+
+Carlstrom, B. D., Davis, J. D., 
+Hertzberg, B., Prabhu, M. K., Wijaya, H., 
+Kozyrakis, C., and Olukotun, K., 
+Transactional memory coherence and 
+consistency. In ISCA, June 2004.
+
+  9.  Harris, T. Exceptions and side-effects 
+
+in atomic blocks. Sci. Comput. 
+Program., 58(3):325–343, 2005.
+
+ 10.  Herlihy, M. and Moss, J. E. Transactional 
+
+memory: Architectural support for 
+lock-free data structures. In ISCA, 
+May 1993.
+
+ 11.  Hofmann, O. S., Porter, D. E., 
+
+Rossbach, C. J., Ramadan, H. E., and 
+Witchel, E. Solving difficult HTM 
+problems without difficult hardware. 
+In ACM TrANSACT Workshop, 2007.
+
+ 12.  Larus, J. R. and Rajwar, R. 
+
+Transactional Memory. Morgan & 
+Claypool, 2006.
+
+ 13.  McDonald, A., Chung, J., Carlstrom, B.,  
+
+Minh, C. C., Chafi, H., Kozyrakis, C.,  
+and Olukotun, K. Architectural 
+semantics for practical transactional 
+memory. In ISCA, June 2006.
+
+ 14.  Moore, K. E., Bobba, J., Moravan, M. J., 
+
+Hill, M. D., and Wood, D. A. Logtm: 
+Log-based transactional memory. In 
+HPCA, 2006.
+
+ 15.  Moravan, M. J., Bobba, J., Moore, K. E., 
+Yen, L., Hill, M. D., Liblit, B., Swift, M. M., 
+and Wood, D. A. Supporting nested 
+transactional memory in logtm. In 
+ASPLOS-XII. 2006.
+
+ 16.  Moss, E. and Hosking, T. Nested 
+
+transactional memory: Model and 
+preliminary architecture sketches. 
+In SCOOL, 2005.
+
+ 17.  Moss, J. E. B., Griffeth, N. D., and  
+
+Graham, M. H. Abstraction in recovery 
+management. SIGMOD rec., 
+15(2):72–83, 1986.
+
+ 18.  Porter, D. E., Hofmann, O. S., and  
+
+Witchel, E. Is the optimism in 
+optimistic concurrency warranted?  
+In HotOS, 2007.
+
+ 19.  Rajwar, R. and Goodman, J. 
+
+Speculative lock elision: Enabling 
+highly concurrent multithreaded 
+execution. In MICrO, 2001.
+ 20.  Rajwar, R. and Goodman, J. 
+
+Transactional lock-free execution of 
+lock-based programs. In ASPLOS, 2002.
+ 21.  Ramadan, H., Rossbach, C., Porter, D., 
+
+Hofmann, O., Bhandari, A., and 
+Witchel, E. MetaTM/TxLinux: 
+Transactional Memory for an 
+Operating System. Evaluating 
+transactional memory tradeoffs with 
+TxLinux. In ISCA, 2007.
+
+ 22.  Ramadan, H., Rossbach, C., and 
+
+Witchel, E. The Linux kernel: 
+A challenging workload for 
+transactional memory. In Workshop 
+on Transactional Memory Workloads, 
+June 2006.
+
+ 23.  Rossbach, C. J., Hofmann, O. S., 
+
+Porter, D. E., Ramadan, H. E., Aditya, 
+B., and Witchel, E. Txlinux: using and 
+managing hardware transactional 
+memory in an operating system. In 
+SOSP, 2007.
+
+ 24.  Scherer III, W. N. and Scott, M. L. 
+Advanced contention management 
+for dynamic software transactional 
+memory. In PODC, 2005.
+
+ 25.  Yen, L., Bobba, J., Marty, M., Moore, 
+
+K. E., Volos, H., Hill, M. D., Swift, 
+M. M., and Wood, D. A. Logtm-SE: 
+Decoupling hardware transactional 
+memory from caches. In HPCA,  
+Feb 2007.
+
+Christopher J. Rossbach, hany E. Ramadan, Owen S. hofmann,  Donald E. Porter,  
+Aditya Bhandari, and Emmett Witchel (rossbach,ramadan,osh, porterde,bhandari,witchel) 
+@cs.utexas.edu, Department of Computer Sciences, University of Texas, Austin
+
+© 2008 ACM 0001-0782/08/0900 $5.00
+
+ACM Transactions on 
+Internet Technology
+Internet Technology
+Internet Technology
+
+(cid:85) (cid:85) (cid:85) (cid:85) (cid:85)
+
+This  quarterly  publication  encompasses  many  disciplines 
+in  computing—including  computer  software  engineering, 
+middleware, database management, security, knowledge dis-
+covery and data mining, networking and distributed systems,                   
+communications, and performance and scalability—all under     
+one roof.  TOIT brings a sharper focus on the results and roles            
+of  the  individual  disciplines  and  the  relationship  among              
+them.  Extensive  multi-disciplinary  coverage  is  placed  on  the        
+new application technologies, social issues, and public policies 
+shaping Internet development.
+
+(cid:85) (cid:85) (cid:85) (cid:85) (cid:85)
+
+http://toit.acm.org/
+
+se pt ember 2008  |   vol.  51  |   n o. 9  |   communications  of   the  acm     91
+
+1_CACM_V51.9.indb   91
+
+8/14/08   1:39:35 PM
+
+

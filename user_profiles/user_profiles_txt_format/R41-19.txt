@@ -1,0 +1,2190 @@
+IEEE/ACM TRANSACTIONS ON NETWORKING, VOL. 15, NO. 3, JUNE 2007
+
+669
+
+Enhancing Class-Based Service Architectures With
+Adaptive Rate Allocation and Dropping Mechanisms
+
+Nicolas Christin, Member, IEEE, Jörg Liebeherr, Senior Member, IEEE, and Tarek Abdelzaher, Member, IEEE
+
+Abstract—Class-based service differentiation can be realized
+without resource reservation, admission control and trafﬁc
+policing. However, the resulting service guarantees are only rel-
+ative, in the sense that guarantees given to a ﬂow class at any
+time are expressed with reference to the service given to other
+ﬂow classes. While it is, in principle, not feasible to provision for
+absolute guarantees (i.e., to assure lower bounds on service metrics
+at all times) without admission control and/or trafﬁc policing, we
+will show in this paper that such a service can be reasonably well
+emulated using adaptive rate allocation and dropping mechanisms
+at the link schedulers of routers. We name the resulting type of
+guarantees best-effort bounds. We propose mechanisms for link
+schedulers of routers that achieve these and other guarantees by
+adjusting the drop rates and the service rate allocations of trafﬁc
+classes to current load conditions. The mechanisms are rooted in
+control theory and employ adaptive feedback loops. We demon-
+strate that these mechanisms can realize many recently proposed
+approaches to class-based service differentiation. The effectiveness
+of the proposed mechanisms are evaluated in measurement exper-
+iments of a kernel-level implementation in FreeBSD PC-routers
+with multiple 100 Mbps Ethernet interfaces, complemented with
+simulations of larger scale networks.
+
+Index Terms—Best-effort bounds, buffer management, feedback
+
+control, scheduling, service differentiation.
+
+I. INTRODUCTION
+
+SERVICE architectures for packet networks can be dis-
+
+tinguished according to two criteria. The ﬁrst criterion is
+whether guarantees are expressed for individual trafﬁc ﬂows
+(per-ﬂow guarantees), or for aggregates of ﬂows with the same
+service requirements (per-class guarantees). With a per-ﬂow
+architecture, a router must inspect each incoming packet to
+determine to which ﬂow the packet belongs and match the
+packet with per-ﬂow guarantees (classiﬁcation). Generally, the
+classiﬁcation overhead increases linearly with the number of
+ﬂows present in the network. With per-class guarantees, ﬂows
+are grouped in trafﬁc classes. Each packet entering the network
+is marked with the trafﬁc class to which it belongs, and routers
+in the network classify and transmit packets according to the
+
+Manuscript received March 26, 2004; revised August 3, 2005, and January
+18, 2006; approved by IEEE/ACM TRANSACTIONS ON NETWORKING Editor N.
+Taft. This work was supported in part by the National Science Foundation under
+Grants ANI-9730103 and ANI-0085955.
+
+N. Christin is with Information Networking Institute, Carnegie Mellon
+University, Pittsburgh, PA 15213 USA, and also with Carnegie Mellon CyLab
+Japan, Kobe 650 0054, Japan (e-mail: nicolasc@andrew.cmu.edu).
+
+J. Liebeherr is with the Department of Electrical and Computer Engineering,
+University of Toronto, Toronto, ON M5S 3G4, Canada (e-mail: jorg@comm.
+utoronto.ca).
+
+T. Abdelzaher is with the Department of Computer Science, University of
+Illinois at Urbana-Champaign, Urbana, IL 61801 USA (e-mail: zaher@cs.uiuc.
+edu).
+
+Digital Object Identiﬁer 10.1109/TNET.2007.893155
+
+service guarantees offered to trafﬁc classes. Since there are
+usually only a few trafﬁc classes in the network, the overhead
+incurred with per-class guarantees is smaller than that of
+per-ﬂow guarantees. As a disadvantage, per-class service guar-
+antees do not immediately translate into per-ﬂow guarantees.
+
+The second criterion to distinguish service architectures is
+whether guarantees are expressed with reference to guarantees
+given to other ﬂows or classes (relative guarantees), or if guar-
+antees are expressed as absolute bounds (absolute guarantees).
+As an example, an absolute guarantee can be of the form “Delay
+of ﬂow never exceeds 4 ms.” Relative service guarantees are
+weaker than absolute guarantees, and can be further divided
+into qualitative guarantees and proportional guarantees. Quali-
+tative guarantees specify a service differentiation of classes, but
+without quantifying the differentiation, as in “Class-2 delay is
+less than class-1 delay.” Proportional guarantees quantify the
+differentiation between trafﬁc classes in terms of ratios of the
+service metrics, as in “Class-1 delay is half of class-2 delay,”
+but without specifying lower or upper bounds on the ratios.
+
+The main advantage of absolute guarantees is that they pro-
+vide lower bounds on the service received by a ﬂow or a class
+of trafﬁc. However, absolute guarantees impose a need to dedi-
+cate resources to trafﬁc. This involves mechanisms to control the
+amount of trafﬁc that enters the network, via admission control
+and trafﬁc policing. Resource reservation schemes have been
+proposed for ﬂow-based and class-based guarantees, where re-
+source reservations are handled by a signaling protocol [3], a
+dedicated server [4], resource provisioning [5], or manual con-
+ﬁguration [4]. Relative guarantees, on the other hand, do not re-
+quire resource reservations, and, therefore, do not need admis-
+sion control or trafﬁc policing. Relative guarantees can be pro-
+vided by appropriate scheduling and buffer management mech-
+anisms at routers.
+
+This paper is concerned with improving the capabilities
+of class-based service architectures for the Internet. The
+class-based service architecture proposed by the Internet Engi-
+neering Task Force, called differentiated services or DiffServ
+[6], consists of two services. The expedited forwarding (EF,
+[7]) service provides absolute delay guarantees to predeﬁned
+amounts of trafﬁc, and requires trafﬁc policing, admission
+control, and resource reservations. The assured forwarding (AF,
+[8]) service enforces isolation between classes, and qualitative
+loss differentiation between different drop precedence levels
+within each class. The proportional service differentiation
+architecture [9], [10] showed how to strengthen AF by adding
+proportional guarantees on delays and loss rates. Recently,
+several research efforts have explored how to further enhance
+class-based services. Speciﬁcally, attempts have been made to
+
+1063-6692/$25.00 © 2007 IEEE
+
+670
+
+IEEE/ACM TRANSACTIONS ON NETWORKING, VOL. 15, NO. 3, JUNE 2007
+
+support some level of absolute guarantees, yet without requiring
+resource reservation, admission control, or trafﬁc policing [6],
+[11]–[13]. Clearly, without asserting control over the amount of
+trafﬁc injected in the network (through admission control and
+policing) it is not feasible to guarantee absolute guarantees at
+all times. On the other hand, if one permits routers to selectively
+drop trafﬁc, one can provide absolute guarantees to the trafﬁc
+that is not dropped. The alternative best-effort (ABE, [11]) is
+an example of such a service. ABE supports differentiation
+for two trafﬁc classes, where the ﬁrst class obtains an absolute
+delay bound, and the second class is given a better loss rate
+than the ﬁrst class, but has no delay guarantees. To meet these
+guarantees, ABE is permitted to drop any amount of trafﬁc
+from the ﬁrst class.
+
+In this paper, we generalize the enhancements to class-based
+service differentiation proposed in the literature [6], [11]–[13]
+by introducing the notion of best-effort bounds. We refer to a
+service with best-effort bounds as a service that emulates ab-
+solute guarantees in a network without admission control and
+policing. The difference between absolute guarantees and best-
+effort bounds is that the former assumes a network with admis-
+sion control and policing. By limiting the number of ﬂows via
+admission control and by limiting the amount of trafﬁc per ﬂow
+via policing, such a network can deliver absolute guarantees at
+all times. In contrast, a network with best-effort bounds achieves
+absolute guarantees by dropping trafﬁc or changing its trafﬁc
+rate allocation. In situations when this is not feasible, a best-ef-
+fort bound may be violated for some time. Best-effort bounds
+can be veriﬁed by comparing them to absolute guarantees in a
+reference network with admission control and policing. If the
+reference network can support a set of absolute guarantees for a
+certain amount of trafﬁc, then the same network without admis-
+sion control should be able to satisfy the corresponding best-ef-
+fort bounds.
+
+Best-effort bounds are much weaker than the corresponding
+absolute guarantees. On the other hand, best-effort bounds en-
+hance the existing framework of feasible class-based guaran-
+tees without introducing a need for mechanisms to control the
+amount of trafﬁc entering the network. Given that a service with
+absolute guarantees at all times requires admission control and
+policing, best-effort bounds are possibly the closest approxima-
+tion of such a service in a network without these mechanisms.
+As we will show in this paper, even in times of high trafﬁc load,
+appropriate adaptive rate allocation and dropping mechanisms
+can enforce a wide range of best-effort bounds and provide pro-
+portional service differentiation at the same time, thereby gen-
+eralizing the service differentiation offered by any of the previ-
+ously proposed class-based services.
+
+The main challenge for realizing best-effort bounds is to ﬁnd
+mechanisms for routers that can meet a wide range of bounds
+for a large number of classes by selectively dropping trafﬁc and
+by adjusting the trafﬁc rate allocated to a class. The main contri-
+bution of this paper is that we propose and evaluate such mech-
+anisms which can meet a broad range of best-effort bounds as
+well as proportional guarantees on delay, loss, and throughput.
+The mechanisms employ adaptive feedback loops at link sched-
+ulers of routers, which adjust the drop rates and the service
+
+rate allocations of trafﬁc classes to current load conditions. To
+our knowledge, the feasibility of using packet-level feedback
+loops at high data rates for the purpose of service differentia-
+tion has not been demonstrated. We evaluate the effectiveness
+of our adaptive rate allocation and dropping mechanisms in a
+kernel-level software implementation in FreeBSD PC routers.
+This implementation is currently being disseminated as part of
+the ALTQ [14] and KAME [15] packages.
+
+The remainder of this paper is organized as follows. In
+Section II, we expand our discussion of the related work. In
+Section III, we present a formal description of the proposed
+service. In Sections IV and V, we discuss the mechanisms that
+enforce the desired differentiation of loss, delay and throughput
+for classes by adjusting the service rate allocation to classes and
+by selectively dropping trafﬁc. We apply linear feedback con-
+trol theory for the design of these mechanisms. In Section VI,
+we present an implementation of the mechanisms in FreeBSD
+PC-routers. We evaluate our implementation in Section VII and
+present brief conclusions in Section VIII.
+
+II. RELATED WORK
+
+Proportional service differentiation, originally proposed
+by Dovrolis et al. [16], is perhaps the best known effort to
+enhance class-based services with relative guarantees. In the
+proportional service differentiation architecture, relative dif-
+ferentiation of losses and delays experienced by trafﬁc classes,
+as in “Class-2 delay
+class-3 delay,” is guaranteed under any
+trafﬁc load. Furthermore, proportional differentiation of loss
+2,” is enforced
+and delay, as in “Class-2 loss/class-3 loss
+whenever feasible.
+
+Most mechanisms for proportional service differentiation use
+independent algorithms for delay and loss differentiation. Pro-
+portional differentiation of delays can be implemented with ap-
+propriate scheduling algorithms. Priority-based scheduling algo-
+rithms such as Waiting-Time Priority, Hybrid Proportional Delay
+[10], Local-Optimal Proportional Differentiation [17], or Mean-
+Delay Proportional [18] can enforce proportional delay differ-
+entiation by dynamically adjusting the priority of a given class
+as a function of the waiting-time experienced by packets from
+that class. Alternatively, rate-based schedulers such as the Pro-
+portional Queue Control Mechanism [19], or Backlog Propor-
+tional Rate [16] can be used to provide proportional delay differ-
+entiation, by dynamically changing the service rates allocated to
+classes. A slightly different approach pursued by the Weighted-
+Earliest-Due-Date scheduler of [20] provides proportional dif-
+ferentiation in terms of probabilities of a deadline violation.
+
+Proportional
+
+loss differentiation can be implemented by
+buffer management algorithms that choose which class to drop
+from in order to reach steady-state proportional loss differ-
+entiation [9]. Enhancements to the mechanisms discussed in
+[9] can provide proportional loss differentiation over arbitrary
+timescales [21].
+
+More recent works have attempted to expand the range of
+trafﬁc conditions under which proportional service differentia-
+tion can be enforced, by combining the scheduling and dropping
+decisions in a single algorithm [13], [22]. For instance, in [22],
+packet drops and packet transmissions are viewed as transitions
+in a state diagram, where states represent the experienced level
+
+CHRISTIN et al.: ENHANCING CLASS-BASED SERVICE ARCHITECTURES WITH ADAPTIVE RATE ALLOCATION AND DROPPING MECHANISMS
+
+671
+
+of delay and loss differentiation. Packet scheduling and drop-
+ping is performed to reach states that match the desired propor-
+tional delay and loss differentiation.
+
+The service proposed in [13] further enhances class-based
+service differentiation by providing limited support for abso-
+lute bounds on loss and delay. To that effect, the authors of [13]
+present a Joint Buffer Management and Scheduling algorithm
+(JoBS), which expresses the scheduling and dropping decisions
+as the solution to an optimization problem, whose constraints
+are deﬁned by the service guarantees, and the objective func-
+tion aims at minimizing packet losses and changes in the rate
+allocation. The drawback of JoBS is that solving a nonlinear op-
+timization problem, even if approximated by a heuristic method
+[13], can incur a signiﬁcant computational overhead when per-
+formed on a per-packet basis.
+
+There are many other service proposals (e.g., ABE) that have
+explored the design space of class-based architectures and we
+refer the reader to [1] for a more comprehensive discussion.
+For instance, the dynamic core provisioning service [12] sup-
+ports absolute delay bounds, and qualitative loss and throughput
+differentiation, but no proportional differentiation. The mecha-
+nisms used in [12] enforce service guarantees by dynamically
+adjusting scheduler service weights and packet dropping thresh-
+olds in core routers. Trafﬁc aggregates are dimensioned at the
+network ingress by a distributed admission control mechanism
+that uses knowledge of the entire trafﬁc present in the network.
+Since, in practice, full knowledge of the trafﬁc traversing a net-
+work is generally not available, the algorithm needs to be ap-
+proximated when deployed in a large network.
+
+The majority of related work focuses on particular scheduling
+and dropping algorithms and investigates the degree to which
+class-based service guarantees can be enhanced with the pro-
+posed algorithms. The work presented in this paper takes a dif-
+ferent approach. We ﬁrst state the desired service guarantees (a
+superset of the guarantees of all works cited above), then formu-
+late requirements on rate allocation and dropping mechanisms,
+and, eventually, arrive at mechanisms that satisfy the speciﬁed
+requirements.
+
+Fig. 1. Delay and backlog at the transmission queue of an output link. A is
+the arrival curve, R is the input curve, and R is the output curve.
+
+never exceeds 1%, and (G3) states that the aggregate throughput
+of all ﬂows in class 3 should be at least 1 Mbps. (G4) expresses
+that class-2 packets experience delays roughly twice as large
+as class-1 packets, (G5) states that class-3 packets experience
+twice the loss rate of class-2 packets, and ﬁnally, (G6) indicates
+that the aggregate throughput of all ﬂows in class 1 should be
+twice as large as the aggregate throughput of all ﬂows in class
+3. When all best-effort bounds cannot be enforced simultane-
+ously, the best effort bounds are relaxed in some order. Here,
+we specify that the best effort bounds should be relaxed in the
+order (G1), (G2), and (G3). Thus, if necessary, guarantee (G1)
+can be violated in order to meet guarantee (G2), and both (G1)
+and (G2) can be violated to satisfy (G3). (G3) will be violated
+last. Note that, as long as the available link bandwidth is at least
+1 Mbps, (G3) can be satisﬁed at all times.
+
+With these guarantees, we can emulate AF, by assigning each
+AF drop level to a separate trafﬁc class. Further, we can imple-
+ment ABE by selecting a delay bound for one class, and propor-
+tional differentiation yielding lower loss rates to another class.
+More generally, it can be argued that delay, loss, and throughput
+differentiation can be used to express guarantees on other ser-
+vice metrics, such as trafﬁc burstiness [23].
+
+We next give a formal description of the service, and outline
+
+a solution for an algorithm that realizes the service.
+
+III. CLASS-BASED SERVICE WITH ADAPTIVE RATE
+
+ALLOCATION AND DROPPING
+
+A. Service Provisioning
+
+In this section, we describe a service that, in the absence of ad-
+mission control, trafﬁc policing, signaling or resource reserva-
+tion, offers both best-effort bounds and proportional differenti-
+ation to trafﬁc classes. The proposed service gives, on a per-hop
+basis, best-effort bounds and proportional service guarantees to
+trafﬁc classes. All guarantees can be expressed for loss rates, de-
+lays, or throughput, and are assumed to be conﬁgured on routers
+by a network operator.
+
+Example: As an example for a mix of guarantees for three
+trafﬁc classes, one could specify the following best-effort
+bounds for a network interface of a router:
+
+(G1) “Class-1 delay
+(G2) “Class-2 loss rate
+(G3) “Class-3 service rate
+
+2 ms”;
+
+1%”;
+
+1 Mbps”;
+
+and the following proportional guarantees:
+
+(G4) “Class-2 delay/class-1 delay
+4”;
+(G5) “Class-3 loss rate/class-2 loss rate
+2”;
+(G6) “Class-1 throughput/class-3 throughput
+
+2”.
+
+The provisioning of per-class service differentiation in our
+proposed service is expressed in terms of the backlog behavior
+at a single transmission queue of the output link of a router. The
+discussion draws inspiration from Cruz’s network calculus [24],
+[25]. We will refer to Fig. 1 for an illustration.
+
+We assume that all trafﬁc that arrives to the transmission
+queue of the output link of a router is marked to belong to
+one of
+classes. We use a convention whereby a class with
+a lower index receives a better service. We consider a discrete,
+event-driven time model, where events are trafﬁc arrivals. We
+use
+to denote the time of the th event in the current busy
+period,1 and
+to denote the time elapsed between the th
+and
+, respectively, to de-
+note the class- arrivals and the amount of class- trafﬁc dropped
+(lost) at the
+to denote the service rate
+allocated to class- at the time of the th event. The service rate
+of class
+is a fraction of the output link capacity, and can vary
+over time. The service rate of class
+is set to zero if there is no
+
+th events. We use
+
+th event. We use
+
+and
+
+Guarantee (G1) states that class-1 packets do not experience a
+delay greater than 2 ms, (G2) ensures that the loss rate of class 2
+
+1The beginning of the current busy period is deﬁned as the last time when the
+
+transmission queue at the output link was empty.
+
+(4)
+
+(5)
+
+(6)
+
+(7)
+
+(8)
+
+(9)
+
+672
+
+IEEE/ACM TRANSACTIONS ON NETWORKING, VOL. 15, NO. 3, JUNE 2007
+
+backlog of class- trafﬁc in the transmission queue. For the time
+being, we assume a ﬂuid-ﬂow service, that is, the output link is
+viewed as simultaneously serving trafﬁc from several classes.
+Such a ﬂuid-ﬂow interpretation is idealistic, since trafﬁc is ac-
+tually sent in discrete sized packets. In Section VI, we discuss
+how the ﬂuid-ﬂow interpretation is realized in a packet network.
+Service differentiation will be enforced over the duration of a
+busy period. An advantage of enforcing service differentiation
+over short time intervals is that the output link can react quickly
+to changes of the trafﬁc load. Further, providing differentiation
+only within a busy period requires little state information, and,
+therefore, keeps the implementation overhead limited. As a pos-
+sible disadvantage, at times of low load, when busy periods are
+short, providing service differentiation only with information
+on the current busy period can be unreliable. However, when
+busy periods are short, the transmission queue is generally un-
+derloaded, and all service classes receive a high-grade service.
+deﬁne the beginning of the busy period. The arrival
+, is the total trafﬁc that
+curve for class
+has arrived to the transmission queue of an output link at a router
+since the beginning of the current busy period, that is
+
+at the th event,
+
+Let
+
+at times of congestion, i.e., when the link is overloaded, and,
+hence, when the busy period is long.
+
+We use the above metrics to express best-effort bounds and
+proportional differentiation of delay, loss, and throughput. A
+best-effort delay bound on class
+
+for all events with
+
+is speciﬁed as
+
+where
+Similarly, a best-effort loss rate bound for class
+
+is the desired upper bound on the delay of class .
+is deﬁned by
+
+A best-effort throughput bound for class
+
+is speciﬁed as
+
+Proportional differentiation on delay, loss, and throughput,
+and
+respectively, is deﬁned, for all
+
+such that
+
+, as
+
+The input curve,
+the transmission queue at the th event
+
+, is the trafﬁc that has been entered into
+
+and
+
+The output curve is the trafﬁc that has been transmitted since the
+beginning of the current busy period, that is
+
+tees.
+
+(1)
+
+In Fig. 1, we illustrate the concepts of arrival curve, input curve,
+and output curve for class- trafﬁc. At any time
+, the service
+rate is the slope of the output curve. In the ﬁgure, the service
+rate is adjusted at times
+
+, and
+, the vertical and horizontal
+distance between the input and output curves, respectively, de-
+note the class- backlog
+. For
+the
+th event, we have
+
+As illustrated in Fig. 1, for event
+
+and the class- delay
+
+.
+
+,
+
+and
+
+Equation (2) characterizes the delay of the class-
+departs at the
+
+th event.
+
+trafﬁc that
+
+We deﬁne the loss rate to be the ratio of dropped trafﬁc to the
+
+arrivals. That is
+
+are
+Since, from the deﬁnition of
+computed only over the current busy period, they correspond
+to long-term loss rates only if busy periods are long. We jus-
+tify our choice with the observation that trafﬁc is dropped only
+
+, the
+
+and
+
+where
+quantify the desired proportional differentiation.
+
+, and
+
+,
+
+are constants that
+
+We make the following important remarks about the guaran-
+
+Without additional assumptions about the per-class back-
+logs, offering proportional guarantees simultaneously for
+delay and throughput may result in an infeasible set of service
+guarantees. As an example, from the relationship between
+backlog, delay, and throughput of a given class, it is easy
+2” and “Class-2
+to see that “Class-2 delay/class-1 delay
+throughput/class-1 throughput
+2” is feasible only if the
+backlog of class 2 is four times as large as the backlog of class
+1. To avoid infeasible sets of proportional service guarantees,
+there should be at most one proportional guarantee between
+two classes with consecutive indices. For instance, between
+class 1 and class 2, there should not be a both a proportional
+throughput guarantee and a proportional delay guarantee.
+
+Even if the above constraints on proportional differentia-
+tion are respected, a set of proportional service differentiation
+guarantees could be infeasible under certain trafﬁc conditions,
+as shown in [26]. Therefore, we allow some slack, generally, a
+few percent of the current values, in the ratios of loss rates, de-
+lays and throughputs to be enforced.
+
+Since we do not assume admission control or trafﬁc
+policing, it may not be feasible to enforce all best-effort bounds
+at all times if the trafﬁc volume in the network is too high.
+When all best-effort bounds cannot be satisﬁed, we allow some
+bounds to be temporarily relaxed according to a speciﬁed relax-
+ation order. For instance, the implementation that we discuss in
+Section VI adopts a relaxation order that gives loss guarantees
+priority over delay or rate guarantees, and best-effort bounds
+priority over proportional differentiation. We emphasize that,
+
+(2)
+
+(3)
+
+CHRISTIN et al.: ENHANCING CLASS-BASED SERVICE ARCHITECTURES WITH ADAPTIVE RATE ALLOCATION AND DROPPING MECHANISMS
+
+673
+
+can be selected to satisfy proportional delay and throughput
+differentiation.
+
+We view the computation of
+
+in terms of the recursion
+
+. From (1) and (2), the delay
+
+where
+is selected such that the constraints of propor-
+tional delay and throughput differentiation are satisﬁed at event
+at the th event is a func-
+tion of
+we can de-
+termine the deviation from the desired proportional differentia-
+tion due to past service rate allocations, and infer the adjustment
+
+. By monitoring
+
+with
+
+needed to attenuate this deviation.
+
+If, at the th event, no feasible service rate allocation for re-
+alizing all desired delay and throughput differentiation exists,
+or if there is a buffer overﬂow, trafﬁc must be dropped, either
+from a new arrival or from the current backlog. Loss differen-
+tiation determines which class(es) suffer(s) trafﬁc drops at the
+
+th event.
+To enforce loss differentiation, we rewrite the loss rate, as a
+, and
+in (3), and obtain, after
+
+difference equation. We use
+
+, which, using (3), allows us to express
+
+as a
+
+simpliﬁcation
+
+function of
+
+(12)
+
+(13)
+
+From (13), we can determine how the loss rate of class evolves
+if trafﬁc is dropped from class
+at the th event. Thus, we can
+determine the set of classes that can suffer drops without ex-
+ceeding best-effort loss bounds. In this set, we choose the class
+whose loss rate differs by the largest amount from the objective
+of (7).
+
+The recursive expressions for service rates and the loss rates
+from (12) and (13) can be used to characterize the service rate
+allocation and dropping decisions as feedback control problems.
+In the next sections, we will describe two feedback problems:
+one for delay and rate differentiation (delay feedback loop), and
+one for loss differentiation (loss feedback loop). In Section VI,
+we describe the interaction of the two feedback problems.
+
+IV. DELAY FEEDBACK LOOP
+
+In this section, we present feedback loops that enforce the de-
+sired delay and rate differentiation given by (4), (6), and (7). We
+have one feedback loop for each class with proportional delay
+and/or rate differentiation. In the feedback loop for class , we
+characterize changes to service rate
+by approximating
+the nonlinear effects of the service rate adjustment on the delays
+by a linear system, and derive a stability condition for the lin-
+earized control loop, similar to a technique used in [27]–[30].
+While the stability condition derived does not ensure that the
+nonlinear control loop converges, the stability condition gives
+useful guidelines for selecting the conﬁguration parameters of
+the loop.
+
+An alternative to using a linear approximation of the non-
+linear system under consideration is to directly apply nonlinear
+control techniques to derive the stability conditions. Nonlinear
+control techniques, e.g., adaptive control [31], resort to algo-
+rithms such as gradient estimators. However, the practicality
+of a gradient estimator implementation to be executed for each
+packet arrival is questionable. Furthermore, adaptive control
+
+Fig. 2. Determining service rates for delay bounds.
+
+while a relaxation order on the service guarantees is needed,
+the mechanisms we propose in this paper are, unless otherwise
+noted, independent of the speciﬁc relaxation order chosen.
+
+B. Rate Allocation and Drop Decisions
+
+and buffer size
+
+We now sketch a solution for realizing the service differen-
+tiation speciﬁed in (4)–(8) at the output link of a router with
+. We assume per-class buffering of
+capacity
+incoming trafﬁc, and each class is transmitted in a ﬁrst-come-
+ﬁrst-served manner. The service rates
+and the amount of
+dropped trafﬁc
+so that the
+constraints deﬁned by (4)–(8) are met. If not all constraints in
+(4)–(8) can be met at the th event, then some service differen-
+tiation parameters need to be temporarily relaxed. We assume
+that the order in which differentiation parameters are relaxed is
+given.
+
+are adjusted at each event
+
+The best-effort delay bound on class ,
+
+, imposes a min-
+imum required service rate in the sense that all backlogged
+class-
+th event will be transmitted within its
+delay bound
+
+trafﬁc at the
+
+if
+
+. This condition can be veriﬁed by inspection of Fig. 2.
+for all
+In the ﬁgure, a thick line is used to denote the input curve, a
+thin line represents the output curve, and
+is the present
+time. The delay of the trafﬁc in transmission at
+.
+Because all trafﬁc backlogged at time
+arrived in a single
+burst, the amount of time remaining to transmit the trafﬁc at the
+tail of the queue within the best-effort delay bound
+is given
+by
+should have at least a value of
+backlogged at
+service rate,
+
+so that all trafﬁc
+. So, the minimum
+is given by the slope
+
+. Hence, the output curve at time
+
+is
+
+meets its delay bound
+, required to meet
+.
+
+If the condition of (10) holds for any , the delay bound
+
+is
+never exceeded. If class has, in addition, a throughput bound
+, the expression for the minimum rate needed by class at the
+th event becomes2
+
+(10)
+
+(11)
+
+So,
+
+the service rate can take any value
+
+such that
+, subject to the con-
+
+straint
+
+. Given this range of feasible values,
+
+2We deﬁne (cid:31)
+
+= 1, if expr is true and (cid:31)
+
+= 0, otherwise.
+
+674
+
+IEEE/ACM TRANSACTIONS ON NETWORKING, VOL. 15, NO. 3, JUNE 2007
+
+Let
+weighted delay of class at the th event, denoted by
+
+. We deﬁne a
+, as
+
+, and
+
+for
+
+B. Service Rate Adjustment
+
+theory is used to dynamically estimate unknown parameters
+that remain constant over time, whereas all quantities in the
+feedback loops we are studying vary over time. This implies
+that some approximations have to be made to use adaptive con-
+trol theory. The necessary approximations, e.g., assuming that
+the backlog remains constant over a very short time interval,
+are similar to the approximations we will use to linearize the
+feedback loops, so that there is no immediate advantage of
+using adaptive control in the design of our algorithm.
+
+A. Expressing the Objective of Proportional Delay and Rate
+Differentiation
+
+Let us assume for now that all classes are offered proportional
+delay differentiation, and that we do not have any proportional
+throughput differentiation. Later, these assumptions will be re-
+laxed. The set of constraints given by (7) leads to the following
+system of equations:
+
+...
+
+is the delay of class
+
+The weighted delay
+th
+event, multiplied by a scaling factor expressing the proportional
+delay differentiation desired. By multiplying each line of (14)
+with
+, we see that the desired proportional delay dif-
+,
+ferentiation is achieved for all classes if, for all
+we have
+,
+
+,
+, or, equivalently, for all
+
+and
+and
+
+at the
+
+, where
+
+We set
+loops. The feedback loop for class reduces the difference
+
+to be the set point common to all delay feedback
+
+of class
+
+from the common set point
+
+.
+
+When some classes are not offered proportional delay differ-
+entiation we extend the above analysis as follows. If propor-
+tional delay differentiation is requested for some, but not for all
+classes, constraints as in (14) can be deﬁned for each group of
+classes with contiguous indices. Then, the feedback loops are
+constructed independently for each group.
+
+We include proportional throughput differentiation in our
+analysis as follows. If we assume that no trafﬁc is ever dropped
+to satisfy proportional delay or rate guarantees, we can express
+proportional throughput differentiation between two classes in
+terms of proportional delay differentiation. Indeed, from the
+relationship between delay, backlog and rate, we have
+
+which, from the proportional throughput guarantee deﬁned in
+(9), reduces to
+,
+which we can rearrange as
+
+Recall that we have imposed that no pair of classes can be sub-
+ject to both proportional delay and throughput differentiation.
+Thus, we can express the proportional throughput guarantee as
+a proportional delay guarantee
+
+, with
+
+In other words, proportional throughput differentiation can be
+viewed as proportional delay differentiation where the desired
+varies over time. We will argue in the sta-
+ratio of delays
+bility analysis of the delay feedback loops that we can neglect
+the time-dependency of this ratio over short time intervals such
+as the current busy period. Thus, for the sake of simplicity, we
+will only consider proportional delay differentiation in the re-
+mainder of this paper, and we will consider that proportional
+throughput differentiation can always be obtained through pro-
+portional delay differentiation.
+
+(14)
+
+Next, we determine how to adjust the service rate to achieve
+, referred to as error,
+from the
+
+the desired delay differentiation. Let
+denote the deviation of the weighted delay of class
+set point, i.e.,
+
+(15)
+
+Note that the sum of the errors is always zero, that is, for all
+
+differentiation is achieved, we have
+We use the error
+
+needed for class
+
+,
+. If proportional delay
+for all classes.
+to compute the service rate adjustment
+to satisfy the proportional delay dif-
+,
+delays are too high with respect to
+
+, class
+
+ferentiation constraints. From (17), we note that if
+
+the desired proportional delay differentiation. Therefore,
+must be increased. Conversely,
+delays are too low, and
+adjustment
+written as
+decreasing function. We choose
+
+must be decreased. Hence, the rate
+,
+is a monotonically
+
+is a decreasing function of the error
+
+indicates that class
+
+, where
+
+(16)
+
+is called the controller. An advantage of this
+where
+controller is that only a single multiplication is needed to obtain
+the rate adjustment. Another advantage is that, at any , we have
+
+(17)
+
+(18)
+
+(19)
+
+From (19), the controller imposes a work-conserving system, as
+long as the initial condition
+is satisﬁed. Note that
+systems that are not work-conserving, i.e., where the link may
+be idle even if there is a positive backlog, may be undesirable
+for networks that need to achieve a high resource utilization.
+
+CHRISTIN et al.: ENHANCING CLASS-BASED SERVICE ARCHITECTURES WITH ADAPTIVE RATE ALLOCATION AND DROPPING MECHANISMS
+
+675
+
+We next linearize the delay feedback loop to obtain a condi-
+to ensure that the delay feedback loops are stable,
+over time. We
+so that the rate
+do not create a violation of the best-effort
+
+tion on
+in the sense that they attenuate the errors
+later derive an additional condition on
+adjustments
+delay and throughput bounds.
+
+C. Linearization of the Delay Feedback Loop
+
+The nonlinearities in the delay feedback loop primarily result
+from the nonlinear relationship between the service rate adjust-
+. We introduce a set of assumptions
+ments
+needed to linearize the delay feedback loops, before discussing
+the linearized relationship between
+
+and the delays
+
+and
+
+.
+
+Assumptions: We use four assumptions, labeled (A1)–(A4),
+
+to linearize the control loop.
+
+(A1) Consider a virtual time axis, where the event numbers
+are equidistant sampling times. We assume that the skew be-
+tween virtual time and real time can be neglected. Since events
+are trafﬁc arrivals from any class, the assumption holds when the
+aggregate trafﬁc arrival rate is almost constant. Over a busy pe-
+riod, if the aggregate arrival rate remains below the link capacity
+for too long, the queue becomes empty and the busy period ends.
+So, the assumption is accurate unless the considered output link
+is constantly overloaded and subject to a highly variable load.
+(A2) We assume that, for any class , the delay of class-
+
+trafﬁc does not vary signiﬁcantly between events
+i.e.,
+
+and
+
+,
+
+and
+
+remain modest, i.e.,
+
+remains backlogged
+
+, and changes to the service rate
+
+This assumption is accurate when class
+between events
+is relatively
+between
+and
+small. This assumption may not hold when the time elapsed
+between the th and
+th event is large, i.e., when the arrival
+rate of trafﬁc from all classes is low. However, a low aggregate
+arrival rate generally results in the current busy period ending
+quickly.
+
+(A3) We assume that the backlog of class- trafﬁc
+
+does
+not vary signiﬁcantly over the time
+spent by class- trafﬁc
+in the transmission queue. The assumption is accurate when the
+delays
+are small and trafﬁc arrivals are relatively smooth.
+The assumption is not accurate when trafﬁc arrivals are ex-
+tremely bursty over very short time intervals.
+
+(A4) We assume that the service rate
+
+is not subject to large
+variations over short intervals of time. The assumption is likely
+to hold unless the proportional coefﬁcient
+is chosen very
+large. The assumption may not be accurate when the backlog of
+class- frequently oscillates between zero and a positive value,
+because
+
+is reset every time class- is not backlogged.
+
+Clearly, the above assumptions are idealistic, and stability
+under these assumptions does not guarantee stability of the
+actual delay feedback loops. However, the numerical data in
+Section VII suggests that the loops converge adequately well.
+
+Relating Delays
+
+to Rate Adjustments
+
+: We next de-
+
+scribe the effect of the rate adjustment
+under (A1)–(A4). To that effect, we relate
+rate
+trafﬁc was backlogged. Then, we relate
+
+to the average
+experienced by the class- trafﬁc over the time this class-
+
+on the delay
+
+to
+
+.
+
+Let us deﬁne
+
+as
+
+In other words,
+denotes the number of events that occurred
+over the time interval during which the class- trafﬁc leaving at
+
+was backlogged. From (A1) and (A2), we can write
+
+and will, from now on, use
+and
+
+We relate
+, trafﬁc leaving at
+
+to
+
+to refer to both
+as follows. By deﬁnition of
+
+and
+
+entered the queue at time
+
+spent
+received by the trafﬁc leaving at
+
+in the queue. Thus, the average service rate
+
+is given by
+
+From (20),
+over
+class- service rate over
+and (A1) to express
+
+is the average class- service rate averaged
+denotes the
+. We use this observation
+
+, whereas, by deﬁnition,
+
+as a function of
+
+, as follows:
+
+Let us now deﬁne
+
+Combining (21) and (22), we get
+
+Equation (23) describes the relationship between a change in the
+service rate and a change in the average rate.
+
+We now derive the relationship between
+
+and a change
+
+in the delay of class , denoted as
+
+, and deﬁned by
+
+Since we have from (20),
+
+, we get
+
+Equation (24) is not linear in
+by means of a ﬁrst order Taylor series expansion around
+(A4) indeed implies that
+
+. We use (A4) to linearize (24),
+.
+, which, using
+obtained from (A3), allows to
+
+rewrite (24) as
+
+is the error in the evaluation of
+
+where
+re-
+sulting from (A1)–(A4). Then, the relationship between delay
+variations and the delay is given by
+
+is used to compute
+
+from (16) and (17), the error at the
+obtained from
+
+, using (15). Finally,
+, is
+th event,
+. This completes the description of the
+
+.
+and
+and
+
+(20)
+
+(21)
+
+(22)
+
+(23)
+
+, and
+
+(24)
+
+(25)
+
+(26)
+
+676
+
+IEEE/ACM TRANSACTIONS ON NETWORKING, VOL. 15, NO. 3, JUNE 2007
+
+Fig. 3. The class-i delay feedback loop. This model uses z-transforms of the relationships derived in Section IV-B.
+
+linearized delay feedback loop. We now turn to the derivation
+of a stability condition on the linearized delay feedback loop.
+
+D. Stability Condition on the Linearized Delay Feedback Loop
+
+We derive the stability condition of the linearized delay feed-
+back loop using a two-step process. We ﬁrst express the delay
+feedback loop in the frequency domain, using -transforms, and
+then apply a standard stability argument to the frequency-do-
+main expression of feedback loop to obtain bounds on
+that ensure stability of the linearized feedback loop.
+
+Frequency-Domain Expression for the Feedback Loop: We
+express the delay feedback loop in the frequency domain using
+using -transforms of (15)–(26). We denote the -transform of
+a function
+
+, deﬁned as
+
+by
+
+,
+
+,
+
+We notice that in the class- delay feedback loop of Fig. 3,
+some quantities (e.g.,
+) are time-dependent. Therefore,
+the loop gain is time-dependent. Classical linear control theory
+[32], on the other hand, generally requires the loop gain to be
+time invariant to obtain stability conditions. However, stability
+can still be achieved with a time-dependent loop gain, if the loop
+gain is not increasing unboundedly over time [31].
+Stability Analysis: We obtain stability bounds on
+
+from
+a standard control theory result [32]. Denoting the loop gain by
+, the loop is stable if and only if the roots of the charac-
+have a module less than one.
+by taking the product of all
+
+teristic equation
+We obtain an expression for
+blocks in Fig. 3
+
+Equations (15) and (17) are unchanged when using -trans-
+forms. Assumptions (A2)–(A4) enable us to approximate
+by a constant over the time a given packet is backlogged, and to
+assume that (18) remains unchanged when using -transforms.
+Likewise, per (A3) and (A4),
+are assumed
+constant over the time a given packet is backlogged, so that
+we can assume that (25) is also unchanged when using -trans-
+forms. Equation (23) yields
+
+and
+
+The negative sign comes from the expression of
+where
+to further simplify the expression for
+
+,
+. We use (A4)
+. Under (A4),
+, which enables us to approximate the
+by 1. With this approximation,
+
+is subtracted from
+
+gain of the block
+we obtain a new loop gain
+
+which, using the property that, for any continuous function ,
+
+, implies, after reordering, that
+
+The characteristic equation of
+, has exactly one root,
+
+the approximate system,
+
+. The stability condition,
+
+, implies
+
+Because
+
+for any
+
+,
+
+. So, the
+
+-transform of (26) is
+
+Also, the relationship between
+frequency domain is given by
+
+and
+
+in the
+
+All quantities in (28), with the exception of
+Hence, the condition described by (28) reduces to
+After reordering, (27) becomes
+
+, are positive.
+.
+
+Fig. 3 illustrates the frequency-domain expression of the
+delay feedback loop. In the ﬁgure, each block maps an input
+variable to an output variable by multiplying the input variable
+by the contents of the block. For instance, the ﬁrst block maps
+. The
+
+by multiplying
+
+by
+
+to
+
+product of all individual blocks is called the loop gain.
+
+Since, with (20), we can write
+
+, (29) can be expressed as
+
+(27)
+
+(28)
+
+(29)
+
+(30)
+
+(33)
+
+(34)
+
+(35)
+
+CHRISTIN et al.: ENHANCING CLASS-BASED SERVICE ARCHITECTURES WITH ADAPTIVE RATE ALLOCATION AND DROPPING MECHANISMS
+
+677
+
+The condition given by (30) requires to keep a history of the
+backlogs. The need to maintain a backlog history can be allevi-
+, which allows
+ated, using (A2) and writing
+us to simplify (30). Combining with
+, we obtain the
+following expression for the stability condition for the class-
+delay feedback loop:
+
+the class- backlog at the
+arrivals
+, the losses
+
+th event,
+
+, in function of the
+
+and the service rate
+
+as
+
+With a buffer size
+
+event, we need
+work-conserving property
+
+, to prevent buffer overﬂows at the
+
+th
+, which, using (33) and the
+
+, becomes
+
+Since
+ﬁnally get
+
+must be common to all classes for (19) to hold, we
+
+The condition in (31) ensures that the linearized delay feedback
+loops will not engage in divergent oscillations. We cannot be
+certain that the assumptions made to linearize the delay feed-
+back loops hold in practice, and cannot claim that (31) ensures
+stability of the (nonlinear) delay feedback loops. However, we
+can use (31) as a design guideline for
+
+.
+
+E. Including the Absolute Delay and Rate Constraints
+
+The condition on
+
+we obtained in (31) is needed to en-
+force proportional differentiation. So far, we have not consid-
+ered the best-effort delay and rate bounds in the construction
+of the delay feedback loops. These best-effort delay and rate
+bounds are viewed as a saturation constraint on the rate adjust-
+. To satisfy the con-
+ment, and yield a second condition on
+straints
+when
+the new rate is below the minimum. This, however, may vio-
+late the work-conserving property resulting from (19). To re-
+spect the saturation constraint,
+
+, we may need to clip
+
+has to satisfy
+
+. Applying that
+
+to all control loops
+
+implies
+
+(31)
+
+We must ensure that
+delay and throughput bounds. Using the deﬁnition of
+given by (11), and (33), we obtain the following condition:
+
+to be able to provide
+
+If either of (34) or (35) is violated, trafﬁc is dropped to enforce
+proportional loss differentiation. To describe how proportional
+loss differentiation is enforced, let us deﬁne a weighted loss rate
+as
+
+where
+deﬁnition, (8) reduces to, for all
+which is equivalent to
+
+for
+
+,
+
+and
+, and ,
+, where
+
+. With this
+,
+
+(32)
+
+We set
+
+, as the set point for the loss feedback loop, and use
+
+to compute an error
+
+If
+, we cannot sat-
+isfy both (32) and
+, required by (31). In other words,
+we cannot satisfy best-effort delay and throughput bounds and
+proportional delay differentiation at the same time. In such a
+case, we relax either (31) or (32) according to a given relaxation
+order. For instance, giving best-effort bounds higher precedence
+than proportional differentiation results in relaxing (31) and sat-
+isfying (32).
+
+V. LOSS FEEDBACK LOOP
+
+We now describe the feedback loop which controls the trafﬁc
+dropped from class
+to satisfy proportional loss differentiation
+within the limits imposed by the best-effort loss bounds. As be-
+fore, we ﬁrst assume that all classes are offered proportional loss
+differentiation. We relax this assumption in the same manner as
+we relaxed the assumption that all classes are offered propor-
+tional delay differentiation in Section IV-A.
+
+Trafﬁc must be dropped at the
+
+th event either if there is a
+buffer overﬂow or if best-effort delay bounds cannot be satis-
+ﬁed given the current backlog. For any class
+, we can express
+
+for all
+
+by increasing
+
+The desired proportional loss differentiation is achieved when
+. The loss feedback loops decrease the errors
+for classes that have
+as
+be an ordering of the class indexes
+,
+. Trafﬁc is dropped in the
+
+follows. Let
+from all backlogged classes, that is,
+such that
+order of
+
+for
+
+if
+
+.
+
+Best-effort loss rate bounds impose an upper bound,
+
+,
+from class . The
+
+on the trafﬁc that can be dropped at event
+value of
+
+is determined from (5) and (13) as
+
+If the conditions in (34) and (35) are violated, trafﬁc is
+dropped from class
+until the conditions are satisﬁed, or until
+the maximum amount of trafﬁc
+has been dropped. Then
+trafﬁc is dropped from class
+, and so forth. Suppose that the
+conditions in (34) and (35) are satisﬁed for the ﬁrst time if
+
+678
+
+IEEE/ACM TRANSACTIONS ON NETWORKING, VOL. 15, NO. 3, JUNE 2007
+
+trafﬁc is dropped from classes
+
+trafﬁc is dropped from class
+
+, then we obtain
+
+, and
+
+(36)
+
+if
+if
+otherwise.
+
+for all
+
+If
+, we have the choice
+between dropping more trafﬁc, thereby relaxing a best-effort
+loss bound, or ignoring condition (35), thereby relaxing a best-
+effort delay or rate bound. A predetermined precedence order is
+used to choose which bound is relaxed. For instance, in the im-
+plementation discussed in Section VI, loss bounds take prece-
+dence over delay and rate bounds, and condition (35) is relaxed.
+The loss feedback loop never increases the maximum error
+, and more than one class is backlogged.
+Thus, the errors remain bounded and the algorithm presented
+will not engage in divergent oscillations around the target value
+. Additionally, the loss feedback loop and the delay feed-
+back loops are independent of each other. Indeed, since we al-
+ways drop trafﬁc from the tail of each per-class buffer, losses
+do not have any effect on the delays of trafﬁc admitted into the
+transmission queue.
+
+, if
+
+VI. IMPLEMENTATION
+
+We implemented the feedback loops presented in Sections IV
+and V in PC-routers running the FreeBSD 4.3 [33] operating
+system, using the altq-3.0 package [14]. altq allows pro-
+grammers to modify the operations of the transmission queue in
+the IP layer of the FreeBSD kernel. Our implementation [34] has
+been included in altq-3.1, and in KAME [15]. For a detailed
+discussion of the implementation issues, we refer the reader to
+[35]. In this section, we only discuss the operations performed
+when a packet is entered into the transmission queue of an IP
+router (packet enqueueing) and when a packet is selected for
+transmission (packet dequeueing).
+
+We use the DiffServ codepoint (DSCP, [36]) in the header of
+a packet to identify the class index of an IP packet. The DSCP
+ﬁeld is set by the edge router; in our implementation, this is
+the ﬁrst router traversed by a packet. We chose the following
+precedence order for relaxing constraints: best-effort
+loss
+rate bounds have higher precedence than delay and throughput
+bounds, which have in turn higher precedence than proportional
+differentiation.
+
+A. Packet Enqueueing
+
+The enqueue procedure are the operations executed in the
+IP layer when a packet is entered into the transmission queue
+of an output link. Since, in FreeBSD 4.x, the FreeBSD kernel
+is single-threaded, the execution of the enqueue procedure is
+strictly sequential.
+
+The enqueue procedure performs the dropping decisions
+and the service rate allocation. We avoid ﬂoating point opera-
+tions in the kernel of the operating system, by expressing delays
+as machine clock cycles, service rates as bytes per clock cycle
+(multiplied by a scaling factor of 2 ), and loss rates as fractions
+of 2 . Then, 64-bit (unsigned) integers provide a sufﬁcient de-
+gree of accuracy.
+
+In our modiﬁed enqueue procedure, the transmission queue
+of an output link has one FIFO queue for each class, imple-
+mented as a linked list. We limit the total number of packets
+
+. Whenever a packet is entered
+that can be queued to
+into the FIFO queue of its class, the arrival time of the packet
+is recorded, and the waiting times of the packets at the head of
+each FIFO queue are updated.
+
+The enqueue procedure uses the loss feedback loop de-
+scribed in Section V to determine if and how much trafﬁc needs
+to be dropped from each class. In our implementation, the algo-
+rithm of Section V is run twice. The ﬁrst time, buffer overﬂows
+are resolved by ignoring condition (35); The second time, po-
+tential violations of delay and throughput bounds are resolved
+by ignoring condition (34).
+
+Next, the enqueue procedure computes new values for
+from (11), and determines new service rates, using (12)
+and (18), with the constraints on
+given in (31) and (32).
+exists, (31) is ignored, thereby
+If no feasible value for
+giving delay bounds precedence over proportional delay (and
+throughput) differentiation.
+
+B. Packet Dequeueing
+
+The dequeue procedure selects one packet from the backlog
+for transmission. In our implementation, dequeue selects one
+of the trafﬁc classes, and picks the packet at the head of the FIFO
+queue for this class.
+
+The dequeue procedure uses a rate-based scheduling algo-
+rithm to adapt the transmission rates
+from a ﬂuid-ﬂow
+view to a packet-level environment. Such an adaptation can be
+performed using well-known rate-based scheduling algorithm
+techniques, e.g., Virtual Clock [37] or PGPS [38]. These sched-
+uling algorithms translate a rate allocation, into virtual deadlines
+of individual packets. In our implementation, we use a modiﬁed
+Deﬁcit Round Robin [39] scheduling algorithm. Let
+trafﬁc that have been
+denote the number of bytes of class-
+transmitted in the current busy period, the scheduler selects a
+packet from class for transmission if
+
+. In other words, the dequeue procedure selects
+the class whose service is the most behind its allocated service
+rate.
+
+VII. EXPERIMENTAL EVALUATION
+
+In this section, we present experimental measurements of our
+FreeBSD implementation described in Section VI in a testbed of
+PC-routers, which we complement with larger scale simulation
+experiments. We point out that [1] contains additional experi-
+ments.
+
+A. Testbed Measurements
+
+We ﬁrst demonstrate that
+
+the mechanisms we propose
+can be implemented at relatively high-speeds, and achieve
+the desired service differentiation for a mix of best-effort
+bounds and proportional differentiation. We consider TCP and
+UDP trafﬁc competing at a single bottleneck link of capacity
+Mbps, governed by a router interface with a buffer
+size set to
+packets. The router and the sources of
+trafﬁc are Dell PowerEdge 1550 servers with 1 GHz Intel Pen-
+tium-III processors and 256 MB of RAM. The system software
+is FreeBSD 4.3 and altq-3.0. The router is equipped with
+multiple 100 Mbps-Ethernet interfaces.
+
+We consider four trafﬁc classes and we provide the service
+differentiation described in Table I(a). The trafﬁc mix, the
+number of ﬂows per class, and the characterization of the ﬂows
+
+CHRISTIN et al.: ENHANCING CLASS-BASED SERVICE ARCHITECTURES WITH ADAPTIVE RATE ALLOCATION AND DROPPING MECHANISMS
+
+679
+
+TABLE I
+
+TESTBED MEASUREMENTS: EXPERIMENTAL PARAMETERS
+(a) DESIRED SERVICE DIFFERENTIATION; (b) TRAFFIC MIX
+
+Fig. 4. Testbed measurements: Offered load. The graph shows the offered load
+at the bottleneck link.
+
+Fig. 5. Testbed measurements: Service differentiation at bottleneck link. The
+graphs show the service obtained by each class at the bottleneck link. (a) Ra-
+tios of delays. (b) Class-1 delays (individual). (c) Classes 2, 3, and 4 delays.
+(avg. over a sliding window of 0.5 s.). (d) Ratios of loss rates. (e) Loss rates. (f)
+Throughput.
+
+for each source is as shown in Table I(b). Class 1 trafﬁc consists
+of on–off UDP ﬂows, and the other classes consist of TCP
+(Reno) ﬂows. Trafﬁc is generated using netperf v2.1pl3 [40].
+We conﬁgure the TCP sources to be greedy during time inter-
+vals [0 s, 10 s], [20 s, 30 s] and [40 s, 50 s]. In the remaining
+time intervals (10 s, 20 s), (30 s, 40 s), and (50 s, 60 s), the
+TCP sources send chunks of 8 KB of data and pause for 175 ms
+between the transmission of each chunk. All sources start trans-
+,
+mitting packets with a ﬁxed size of 1024 bytes at time
+until the end of the experiments at
+s. The bottleneck
+link is shared by both data packets and TCP acknowledgments
+coming back from the destinations. We plot the offered load
+at the router in Fig. 4. When all sources are simultaneously
+transmitting, congestion control at the TCP sources maintains
+the total load at a level of about 99% of the link capacity. As
+soon as TCP sources act as on–off sources, the load suddenly
+drops to about 30% of the link capacity.
+
+In Fig. 5, we present our measurements of the service received
+at the bottleneck link. All datapoints correspond to moving av-
+erages over sliding windows of size 0.5 s, except in Fig. 5(b),
+which presents the delays of each class-1 packet.
+
+In Fig. 5(a), we present the ratios of the delays of classes 4 and
+3, and the delays of classes 3 and 2. We observe that when the
+load is high, in time intervals [0 s, 10 s], [20 s, 30 s], and [40 s,
+is achieved. When
+50 s], the target value of
+the load is low, we observe oscillations in the ratios of delays,
+but all classes get low delays, as shown in Fig. 5(b) and (c), and
+one can argue that there is no need for differentiation since all
+classes receive a high-grade service. We also see that, at times
+, when the load increases abruptly
+over a short period of time, the delay differentiation is realized
+
+, and
+
+,
+
+almost immediately. This conﬁrms that the algorithm quickly
+reacts to rapid increases in the offered load.
+
+ms is satisﬁed for most (
+
+In Fig. 5(b), we show the delay of class-1 packets. The best-
+effort delay bound of
+99%)
+of the packets, despite the precedence order we chose for our
+best-effort bounds, i.e, in case of an infeasible set of differenti-
+ation constraints, delay bounds are relaxed in favor of loss rate
+bounds. No class-1 packet ever experiences a delay higher than
+10 ms at either Router 1 or 2. Fig. 5(c) indicates that delay values
+of other classes are in the range 10–50 ms.
+
+Fig. 5(d) presents plots of the ratios of loss rates averaged
+over a sliding window of size 0.5 s, and show that proportional
+loss differentiation is realized, with the desired factor
+
+, whenever there are packet losses. Fig. 5(e) shows the
+loss rate experienced by class-1 trafﬁc, and we see that, even at
+times of packet drops, the loss rate of class 1 remains below the
+loss guarantee of 1%. Loss rates of other classes are below 1%,
+which indicates that trafﬁc is dropped mostly to satisfy the delay
+bound on Class 1.
+
+We graph the throughput experienced by each class and by
+the trafﬁc aggregate in Fig. 5(f). The ﬁgure illustrates that the
+throughput guarantee
+Mbps is met, that no class experi-
+ences starvation, and that our implementation in PC-routers with
+a 1 GHz processor can fully utilize the capacity of a 100 Mbps
+link when needed.
+
+Finally, we measure the number of CPU cycles consumed by
+the enqueue and dequeue procedures at the bottleneck link,
+by reading the timestamp counter register of the Pentium pro-
+cessor. We compute the average and standard deviation of the
+number of cycles over 500 000 packet transmissions. In the fol-
+lowing table, we compare measurements for a set of four classes
+
+680
+
+IEEE/ACM TRANSACTIONS ON NETWORKING, VOL. 15, NO. 3, JUNE 2007
+
+TABLE II
+
+COMPUTATIONAL OVERHEAD
+
+TABLE III
+
+SIMULATION: EXPERIMENTAL PARAMETERS
+(a) DESIRED SERVICE DIFFERENTIATION;
+
+(b) TRAFFIC MIX
+
+Fig. 6. Simulation: network topology. The labels of the links denote the links
+capacities in megabits per second (Mbps).
+
+with differentiation parameters given in Table I(a), to a system
+of four classes without any guarantees:
+
+Table II shows that the overhead for the enqueue opera-
+tion, which implements the feedback algorithms, is signiﬁcant.
+At the same time, a back-of-the-envelope estimation (ignoring
+other tasks the router may have to perform in the background)
+indicates that a 1-GHz PC can enqueue and dequeue more than
+80 000 packets per second. Considering that the average size of
+bytes[42], this results
+an IP packet on the Internet is
+in a maximum throughput of about 290 Mbps. We refer to [1]
+for a more detailed evaluation of the overhead associated to our
+proposed algorithms.
+
+B. Simulation of Multiple Bottlenecks Links
+
+We complement our testbed measurements by simulating a
+network with multiple hops and propagation delays. To that ef-
+fect, we implemented our closed-loop algorithm in the ns-2 net-
+work simulator [41]. This implementation has been included in
+the standard ns-2 distribution, since ns-2.26.
+
+We simulate a network with a topology as shown in Fig. 6.
+We have four routers, each with a maximum buffer size of 500
+packets, connected by three 45 Mbps links, and sources and
+sinks connected to the routers by independent 100 Mbps links.
+Each 45 Mbps link has a propagation delay of 3 ms, and each
+100 Mbps link has a propagation delay of 1 ms. There are four
+classes of trafﬁc. The service guarantees are given in Table III(a)
+and the composition of the trafﬁc mix is given in Table III(b).
+Trafﬁc consists of a mix of TCP (Reno) and UDP ﬂows. TCP
+ﬂows are either greedy, to model long ﬁle transfers, or on–off
+ﬂows with exponentially distributed on and off periods, to model
+short, successive ﬁle transfers (e.g., HTTP requests). UDP ﬂows
+are on–off ﬂows using a Pareto distribution for the on and off pe-
+riods, with a shape parameter
+
+.
+Cross-trafﬁc ﬂows (denoted by A-1,
+
+, C-10) start trans-
+mitting at time
+s. The ﬂows TCP-1, TCP-2, TCP-3, and
+UDP-4 start transmitting at time
+s. All ﬂows consists of
+packets with a ﬁxed size of 500 bytes, and the experiment lasts
+70 s of simulated time. The aggregate load at the bottlenecks
+is roughly constant and equal to the capacity of the bottleneck
+
+links, but the introduction of new ﬂows at
+s signiﬁcantly
+changes the contribution of each class to the trafﬁc mix, and
+is likely to result in violations of Assumption (A3). Hence, the
+proposed simulation should allow us to test the sensitivity of our
+approach to its design assumptions.
+
+From Table III(a) and (b), Classes 1, 2, and 3 only consist of
+TCP trafﬁc, and Class 4 only consists of UDP trafﬁc. Initially
+Class 1 contributes 10% of the aggregate cross-trafﬁc, Class
+2 contributes 20%, Class 3 contributes 30% and Class-4 con-
+tributes 40%.
+
+We graph the per-class queueing delays and per-class loss
+rates at each of the ﬁrst three routers in Fig. 7, starting at time
+s. Given that the aggregate arrival rate at Router 4 is
+always less than the total output capacity of Router 4, Router
+4 never experiences any backlog, and the queueing delays and
+loss rates are constantly equal to zero. With the exception of
+Fig. 7(d), (e), and (f), where we plot individual packet delays,
+each point on Fig. 7 represents an average over a sliding window
+of size 0.5 s. Fig. 7 shows that the proposed algorithm manages
+to enforce all proposed service guarantees at each router, with
+only a couple of transient violations of the absolute delay bound
+on Class 1 at Router 1, and that the algorithm seems to respond
+appropriately to transient changes such as the introduction of
+additional trafﬁc at time
+
+s.
+
+VIII. CONCLUSION
+
+This paper suggests improvements to the type of service guar-
+antees that can be given in a class-based service architecture
+without resource reservation. We introduce the concept of best-
+effort bounds, deﬁned as guarantees that emulate absolute guar-
+antees in a network without admission control and policing. We
+propose mechanisms for routers that achieve best-effort bounds
+as well as proportional guarantees by selectively dropping trafﬁc
+and by adjusting the trafﬁc rate allocated to classes.
+
+We use control theory to design the adaptive rate allocation
+and dropping mechanisms, by relying on feedback loops at
+link schedulers to enforce proportional differentiation of loss
+and delay and to give trafﬁc classes best-effort bounds to loss,
+throughput and delay. The feedback loops do not require prior
+knowledge of trafﬁc arrivals and do not require signaling.
+
+CHRISTIN et al.: ENHANCING CLASS-BASED SERVICE ARCHITECTURES WITH ADAPTIVE RATE ALLOCATION AND DROPPING MECHANISMS
+
+681
+
+Fig. 7. Multiple node simulation. The graphs show the delays and loss rates encountered at each router by class 1 trafﬁc, and the ratios of delays and the ratios of
+loss rates for classes 2, 3, and 4 at each router. The absolute constraints and the target ratios are indicated by straight dashed lines. (a) Router 1: ratios of delays.
+(b) Router 2: ratios of delays. (c) Router 3: ratios of delays. (d) Router 1: class 1 delays. (e) Router 2: class 1 delays. (f) Router 3: class 1 delays. (g) Router 1:
+ratios of loss rates. (h) Router 2: ratios of loss rates. (i) Router 3: ratios of loss rates. (j) Router 1: class 1 loss rates. (k) Router 2: class 1 loss rates. (l) Router 3:
+class 1 loss rates.
+
+At times when not all best-effort bounds can be satisﬁed
+simultaneously, the feedback-based mechanisms relax some
+of the bounds using a predetermined precedence order. We
+assess the stability of our adaptive rate allocation and dropping
+mechanisms through experiments in a testbed network of BSD
+PC-routers and simulations. Testbed measurements show that
+the implementation of the proposed mechanisms in 1 GHz
+PC-routers can fully utilize the available capacity of 100 Mbps,
+while enforcing the desired service differentiation. The im-
+plementation of our proposed mechanisms in PC-routers is
+publicly available [34], and is included in the altq and KAME
+extensions to the BSD kernels.
+
+As a ﬁnal note, the mechanisms presented in this paper can
+be extended to include TCP congestion control algorithms [43],
+[44], as shown in [45]. Used in conjunction with routing mech-
+anisms that can perform route-pinning, such as MPLS [46], our
+adaptive rate allocation and buffer management mechanisms
+can be used as a building block for end-to-end service differ-
+entiation. We refer to [1] for a more thorough inspection of the
+interaction of end-to-end performance with the per-hop service
+proposed here.
+
+REFERENCES
+
+[1] N. Christin, “Quantiﬁable service differentiation for packet networks,”
+Ph.D. dissertation, Dept. Comp. Sci., Univ. Virginia, Charlottesville,
+Aug. 2003.
+
+[2] N. Christin, J. Liebeherr, and T. F. Abdelzaher, “A quantitative as-
+sured forwarding service,” in Proc. IEEE INFOCOM’02, New York,
+Jun. 2002, vol. 2, pp. 864–873.
+
+[3] R. Braden, L. Zhang, S. Berson, S. Herzog, and S. Jamin, “Resource
+
+reservation protocol (RSVP),” IETF RFC 2205, Sep. 1997.
+
+[4] K. Nichols, V. Jacobson, and L. Zhang, “Two-bit differentiated services
+
+architecture for the internet,” IETF RFC 2638, Jul. 1999.
+
+[5] D. Clark and W. Fang, “Explicit allocation of best-effort packet de-
+livery service,” IEEE/ACM Trans. Netw., vol. 6, no. 4, pp. 362–373,
+Aug. 1998.
+
+[6] S. Blake, D. Black, M. Carlson, E. Davies, Z. Wang, and W. Weiss, “An
+
+architecture for differentiated services,” IETF RFC 2475, Dec. 1998.
+
+[7] B. Davie, A. Charny, J. Bennett, K. Benson, J.-Y. Le Boudec, W.
+Courtney, S. Davari, V. Firoiu, and D. Stiliadis, “An expedited for-
+warding PHB,” IETF RFC 3246, Mar. 2002.
+
+[8] J. Heinanen, F. Baker, W. Weiss, and J. Wroclawski, “Assured for-
+
+warding PHB group,” IETF RFC 2597, Jun. 1999.
+
+[9] C. Dovrolis and P. Ramanathan, “Proportional differentiated services,
+Part II: Loss rate differentiation and packet dropping,” in Proc.
+IWQoS’00, Pittsburgh, PA, Jun. 2000, pp. 52–61.
+
+[10] C. Dovrolis, D. Stiliadis, and P. Ramanathan, “Proportional differenti-
+ated services: Delay differentiation and packet scheduling,” IEEE/ACM
+Trans. Netw., vol. 10, no. 1, pp. 12–26, Feb. 2002.
+
+[11] P. Hurley, J.-Y. Le Boudec, P. Thiran, and M. Kara, “ABE: Providing
+low delay service within best effort,” IEEE Networks, vol. 15, no. 3,
+pp. 60–69, May 2001.
+
+[12] R. Liao and A. Campbell, “Dynamic core provisioning for quantitative
+differentiated service,” in Proc. IWQoS’01, Karlsruhe, Germany, Jun.
+2001, pp. 9–26.
+
+[13] J. Liebeherr and N. Christin, “JoBS: Joint buffer management and
+scheduling for differentiated services,” in Proc. IWQoS’01, Karlsruhe,
+Germany, Jun. 2001, pp. 404–418.
+
+[14] K. Cho, “A framework for alternate queueing: Towards trafﬁc manage-
+ment by PC-UNIX based routers,” in Proc. USENIX’98, New Orleans,
+LA, Jun. 1998, pp. 247–258.
+
+[15] The KAME Project. [Online]. Available: http://www.kame.net
+[16] C. Dovrolis, D. Stiliadis, and P. Ramanathan, “Proportional
+differentiated services: Delay differentiation and packet scheduling,”
+in Proc. ACM SIGCOMM’99, Boston, MA, Aug. 1999, pp.
+109–120.
+
+[17] H. Saito, C. Lukovszki, and I. Moldován, “Local optimal proportional
+differentiated services scheduler for relative differentiated services,”
+in Proc. IEEE ICCCN’00, Las Vegas, NV, Oct. 2000, pp. 554–550.
+[18] T. Nandagopal, N. Venkitaraman, R. Sivakumar, and V. Barghavan,
+“Delay differentiation and adaptation in core stateless networks,” in
+Proc. IEEE INFOCOM’00, Tel-Aviv, Israel, Apr. 2000, pp. 421–430.
+[19] Y. Moret and S. Fdida, “A proportional queue control mechanism to
+provide differentiated services,” in Proc. ISCIS’98, Belek, Turkey, Oct.
+1998, pp. 17–24.
+
+[20] S. Bodamer, “A scheduling algorithm for relative delay differentia-
+tion,” in Proc. IEEE HPSR’00, Heidelberg, Germany, Jun. 2000, pp.
+357–364.
+
+682
+
+IEEE/ACM TRANSACTIONS ON NETWORKING, VOL. 15, NO. 3, JUNE 2007
+
+[21] U. Bodin, A. Jonsson, and O. Schelen, “On creating proportional loss
+differentiation: Predictability and performance,” in Proc. IWQoS’01,
+Karlsruhe, Germany, Jun. 2001, pp. 372–386.
+
+[22] A. Striegel and G. Manimaran, “Packet scheduling with delay and loss
+differentiation,” Comput. Commun., vol. 25, no. 1, pp. 21–31, Jan.
+2002.
+
+[23] D. Stiliadis and A. Varma, “Latency-rate servers: A general model for
+analysis of trafﬁc scheduling algorithms,” IEEE/ACM Trans. Netw.,
+vol. 6, no. 5, pp. 611–624, Oct. 1998.
+
+[24] R. Cruz, “A calculus for network delay, part I: Network elements in
+isolation,” IEEE Trans. Inf. Theory, vol. 37, no. 1, pp. 114–131, Jan.
+1991.
+
+[25] R. Cruz, “A calculus for network delay, part II: Network analysis,”
+
+IEEE Trans. Inf. Theory, vol. 37, no. 1, pp. 132–141, Jan. 1991.
+
+[26] M. Leung, J. Lui, and D. Yau, “Characterization and performance
+evaluation for proportional delay differentiated services,” in Proc.
+ICNP’00, Osaka, Japan, Nov. 2000, pp. 295–304.
+
+[27] C. V. Hollot, V. Misra, D. Towsley, and W. Gong, “On designing
+improved controllers for AQM routers supporting TCP ﬂows,” in
+Proc. IEEE INFOCOM’01, Anchorage, AK, Apr. 2001, vol. 3, pp.
+1726–1734.
+
+[28] C. Lu, J. A. Stankovic, G. Tao, and S. H. Son, “Feedback control real-
+time scheduling: Framework, modeling and algorithms,” J. Real-Time
+Sys., vol. 23, no. 1–2, pp. 85–126, Jul. 2002.
+
+[29] Y. Lu, A. Saxena, and T. F. Abdelzaher, “Differentiated caching
+services; a control-theoretical approach,” in Proc. IEEE ICDCS’01,
+Phoenix, AZ, Apr. 2001, pp. 615–624.
+
+[30] S. Parekh, N. Gandhi, J. Hellerstein, D. Tilbury, T. S. Jayram, and
+J. Bigus, “Using control theory to achieve service level objectives in
+performance management,” J. Real-Time Sys., vol. 23, no. 1–2, pp.
+127–141, Jul. 2002.
+
+[31] K. Åström and B. Wittenmark, Adaptive Control. Reading, MA: Ad-
+
+dison-Wesley, 1995.
+
+[32] G. Franklin, J. Powell, and M. Workman, Digital Control of Dynamic
+
+Systems, 3rd ed. Menlo Park, CA: Addison-Wesley, 1998.
+
+[33] The FreeBSD Project. [Online]. Available: http://www.freebsd.org
+[34] The QoSbox. [Online]. Available: http://www.qosbox.cs.virginia.edu/
+
+software.html
+
+[35] N. Christin and J. Liebeherr, “The QoSbox: Quantitative service
+differentiation in BSD routers,” Comput. Netw., vol. 50, no. 17, pp.
+3353–3374, Dec. 2006.
+
+[36] K. Nichols, S. Blake, F. Baker, and D. Black, “Deﬁnition of the differ-
+entiated services ﬁeld (DS Field) in the IPv4 and IPv6 headers,” IETF
+RFC 2474, Dec. 1998.
+
+[37] L. Zhang, “Virtual clock: A new trafﬁc control algorithm for packet
+switched networks,” ACM Trans. Comput. Syst., vol. 9, no. 2, pp.
+101–125, May 1991.
+
+[38] A. Parekh and R. Gallagher, “A generalized processor sharing ap-
+proach to ﬂow control in integrated services networks: The single-node
+case,” IEEE/ACM Trans. Netw., vol. 1, no. 3, pp. 344–357, Jun. 1993.
+[39] M. Shreedhar and G. Varghese, “Efﬁcient fair queueing using deﬁcit
+round-robin,” IEEE/ACM Trans. Netw., vol. 4, no. 3, pp. 375–385, Jun.
+1996.
+
+[40] R. Jones, netperf: A benchmark for measuring network perfor-
+mance—Revision 2.0.
+Information Networks Division, Hewlett-
+Packard Company, Feb. 1995 [Online]. Available: http://www.net-
+perf.org
+
+[41] ns-2 Network Simulator. [Online]. Available: http://www.isi.edu/
+
+nsnam/ns/
+
+[42] Packet Sizes and Sequencing. CAIDA, May 2001. [Online]. Available:
+
+http://www.caida.org/outreach/resources/learn/packetsizes
+
+[43] M. Allman, V. Paxson, and W. Stevens, “TCP congestion control,”
+
+IETF RFC 2581, Apr. 1999.
+
+[44] S. Floyd and T. Henderson, “The NewReno modiﬁcation to TCP’s fast
+
+recovery algorithm,” IETF RFC 2582, Apr. 1999.
+
+[45] N. Christin and J. Liebeherr, “Marking algorithms for service dif-
+ferentiation of TCP trafﬁc,” Comput. Commun., vol. 28, no. 18, pp.
+2058–2069, Nov. 2005.
+
+[46] E. Rosen, A. Viswanathan, and R. Callon, “Multiprotocol
+
+label
+
+switching architecture,” IETF RFC 3031, Jan. 2001.
+
+Nicolas Christin (S’99–M’03) received the B.S.
+degree in engineering from Ecole Centrale Lille,
+France, in 1999, and the M.S. and Ph.D. degrees in
+computer science from the University of Virginia,
+Charlottesville, in 2000 and 2003, respectively.
+
+In 2002–2003, he worked in Nortel’s Advanced
+Technology group. From 2003 to 2005, he was a
+Postdoctoral Fellow in the School of Information
+Management and Systems, University of California
+at Berkeley. He is now a faculty member with
+Carnegie Mellon University’s Information Net-
+working Institute, on international assignment in CyLab Japan, Kobe, Japan.
+His research interests are in computer networks, network security, and network
+economics, and range from designing and evaluating formal models and
+algorithms to implementation aspects and measurements.
+
+Jörg Liebeherr (S’88–M’92–SM’03) received the
+Ph.D. degree in computer science from the Georgia
+Institute of Technology, Atlanta, in 1991.
+
+After a postdoctoral stay at
+
+the University of
+California, Berkeley, he joined the Department
+of Computer Science, University of Virginia,
+Charlottesville, in 1992. In 1997–1998, he was an
+Associate Professor in the Department of Electrical
+Engineering, Polytechnic University. Since Fall
+2005, he has been with the Department of Electrical
+and Computer Engineering, University of Toronto,
+Toronto, ON, Canada, as the Nortel Chair of Network Architecture and
+Services. He has served on editorial boards and program committees of several
+journals and conferences in computer networking.
+
+Dr. Liebeherr was a Member-at-Large on the IEEE Communications Society
+Board of Governors in 2003–2005, and Chair of the IEEE Communications So-
+ciety Technical Committee on Computer Communications in 2004–2005.
+
+Tarek Abdelzaher (M’99) received the B.Sc. and
+M.Sc. degrees in electrical and computer engineering
+from Ain Shams University, Cairo, Egypt, in 1990
+and 1994, respectively, and the Ph.D. degree from
+the University of Michigan, Ann Arbor, in 1999.
+
+He was an Assistant Professor at the University
+of Virginia, Charlottesville, where he founded the
+Software Predictability Group. He is currently an
+Associate Professor at the Department of Computer
+Science, University of Illinois at Urbana Champaign.
+He authored more than 60 papers and served on
+numerous technical program committees in real-time computing, sensor
+networks, performance management, among others. His research interests lie
+broadly in understanding and controlling the temporal properties of software
+systems in the face of increasing complexity, distribution, and degree of
+embedding in an external physical environment.
+
+Dr. Abdelzaher is Editor-in-Chief of the Journal of Real-Time Systems, and
+an Associate Editor of the IEEE TRANSACTIONS ON MOBILE COMPUTING, the
+ACM Transaction on Sensor Networks, and the Ad Hoc Networks Journal, as
+well as Editor of ACM SIGBED Review. He was Program Chair of RTAS 2004
+and General Chair of RTAS 2005. He is currently Program Chair of RTSS 2006
+and General Chair of IPSN 2007. He is a member of the ACM.
+
+

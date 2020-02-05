@@ -1,0 +1,804 @@
+Is the Optimism in Optimistic Concurrency Warranted?
+
+Donald E. Porter, Owen S. Hofmann, and Emmett Witchel
+
+Department of Computer Sciences, The University of Texas at Austin, Austin, TX 78712
+
+{porterde, osh, witchel}@cs.utexas.edu
+
+Abstract
+
+Optimistic synchronization allows concurrent execu-
+tion of critical sections while performing dynamic con-
+ﬂict detection and recovery. Optimistic synchroniza-
+tion will increase performance only if critical regions
+are data independent—concurrent critical sections ac-
+cess disjoint data most of the time. Optimistic synchro-
+nization primitives, such as transactional memory, will
+improve the performance of complex systems like an op-
+erating system kernel only if the kernel’s critical regions
+have reasonably high rates of data independence.
+
+This paper introduces a novel method and a tool called
+syncchar for exploring the potential beneﬁt of optimistic
+synchronization by measuring data independence of po-
+tentially concurrent critical sections. Experimental data
+indicate that the Linux kernel has enough data inde-
+pendent critical sections to beneﬁt from optimistic con-
+currency on smaller multiprocessors. Achieving further
+scalability will require data structure reorganization to
+increase data independence.
+
+1
+
+Introduction
+
+As CPU manufacturers have shifted from scaling
+clock frequency to placing multiple simple processor
+cores on one chip, there has been a renewed interest in
+concurrent programming. The end-user beneﬁt of these
+systems will be limited unless software developers can
+effectively leverage the parallel hardware provided by
+these new processors.
+
+Concurrent programming in a shared memory sys-
+tem requires primitives such as locks to synchronize
+threads of execution. Locks have many known prob-
+lems, including deadlock, convoying, and priority in-
+version that make concurrent programming in a shared
+memory model difﬁcult. In addition, locks are a con-
+servative synchronization primitive—they always assure
+mutual exclusion, regardless of whether threads actually
+need to execute a critical section sequentially for correct-
+ness. Consider modifying elements in a binary search
+tree. If the tree is large and the modiﬁcations are evenly
+distributed, most modiﬁcations can safely occur in par-
+
+allel. A lock protecting the entire tree will needlessly
+serialize modiﬁcations.
+
+One solution for the problem of conservative locking
+is to synchronize data accesses at a ﬁner granularity–
+rather than lock an entire binary search tree, lock only
+the individual nodes being modiﬁed. This presents
+two problems. First, data structure invariants enforce a
+lower bound on the locking granularity.
+In some data
+structures, this bound may be too high to fully real-
+ize the available data parallelism. Second, breaking
+coarse-grained locks into many ﬁne-grained locks sig-
+niﬁcantly increases code complexity. As the locking
+scheme becomes more complicated, long-term correct-
+ness and maintainability are jeopardized.
+
+An alternative to conservative locking is optimistic
+concurrency.
+In an optimistic system, concurrent ac-
+cesses to shared data are allowed to proceed, dynami-
+cally detecting and recovering from conﬂicting accesses.
+A specialized form of optimistic concurrency is lock-
+free data structures (including many variants like wait-
+free and obstruction-free data structures) [4, 5]. Lock-
+free data structures, while optimistic, are not a general
+purpose solution. Lock-free data structures require that
+each data structure’s implementation meets certain non-
+trivial correctness conditions. There is also no general
+method to atomically move data among different lock-
+free data structures.
+
+Transactional memory [6] provides hardware or soft-
+ware support for designating arbitrary regions of code
+to appear to execute with atomicity, isolation and con-
+sistency. Transactions provide a generic mechanism for
+optimistic concurrency by allowing critical sections to
+execute concurrently and automatically roll-back their
+effects on a data conﬂict. Coarse-grained transactions
+are able to reduce code complexity while retaining the
+concurrency of ﬁne-grained locks.
+
+To beneﬁt from optimistic concurrency, however, crit-
+ical sections must have a substantial amount of data in-
+dependence—data written by one critical section must
+be disjoint from data read or written by critical sections
+of concurrently executing threads.
+If critical sections
+concurrently modify the same data, or have data con-
+
+Critical Section 1
+begin critical section;
+node = root→right;
+node→left = root→left→right;
+end critical section;
+
+Critical Section 2
+begin critical section;
+node = root→left;
+node→left = root→left→right;
+end critical section;
+
+w
+0x3032
+
+r
+
+0x1000
+0x1032*
+0x1064
+0x2000
+
+0x2064
+0x3000
+0x3064
+
+w
+0x2032
+
+r
+
+0x1000
+0x1032*
+0x1064
+0x2000
+
+0x2064
+0x3000
+0x3064
+
+Critical Section 3
+begin critical section;
+node = root;
+node→right = node→left;
+end critical section;
+r
+0x1000
+0x1064
+
+w
+0x1032*
+
+Table 1: Three critical sections that could execute on the tree in Figure 1 and their address sets. The read entries
+marked with an asterisk (*) are conﬂicting with the write in Critical Section 3.
+
+ﬂicts1, optimistic concurrency control will serialize ac-
+cess to critical sections. In this case optimistic control
+can perform much worse than conservative locking due
+to the overhead required to detect and resolve conﬂicts.
+In this paper, we present novel techniques (Section 2)
+and a tool (Section 3) for investigating the limits of opti-
+mistic concurrency by measuring the data independence
+of critical regions that would be protected by the same
+lock. We apply the methodology and the tool to the
+Linux kernel, and present results (Section 4).
+
+2 The Limits of Optimistic Concurrency
+
+The most general way to determine data independence
+is to compare the address sets of the critical sections.
+The address set of a critical section is the set of memory
+locations read or written. If the code in critical sections
+access disjoint memory locations, the effect of executing
+them concurrently will be the same as executing them
+serially.
+In addition, the address sets need not be en-
+tirely disjoint; only the write set of each critical section
+must be disjoint from the address set of other potentially
+concurrent critical sections. In other words, it is harm-
+less for multiple critical sections to read the same data
+as long as that data is not concurrently written by an-
+other. This criterion is known as conﬂict serializability
+in databases, and it is widely used due to the relative ease
+of detecting a conﬂict.
+
+Conﬂict serializability is a pessimistic model, how-
+ever, as two critical sections can conﬂict yet be safely
+executed in parallel. For example, if two critical sections
+conﬂict only on their ﬁnal write, they can still safely ex-
+ecute concurrently if one ﬁnishes before the other issues
+the conﬂicting write. Some data structures and algo-
+rithms make stronger guarantees that allow critical sec-
+tions to write concurrently to the same locations safely,
+but these are relatively rare and beyond the scope of this
+
+1We selected the term data conﬂicts over data dependence to avoid
+
+confusion with other meanings.
+
+Figure 1: A simple binary tree.
+
+paper. Such guarantees correspond to view serializabil-
+ity; computing view serializability is NP-complete and
+hence rarely used in practice [9]. This paper will use
+conﬂict serializability exclusively.
+
+As an example of conﬂict serializability, consider the
+simple binary tree in Figure 1. Three different critical
+sections that operate on this tree, along with their ad-
+dress sets are listed in Table 1. Critical sections 1 and 2
+read many of the same memory locations, but only write
+to locations that are not in the other’s address sets. They
+are, therefore, data independent and could safely execute
+concurrently. This makes sense intuitively because they
+modify different branches of the tree. Critical section 3,
+however, modiﬁes the right pointer in the root of the tree,
+which cannot execute concurrently with critical sections
+that operate on the right branch of the tree. This is re-
+ﬂected in the address sets: 0x1032 is in Critical Section
+3’s write set and in the read sets of Critical Sections 1
+and 2.
+
+In our simple example, we can determine the data in-
+
+dependence of the critical sections by simple static anal-
+ysis. In most cases, however, static analysis is insufﬁ-
+cient because functions that modify a data structure gen-
+erally determine what to modify based on an input pa-
+rameter. Thus, the data independence of critical section
+executions largely depends on the program’s input, re-
+quiring investigation of the common case synchroniza-
+tion behavior in order to determine whether to employ
+optimistic concurrency.
+
+There are cases where the structure of the critical sec-
+tion code can limit concurrency.
+If most executions
+of a critical section are not data independent, but only
+conﬂict on a small portion of the address set, ﬁner-
+grained locking or data structure reorganization may re-
+move these conﬂicts. For instance, the SLOB allocator
+in the Linux kernel uses a shared pointer to available
+heap space that is read at the beginning and written at the
+end of every allocation. Thus, any two allocations will
+have needless conﬂicts on this pointer and will never be
+data independent.
+
+There are also cases where a high degree of data inde-
+pendence can be an argument for consolidation of over-
+lapping critical sections under optimistic concurrency.
+In a program with ﬁne-grained locking, multiple lock
+acquires and releases can be nested during overlapping
+critical sections to minimize the time a lock is held and
+increase performance.
+If, in an optimistic model, the
+outermost critical section is generally data independent,
+avoiding nested critical sections yields a worthwhile re-
+duction in code complexity and potential increase in per-
+formance.
+
+3 Syncchar
+
+To measure the data independence of critical sections,
+we present a tool called syncchar (synchronization char-
+acterization) that runs as a module in Virtutech Simics,
+version 3.0.17 [7]. Simics is a full-system, execution-
+based simulator. Syncchar tracks the synchronization
+behavior of the Linux kernel, including each lock ac-
+quire and release, contention for a lock acquire, and
+tracks the address set of memory locations read and writ-
+ten in the critical section.
+
+If a thread busy-waits to acquire a lock in the kernel,
+syncchar compares the thread’s address set when it com-
+pletes the critical section to the address sets of all crit-
+ical sections it waited on to determine if they conﬂict.
+If two threads that waited for the same lock touch com-
+pletely disjoint data, then they both could have optimisti-
+cally executed the critical section concurrently, rather
+than needlessly waiting on a lock.
+
+Comparing the address set of threads that happen to
+contend for a lock during one execution provides only
+a limited window into the latent concurrency of a lock-
+
+based application. To determine a more general limit on
+optimistic concurrency, when a lock is released, sync-
+char compares its address set to the address sets of the
+previous 128 critical sections protected by that lock. By
+recording and comparing the address sets for multiple
+critical sections, syncchar’s measurements are less sensi-
+tive to the particular thread interleaving of the measured
+execution.
+
+An ideal analysis would identify and compare all pos-
+sible concurrent executions, rather than just the last 128.
+However, this would require tracking events such as
+thread forks and joins that structure concurrent execu-
+tion. In addition, the number of possibly concurrent ex-
+ecutions could make comparing address sets infeasible
+for applications of substantial length. Comparing over a
+window of critical section executions captures many ex-
+ecutions that are likely to be concurrent, while minimiz-
+ing false conﬂicts that result from serialization through
+other mechanisms.
+
+Syncchar supports a window of 128 critical sections
+based on a sensitivity study of the window size. Chang-
+ing the window size from 50 to 100 affects the data inde-
+pendence results for most locks by less than 5%. As the
+largest commercial CMP effort to date is an 80 core ma-
+chine [1], 128 also represents a reasonable upper bound
+on the size of CMP’s likely to be developed in the near
+future.
+
+Syncchar only compares critical regions across differ-
+ent threads. Determining whether two executions of a
+critical section in the same thread can be parallelized is
+a more complex problem than determining whether crit-
+ical sections from different threads can be executed con-
+currently. If possible, this would require substantial code
+rewriting or some sort of thread-level speculation [14].
+However, this paper focuses only on the beneﬁts of re-
+placing existing critical sections with transactions.
+
+Syncchar ﬁlters a few types of memory accesses from
+the address sets of critical sections to avoid false con-
+ﬂicts. First, it ﬁlters out addresses of lock variables,
+which are by necessity modiﬁed in every critical sec-
+tion. It ﬁlters all lock addresses, not just the current lock
+address, because multiple locks can be held simultane-
+ously and because optimistic synchronization eliminates
+reads and writes of lock variables. Syncchar also ﬁl-
+ters stack addresses to avoid conﬂicts due to reuse of the
+same stack address in different activation frames.
+
+Some kernel objects, like directory cache entries, are
+recycled through a cache. The lifetime of locks con-
+tained in such objects is bounded by the lifetime of the
+object itself. When a directory cache entry emerges from
+the free pool, its lock is initialized and syncchar consid-
+ers it a new, active lock. The lock is considered inactive
+when the object is released back to the free pool. If the
+lock is made active again, its the address set history is
+
+Lock
+zone.lock
+ide lock
+runqueue t.lock (0xc1807500)
+zone.lru lock
+rcu ctrlblk.lock
+inode.i data.i mmap lock
+runqueue t.lock (0xc180f500)
+runqueue t.lock (0xc1847500)
+runqueue t.lock (0xc1837500)
+runqueue t.lock (0xc184f500)
+runqueue t.lock (0xc182f500)
+runqueue t.lock (0xc1817500)
+runqueue t.lock (0xc1857500)
+dcache lock
+ﬁles lock
+
+Total Acquires
+14,450
+4,669
+4,616
+16,186
+10,975
+1,953
+3,686
+2,814
+2,987
+3,523
+2,902
+3,224
+2,433
+15,358
+7,334
+
+Contended Acq
+396 (2.74%)
+212 (4.54%)
+143 (3.23%)
+131 (0.81%)
+84 (0.77%)
+69 (3.53%)
+62 (1.74%)
+27 (0.96%)
+24 (0.80%)
+22 (0.68%)
+24 (0.83%)
+17 (0.68%)
+20 (0.86%)
+21 (0.14%)
+20 (0.27%)
+
+Data Conﬂicts Mean Addr Set Bytes Mean Conﬂ Bytes
+50
+24
+112
+8
+4
+48
+118
+74
+100
+70
+103
+108
+100
+0
+8
+
+100.00%
+97.17%
+84.62%
+48.09%
+97.62%
+89.86%
+90.32%
+88.89%
+95.83%
+86.36%
+87.50%
+94.12%
+90.00%
+0.00%
+70.00%
+
+161
+258
+780
+134
+27
+343
+745
+530
+526
+416
+817
+772
+624
+0
+15
+
+Table 2: The ﬁfteen most contended spin locks during the pmake benchmark. Total Acquires is the number of times
+the lock was acquired by a process. Different instances of the same lock are distinguished by their virtual address.
+Contended Acq is the number of acquires that required a process had to spin before obtaining the lock, including
+the percent of total acquires. The Data Conﬂicts column lists the percentage of Contended Acquires that had a data
+conﬂict. Mean Addr Set Bytes is the average address set size of conﬂicting critical sections, whereas Mean Conﬂ
+Bytes is the average number of conﬂicting bytes.
+
+cleared, even though it resides at the same address as in
+its previous incarnation.
+
+Before scheduling a new process, the kernel acquires
+a lock protecting one of the runqueues. This lock is held
+across the context switch and released by a different pro-
+cess. As this lock is actually held by two processes dur-
+ing one critical section, Syncchar avoids comparing its
+address set to prior address sets from either process.
+
+Finally, some spinlocks protect against concurrent at-
+tempts to execute I/O operations, but do not actually
+conﬂict on non-I/O memory addresses. Syncchar cannot
+currently detect I/O, so results for locks that serialize I/O
+may falsely appear data independent.
+
+4 Experimental Results
+
+We run our experiments on a simulated machine with
+15 1 GHz Pentium 4 CPUs and 1 GB RAM. We use 15
+CPUs because that is the maximum supported by the In-
+tel 440-bx chipset simulated by Simics. For simplicity,
+our simulations have an IPC of 1 and a ﬁxed disk access
+latency of 5.5ms. Each processor has a 16KB instruc-
+tion cache and a 16KB data cache with a 0 cycle access
+latency. There is a shared 4MB L2 cache with an access
+time of 16 cycles. Main memory has an access time of
+200 cycles.
+
+We use version 2.6.16.1 of the Linux kernel. To
+simulate a realistic software development environment,
+our experiments run the pmake benchmark, which exe-
+cutes make -j 30 to compile 27 source ﬁles from the
+libFLAC 1.1.2 source tree in parallel.
+
+4.1 Data Independence of Contended Locks
+
+The data independence of the most contended kernel
+locks during the pmake benchmark is presented in Ta-
+ble 2. Columns 2 and 3 show the total number of times
+each lock was acquired and the percentage of those ac-
+quires which were contended. There are low levels of
+lock contention in the kernel for the pmake workload.
+For all locks, at least 95% of acquires are uncontended.
+Linux developers have invested heavy engineering effort
+to make kernel locks ﬁne-grained.
+
+Each time two or more threads contend for the same
+lock, syncchar determines whether the critical sections
+they executed have a data conﬂict (shown in column 4).
+These locks have a high rate of data conﬂict, indicating
+that 80–100% of the critical sections cannot be executed
+safely in parallel. Many of the locks in this list protect
+the process runqueues, which are linked lists. The linked
+list data structure is particularly ill-suited for optimistic
+concurrency because modiﬁcation of an element near the
+front will conﬂict with all accesses of elements after it in
+the list.
+
+regions
+
+There is one noteworthy lock that protects crit-
+ical
+that are highly data independent—
+dcache lock, a global, coarse-grained lock. The
+dcache lock protects the data structures associated
+with the cache of directory entries for the virtual ﬁlesys-
+tem. Directory entries represent all types of ﬁles, en-
+abling quick resolution of path names. This lock is held
+during a wide range of ﬁlesystem operations that often
+access disjoint regions of the directory entry cache.
+
+In the cases where the critical sections have data con-
+
+ﬂicts, we measured the number of bytes in each ad-
+dress set and the number of conﬂicting bytes, listed in
+Columns 5 and 6. A particularly small address set can
+indicate that the lock is already ﬁne grained and has lit-
+tle potential for optimistic execution. For example, the
+rcu ctrlblk.lock, protects a small, global control
+structure used to manage work for a Read-copy update
+(RCU). When this lock is held, only a subset of the struc-
+ture’s 4 integers and per-CPU bitmap are modiﬁed and
+the lock is immediately released. Our experimental data
+closely follows this pattern, with the lock’s critical sec-
+tions accessing an average of 7 bytes, 5 of which con-
+ﬂict.
+
+A larger working set with only a small set of con-
+ﬂicting bytes can indicate an opportunity for reorganiz-
+ing the data structure to be more amenable to optimistic
+synchronization. The zone.lru lock protects two
+linked lists of pages that are searched to identify page
+frames that can be reclaimed. Replacing the linked list
+with a data structure that avoided conﬂicts on traversal
+could substantially increase the level of data indepen-
+dence.
+
+4.2 The Limits of Kernel Data Independence
+
+To investigate the limits of data independence in the
+kernel, syncchar compares the address set of each crit-
+ical section to the address sets of the last 128 address
+sets for the same lock, as discussed in Section 3. The
+purpose of comparing against multiple address sets is to
+investigate how much inherent concurrency is present in
+the kernel.
+
+Amdahl’s law governs the speedup gained by exploit-
+ing the concurrency inherent within Linux’s critical sec-
+tions. Locks that are held for the longest period of
+time contribute the most to any parallel speedup, so
+the results in Table 3 are presented for the ten longest
+held locks. Conﬂicting acquires vary from 21%–100%,
+though the average data independence across all spin-
+locks, weighted by the number of cycles they are held, is
+24.1%. That level of data independence will keep an av-
+erage of 4 processors busy. Data structure reorganization
+can increase the amount of data independence.
+
+One interesting lock in Table 3 is the seqlock t.-
+lock. Seqlocks are a kernel synchronization primi-
+tive that provides a form of optimistic concurrency by
+allowing readers to speculatively read a data structure.
+Readers detect concurrent modiﬁcation by checking a
+sequence number before and after reading. If the data
+structure was modiﬁed, the readers retry. Seqlocks use
+a spinlock internally to protect against concurrent incre-
+ments of the sequence number by writers, effectively se-
+rializing writes to the protected data. Because the same
+sequence number is modiﬁed every time the lock is held,
+
+Lock
+zone.lock
+zone.lru lock
+ide lock
+runqueue t.lock (0xc1807500)
+runqueue t.lock (0xc180f500)
+inode.i data.i mmap lock
+runqueue t.lock (0xc1837500)
+seqlock t.lock
+runqueue t.lock (0xc1847500)
+runqueue t.lock (0xc183f500)
+
+Conﬂ Acq Mean Conﬂ Bytes
+20.40%
+20.10%
+19.03%
+24.50%
+23.20%
+16.53%
+19.15%
+48.41%
+19.55%
+18.37%
+
+100.00% 32.49
+6.63
+65.82%
+70.92%
+6.93
+27.41% 24.06
+29.14% 26.10
+46.03% 22.81
+27.30% 27.83
+100.00% 56.01
+23.32% 26.64
+21.03% 28.21
+
+Table 3: Limit study data from the ten longest held ker-
+nel spin locks during the pmake benchmark. This data is
+taken from comparing each address set to the last 128 ad-
+dress sets for that lock, rather than contended acquires,
+as in Table 2. Conﬂicting Acquires are the percent of
+acquires that have conﬂicting data accesses. Mean Con-
+ﬂicting Bytes shows the average number of conﬂicting
+bytes and their percentage of the total address set size.
+
+this lock’s critical section will never be data indepen-
+dent. Although this seems to limit concurrency at ﬁrst
+blush, there remains a great deal of parallelism in the
+construct because an arbitrarily large number of pro-
+cesses can read the data protected by the seqlock in par-
+allel. Sometimes locks that protect conﬂicting data sets
+are not indicators of limited concurrency because they
+enable concurrency at a higher level of abstraction.
+
+The data conﬂicts of ﬁne-grained locks can distract at-
+tention from the ability to concurrently access the larger
+data structure. The locks protecting the per-CPU data
+structure tvec base t from an occasional access by
+another CPU tend to have an extremely low degree of
+data independence because they are ﬁne grained. In the
+common case, however, the data these locks protect is
+only accessed by one CPU, which represents a large de-
+gree of overall concurrency. We leave extending this
+methodology to multiple levels of abstraction for future
+work.
+
+4.3 Transactional Memory
+
+To provide a comparison between the performance of
+lock-based synchronization and optimistic synchroniza-
+tion, we ran the pmake benchmark under syncchar on
+both Linux and on TxLinux with the MetaTM hardware
+transactional memory model [13]. TxLinux is a version
+of Linux that has several key synchronization primitives
+converted to use hardware transactions. Syncchar mea-
+sures the time spent acquiring spinlocks and the time lost
+to restarted transactions. For this workload, TxLinux
+converts 32% of the spinlock acquires in Linux to trans-
+actions, reducing the time lost to synchronization over-
+head by 8%. This reduction is largely attributable to re-
+moving cache misses for the spinlock lock variable. The
+
+syncchar data indicates that converting more Linux locks
+to transactions will yield speedups that can be exploited
+by 4–8 processors. However, gaining even greater con-
+currency requires data structure redesign.
+
+References
+
+5 Related work
+
+This paper employs techniques from parallel pro-
+gramming tools to evaluate the limits of optimistic con-
+currency. There is a large body of previous work
+on debugging and performance tuning tools for pro-
+grams [3, 15]. Our work is different from other tools
+because it is concerned more with identifying upper
+bounds on performance rather than performance tuning
+or verifying correctness.
+
+Lock-free (and modern variants like obstruction-free)
+data structures are data-structure speciﬁc approaches to
+optimistic concurrency [4, 5]. Lock-free data structures
+attempt to change a data structure optimistically, dy-
+namically detecting and recovering from conﬂicting ac-
+cesses.
+
+Transactional memory is a more general form of opti-
+mistic concurrency that allows arbitrary code to be exe-
+cuted atomically. Herlihy and Moss [6] introduced one
+of the earliest Transactional Memory systems. More re-
+cently, Speculative Lock Elision [10] and Transactional
+Lock Removal [11] optimistically execute lock regions
+transactionally. Several designs for full-function trans-
+actional memory hardware have been proposed [2,8,12].
+
+6 Conclusion
+
+This paper introduces a new methodology and tool
+for examining the potential beneﬁts of optimistic con-
+currency, based on measuring the data independence of
+critical section executions. Early results indicate that
+there is sufﬁcient data independence to warrant the use
+of optimistic concurrency on smaller multiprocessors,
+but data structure reorganization will be necessary to re-
+alize greater scalability. The paper motivates more de-
+tailed study of the relationship of concurrency enabled
+at different levels of abstraction, and the ease and efﬁ-
+cacy of data structure redesign.
+
+7 Acknowledgements
+
+We would like to thank the anonymous reviewers,
+Hany Ramadan, Christopher Rossbach, and Virtutech
+AB. This research is supported in part by NSF CISE Re-
+search Infrastructure Grant EIA-0303609 and NSF Ca-
+reer Award 0644205.
+
+[1] Michael Feldman. Getting serious about transac-
+
+tional memory. HPCWire, 2007.
+
+[2] L. Hammond, V. Wong, M. Chen, B. Carlstrom,
+J. Davis, B. Hertzberg, M. Prabhu, H. Wijaya,
+C. Kozyrakis, and K. Olukotun. Transactional
+memory coherence and consistency.
+In ISCA,
+2004.
+
+[3] J. Harrow. Runtime checking of multithreaded
+In SPIN, pages
+
+applications with visual threads.
+331–342, 2000.
+
+[4] M. Herlihy. Wait-free
+
+synchronization.
+
+In
+
+TOPLAS, January 1991.
+
+[5] M. Herlihy, V. Luchangco,
+
+and M. Moir.
+Obstruction-free synchronization: Double-ended
+queues as an example. In ICDCS, 2003.
+
+[6] M. Herlihy and J. E. Moss. Transactional mem-
+ory: Architectural support for lock-free data struc-
+tures. In ISCA, May 1993.
+
+[7] P.S. Magnusson, M. Christianson, and J. Eskilson
+et al. Simics: A full system simulation platform.
+In IEEE Computer vol.35 no.2, Feb 2002.
+
+[8] K. E. Moore, J. Bobba, M. J. Moravan, M. D. Hill,
+and D. A. Wood. LogTM: Log-based transactional
+memory. In HPCA, 2006.
+
+[9] C. Papadimitriou. The serializability of concur-
+rent database updates. J. ACM, 26(4):631–653,
+1979.
+
+[10] R. Rajwar and J. Goodman. Speculative lock eli-
+sion: Enabling highly concurrent multithreaded
+execution. In MICRO, 2001.
+
+[11] R. Rajwar and J. Goodman. Transactional lock-
+In ASP-
+
+free execution of lock-based programs.
+LOS, October 2002.
+
+[12] R. Rajwar, M. Herlihy, and K. Lai. Virtualizing
+
+transactional memory. In ISCA. 2005.
+
+[13] H.E. Ramadan, C.J. Rossbach, D.E. Porter, O.S.
+Hofmann, A. Bhandari, and E. Witchel. MetaT-
+M/TxLinux: Transactional memory for an operat-
+ing system. In ISCA, 2007.
+
+[14] J. G. Steffan, C. B. Colohan, A. Zhai, and T. C.
+Mowry. A scalable approach to thread-level spec-
+ulation. In ISCA, 2000.
+
+[15] Y. Yu, T. Rodeheffer, and W. Chen. Racetrack: Ef-
+ﬁcient detection of data race conditions via adap-
+tive tracking. In SOSP, 2005.
+
+

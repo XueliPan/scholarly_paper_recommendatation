@@ -1,0 +1,1028 @@
+21st International Symposium on Computer Architecture and High Performance Computing
+
+Exploiting computational resources in distributed heterogeneous platforms∗
+
+George Teodoro Rafael Sachetto Daniel Fireman
+
+Dorgival Guedes Renato Ferreira
+
+1Department of Computer Science
+Federal University of Minas Gerais
+
+{george,sachetto,ﬁreman,dorgival,renato}@dcc.ufmg.br
+
+Abstract
+
+We have been witnessing a continuous growth of both
+heterogeneous computational platforms (e.g., Cell blades,
+or the joint use of traditional CPUs and GPUs) and multi-
+core processor architecture; and it is still an open question
+how applications can fully exploit such computational po-
+tential efﬁciently. In this paper we introduce a run-time en-
+vironment and programming framework which supports the
+implementation of scalable and efﬁcient parallel applica-
+tions in such heterogeneous, distributed environments. We
+assess these issues through well-known kernels and actual
+applications that behave regularly and irregularly, which
+are not only relevant but also demanding in terms of compu-
+tation and I/O. Moreover, the irregularity of these, as well as
+many other applications poses a challenge to the design and
+implementation of efﬁcient parallel algorithms. Our exper-
+imental environment includes dual and octa-core machines
+augmented with GPUs and we evaluate our framework per-
+formance for standalone and distributed executions. The
+evaluation on a distributed environment has shown near to
+linear scale-ups for two data mining applications, while the
+applications performance, when using CPU and GPU, has
+been improved into around 25%, compared to the GPU-only
+versions.
+
+1 Introduction
+
+The design and implementation of efﬁcient parallel al-
+gorithms is a long term challenge, for which there have
+been solutions proposed at several levels such as architec-
+ture, programming environment, and the algorithm them-
+selves. Despite decades of research and development efforts
+in all these levels, there are several scenarios in which we
+are still searching for such efﬁcient algorithms, fueled by an
+
+∗This work was partially supported by INCTWeb, CNPq, CAPES,
+
+FINEP, and FAPEMIG.
+
+increasing amount of data to be processed, as well as more
+complex algorithms and techniques that are inherent to the
+evolution of each application area.
+
+Recently, advances in high-performance graphic cards
+(i.e., GPUs) and Field-programmable gate arrays (i.e FP-
+GAs) enabled their use beyond image renderization and
+computer hardware emulation, making them general pur-
+pose co-processors. The effective, concurrent use of all
+available devices into a distributed environment (which also
+include multi- or many-core) for the creation of efﬁcient
+parallel algorithms is a challenge, which we address in this
+work. Several factors add complexity to the problem, such
+as (i) the necessity of multiple programming models, (ii) the
+need for an adaptive load distribution strategy, since relative
+performances between devices can vary widely depending
+on the type of computation and (iii) the trade-offs associated
+with such heterogeneous architectures, when compared to
+clusters of single processors, once communication costs are
+much smaller and we need to exploit multiple processing
+units in each component.
+
+In this paper we present our ﬁrst step to enable design
+and implementation of efﬁcient parallel algorithms for clus-
+ters of heterogeneous computers, targeting the design of ap-
+plications that use GPUs and CPUs. Our approach is based
+on Anthill [4, 11], a programming environment that sup-
+ports the ﬁlter-stream paradigm. In this paradigm, the al-
+gorithm is decomposed into tasks that are performed by ﬁl-
+ters, which communicate through streams that carry data
+from one ﬁlter to the next. Applications parallelized using
+Anthill so far are scalable and efﬁcient, despite being of-
+ten irregular, and such performance was observed for both
+clusters and/or multi-core architectures. The efﬁciency of
+those applications comes from the fact that the model fa-
+vors the overlap of computation and communication even
+when tasks are ﬁne-grained [4].
+
+In our approach the programmer can focus on speciﬁc
+portions of code instead of the whole application, making
+it easier to provide alternate implementations to the same
+
+1550-6533/09 $26.00 © 2009 IEEE
+DOI 10.1109/SBAC-PAD.2009.14
+
+83
+
+ﬁlter, which may operate seamlessly on data from a single
+stream. When developing an Anthill ﬁlter, the program-
+mer creates handlers that are associated with the streams
+and called upon data arrival.
+In our approach to explore
+heterogeneous environments, we provided functionalities to
+associate multiple handler functions with a given stream.
+Thus, the handlers can be developed targeting different de-
+vices, and associated with the stream it processes. Finally,
+the framework can choose, from the data in a stream, the
+tasks suited for each component, since those tasks may be
+executed in any order.
+
+Besides describing our approach, we have evaluated it
+using regular and irregular applications that exploit both
+CPUs and GPUs. Our experiments show that we can make
+effective use of the available GPUs and CPUs, extracting
+speedups from all the available resources within a compute
+node. For two data mining applications, KNN and Eclat, we
+have achieved speedups on the order of 34.33 and 38.38 for
+a CPU and GPU combination by implementing a minor part
+of these applications into the GPU. Our main contributions
+are:
+
+• Extension of Anthill to exploit distributed heteroge-
+neous environments by enabling the programmer to
+provide multiple implementations of the data process-
+ing steps targeting multiple devices, which are chosen
+automatically by the system, on a per task basis;
+
+• An evaluation of two relevant data-mining applications
+using GPU and CPU as coprocessors, which presented
+gains around 25% compared to the GPU-only versions.
+
+The remainder of this paper is organized as follows: we
+describe Anthill and it extensions in Sections 2 and 3, re-
+spectively. We then proceed to a thorough experimental
+evaluation of the system, presented in Section 4. Finally,
+we describe some additional related work in Section 5 and
+present our conclusions in Section 6.
+
+2 Anthill
+
+The Anthill [4, 11] framework is a runtime system that
+In this
+employs the ﬁlter-stream programming model.
+model, applications are decomposed into a pipeline of pro-
+cessing units called ﬁlters. Data transfers between process-
+ing units are done through streams, that allow ﬁxed-size un-
+typed data buffers to ﬂow from one ﬁlter to another.
+
+When developing an application using the ﬁlter-stream
+model tasks and data parallelism are exposed. Task paral-
+lelism is achieved as the application is broken up in a set
+of ﬁlters, which independently perform their speciﬁc trans-
+formations in a pipeline fashion. Data parallelism, on the
+other hand, can be obtained by creating multiple (transpar-
+ent) copies of each ﬁlter and dividing the data to be pro-
+
+cessed among them. In Figure 1 we show a typical Anthill
+application.
+
+Figure 1. Anthill Application
+
+Anthill, moreover, introduced a third level of parallelism
+to the ﬁlter-stream model: asynchrony between iterations
+of loop applications. The applications in Anthill are often
+decomposed as a cyclic graph of computation and the exe-
+cution may consist of iterations over the graph. In this sce-
+nario, it is interesting to execute different iterations of the
+loop simultaneously, but there may be some state associated
+with all inter-dependent pieces of data and that can reside in
+only one ﬁlter instance and messages that modify this state
+should be routed through that speciﬁc instance. The ab-
+straction for that in the Anthill is called a labeled stream. It
+is created by allowing the programmer to associate a label
+with each message and a mapping function (hash) that asso-
+ciates each possible label with a speciﬁc ﬁlter instance [4].
+Filter programming in Anthill is event-based. The pro-
+grammer provides dependence matching functions that cor-
+relate data from multiple streams and event handling func-
+tions that process events when the dependencies are satis-
+ﬁed [11]. These event handlers implement the ﬁlters’ pro-
+cessing stages and they are asynchronous in the ﬁlter-stream
+model, meaning that, if resources are available, multiple
+events may be triggered in parallel. This feature has been
+fundamental to exploiting the full capability of the current
+multi-core architectures, shielding programmers from the
+multi-level parallelism details.
+
+3 Supporting Heterogeneous Platforms
+
+In this section we describe our approach towards exploit-
+ing heterogeneous resources available in a distributed mem-
+
+84
+
+ory machine. We base our solution on Anthill and make full
+use of the event-based data ﬂow model it exposes. We inte-
+grate additional modules to the ﬁlter run-time framework
+which allow Anthill to automatically choose among the
+available alternatives and dispatch the execution of events
+to different components concurrently. In this version, the
+event handlers may be implemented to either the CPU or
+the GPU, and data transfers and dependencies are handled
+transparently by the run-time system.
+
+The event driven model ﬁts nicely into this scenario for at
+least three reasons: (1) as long as the input and output data
+types associated with the events are matched, it makes no
+difference for the application’s result which device executes
+the computation, (2) as each processing task (event) only
+needs to satisfy its input dependencies to execute, the run-
+time system can schedule them to process into any available
+device as it is ready, and (3) the handler functions are well
+deﬁned and can be implemented in high level language ap-
+propriated to the device it is targeting.
+
+The decision space for the scheduler within this ap-
+proach is broad and involves more than just decisions about
+when and how many events should be dispatched in paral-
+lel. Since a heterogeneous set of processors may be avail-
+able, the runtime system must consider for which devices
+an event handler has been deﬁned, once the user does not
+have to provide handler implementations for all devices.
+
+Given such considerations, the decisions are taken on a
+per event basis, and may change for different events, even
+if they are of the same kind. This allows ﬁlters that can
+exploit different devices to be scheduled according to their
+availability, creating a very ﬂexible environment. Consid-
+ering a distributed memory machine with GPUs, this ex-
+tended Anthill is capable of scheduling events to GPUs on
+any node, for any ﬁlter that has a GPU-targeted implemen-
+tation. If a ﬁlter has both implementations, it can schedule
+events concurrently to both CPU and GPU transparently.
+
+The extended Anthill’s API provides additional function-
+alities to associate event handlers with different hardware
+devices and some wrapper functions, to abstract from the
+programmer some device particularities (e.g., memory man-
+agement). This API also includes a function, used by the
+ﬁlter developer, to register the handler into the run-time sys-
+tem, associating it to a stream and to the target device.
+
+Figure 2 depicts the architecture of the extended Anthill.
+A queue of independent events is built from multiple Anthill
+input streams that match a dependency vector. This portion
+of the implementation is very similar to the original event-
+driven Anthill [11]. The events are then processed by the
+Device Scheduler, which feeds different Event Executors.
+
+The Device Scheduler is the module responsible for
+scheduling events to be processed in a ﬁlter copy. It ab-
+stracts the decision of which event is the next to be pro-
+cessed and where it will happen. It keeps track of which
+
+F i l t e r
+
+E v e n t   H a n d l e r   1
+
+E v e n t   H a n d l e r   2
+
+E v e n t   H a n d l e r   X
+
+R u n - t i m e   s y s t e m   c o m p o n e n t s
+
+( E v e n t ,   P r o c T y p e )
+
+D e v i c e   S c h e d u l e r
+
+E v e n t   E x e c u t o r
+
+( C U D A / P t h r e a d s )
+
+G e t E v e n t ( P r o c T y p e )
+
+E v e n t s
+
+M e s s a g e s
+
+F i l t e r   E n v i r o n m e n t
+
+M e s s a g e s
+
+M e s s a g e s
+
+A n t h i l l
+
+Figure 2. Framework Architecture
+
+devices have handlers provided by the user and which are
+available at any given time.
+It uses that information to
+choose the event to be processed next by each device. In our
+prototype implementation, the default implemented sched-
+uler is the ﬁrst-come ﬁrst-served (FCFS), where the next
+event to be processed will be the oldest queued.
+
+The Event Executor is the module responsible for man-
+aging the available resources and dispatching the execution
+of the events on the compute nodes. This module abstracts
+the resource management, the process context switch, and
+other speciﬁc details of the various hardware. At the begin-
+ning of the execution it detects the available processors (i.e.,
+the number of CPUs, CPU cores and the installed GPUs).
+During execution, it assigns processes to run on each device
+according to user requirements.
+
+At run-time, the Event Executor creates the threads and
+associates them with the appropriate device. Each thread
+notiﬁes the Device Scheduler, whenever idle, with informa-
+tion about its associated device. The scheduler identiﬁes
+among the available events those for which there is a han-
+dler deﬁned for that device. Then it used a ﬁrst-come, ﬁrst-
+served policy to dispatch events for execution.
+
+4 Experimental Evaluation
+
+We evaluated the Anthill support of heterogeneous en-
+vironments using two representative applications among
+those that have been implemented using Anthill. In this sec-
+tion we describe these applications, the experimental setup
+and the results. In the experiments, we reserved one CPU
+core to manage the execution of the GPU.
+
+4.1 Applications
+
+This section describes the applications used for evaluat-
+ing our system.
+In particular, we chose two data mining
+applications that are representative and relevant, as well as
+
+85
+
+quite intuitive. We will brieﬂy describe each of these appli-
+cations and their parallelizations in the next sections.
+
+4.1.1 Association analysis
+
+Association analysis consists of identifying causal relation-
+ships between frequent co-occurring items in a database.
+Such relations are named association rules, and the ﬁrst
+step to compute them is to determine all co-occurring sets
+that appear in the database more frequently than a given
+threshold. A traditional algorithm to solve this problem is
+Eclat [12].
+
+Eclat is based on the principle that, in order for an item-
+set (a set of co-occurring items) with k items to be frequent,
+all of its subsets with k − 1 items must also be frequent.
+The algorithm then starts with an initial set of candidate
+itemsets, which includes all itemsets of size 1. Then, it com-
+putes the actual frequency of each of those candidates in the
+database. The candidate itemsets which are found to be fre-
+quent are then combined to produce new candidates of size
+2, which are then tested in the following interactions. The
+algorithm continues creating new candidates in that fashion
+until there are no more new candidates to be checked.
+
+The Eclat parallelization, as presented in Figure 3, has
+three ﬁlters. The Counter ﬁlter is responsible for count-
+ing the frequency of each candidate itemset. The Veriﬁer
+ﬁlter checks whether or not the overall frequency of a par-
+ticular itemset is above the given threshold and the Candi-
+date Generator ﬁlter creates new candidates based on previ-
+ous frequent itemsets. The Eclat algorithm implemented in
+Anthill exploits asynchrony in such a way that each Counter
+ﬁlter may process different itemsets, typically several of
+them simultaneously, using different transparent copies of
+the Counter ﬁlter.
+
+Figure 3. Eclat Filters
+
+During the development we identiﬁed the Counter as the
+most expensive stage of the algorithm. Therefore, we im-
+plemented a GPU handler version of it using CUDA [10].
+This handler receives a candidate itemset as input and cal-
+culates its local frequency.
+
+4.1.2 KNN
+
+KNN is a popular data mining algorithm for classiﬁcation.
+Classiﬁcation is a predictive task where we want to assign
+
+86
+
+classes (or categories) to unknown objects (which are usu-
+ally called the test set) using a model that was based on
+pre-classiﬁed objects (the training set). A classic algorithm
+for object classiﬁcation is the k-Nearest Neighbor (KNN),
+ﬁrst introduced by E. Fix and J. Hodges [5], which is based
+on the intuition that the neighborhood of an object contains
+similar objects. Thus, by analyzing its neighborhood, we
+should be able to determine its class.
+In practice, since
+deﬁning neighborhood may be hard, we use the k closest
+objects in terms of their attributes, which explains the algo-
+rithm’s denomination.
+
+The Anthill implementation of KNN uses three ﬁlters:
+Reader, Classiﬁer and Merger, as shown in Figure 4. The
+Reader ﬁlter is responsible for sending the training dataset
+and the objects to be classiﬁed to the Classiﬁer ﬁlter. The
+training dataset is divided among the Classiﬁer instances
+while the test dataset is broadcast to all of them. This
+strategy does not affect the performance of the algorithm,
+since the training dataset is usually much larger than the
+test dataset. Each instance of the Classiﬁer ﬁlter then com-
+putes, for each object of the test base, the distance to the
+objects in the training dataset that are assigned to that in-
+stance, and selects the k-closest training objects, which are
+sent to the Merger ﬁlter. The Merger ﬁlter receives the k-
+closest objects from each Classiﬁer instance, sort them and
+selects the global k-closest objects to assign the object to be
+classiﬁed to one class.
+
+Figure 4. KNN Filters
+
+In this case, the most expensive task is to calculate the
+Euclidean distance between the objects to be classiﬁed and
+the items in the training dataset, which is performed by the
+Classiﬁer ﬁlter. We then created a GPU handler function
+that uses CUDA [10] to calculate the distances of each ob-
+ject of the test dataset to the objects of the training set.
+Those distances are then copied to the CPU and the K small-
+est are sent to the Merge ﬁlter to, ﬁnally, be used to classify
+the document.
+
+4.2 Experimental Setup
+
+The experiments were performed using two clusters: (1)
+16 PCs connected using a Gigabit Ethernet Switch, where
+each node has an Intel Core 2 Duo CPU 2.13GHz, 2 GB
+of main memory, an NVIDIA GeForce 8800GT GPU with
+512MB of memory, and Linux operating system, kernel 2.6;
+(2) 4 PCs connected using a Gigabit Ethernet Switch, each
+
+node with dual quad-core AMD Opteron 2.00GHz proces-
+sors, 16GB of main memory, an NVIDIA GeForce GTX
+260 with 896MB of memory, and Linux operating system,
+kernel 2.6.
+
+In order to better understand the impact of our proposal,
+
+not impact signiﬁcantly to the performance. Thus, the appli-
+cation delivered performance is limited by its handlers im-
+plementation ability to exploit each processor, while Anthill
+uses the provided code for each available device with small
+impacts.
+
+we divided our experiments into two main scenarios:
+
+The comparisons to Mars were conducted using two ap-
+
+• Single Machine Analysis:
+
+In this analysis, we em-
+ploy just one machine containing one or more CPUs
+and one GPU. Our main goal is to evaluate how
+Anthill exploits the heterogeneous resources available.
+More speciﬁcally, we want to assess the trade-offs
+between CPU and GPU implementations, compare
+Anthill to Mars [7] (a shared-memory implementation
+of MapReduce for GPU), and evaluate the use of CPU
+and GPU as coprocessors.
+
+• Multi-Machine Analysis: In this scenario we analyzed
+the performance of the distributed version of the algo-
+rithms and the results from exploiting multi-level par-
+allelism.
+
+For KNN we used synthetic datasets varying the number
+of training set objects for each experiment, keeping the size
+of the test set and the number of dimensions of the objects
+ﬁxed to 4,000 and 256, respectively. We also created syn-
+thetic datasets for Eclat, varying the number of transactions
+and within a ﬁxed number of 128 attributes. We used the
+IBM synthetic database generator [1] to generate our input
+dataset for the itemset mining algorithm.
+
+In the distributed execution experiments, we varied the
+number of instances of the Counter and Merger (Eclat) and
+Classiﬁer (KNN) ﬁlters only, since they were the compute-
+intensive ﬁlters. In both cases, the remaining ﬁlters ran on
+a single machine, which never got saturated during the ex-
+periments.
+
+4.3 Single Machine Analysis
+
+As discussed, in a single machine, we performed a com-
+parative performance study of KNN and Eclat using both
+CPU and GPU, we also conducted a comparative study of
+Anthill against sequential hand-coded versions of KNN and
+Eclat, and Mars, a state-of-the-art MapReduce implementa-
+tion on graphics processors (GPUs).
+
+4.3.1 Framework Performance Evaluation
+
+When comparing the Anthill versions of the applications,
+which communicates through the network, to the sequential
+hand-coded GPU versions, the total execution times for the
+Anthill versions are only 1,2% and 1,6% more, for KNN
+and Eclat, respectively. It shows that our framework does
+
+plications that it originally implemented:
+
+Matrix Multiplication (MM): is an application widely
+used in several scenarios, as to calculate the relationship be-
+tween documents. This MM implementation takes two ma-
+trices M and N as input, and calculates the multiplication of
+each row from M and each column from N. The generated
+outputs are the row and column IDs, and the multiplication
+result.
+
+Similarity Score (SS): is an application for clustering
+web documents. It uses a vector of features to represent the
+documents, and based on this ﬁltered characteristics it com-
+putes the similarity between document pairs. The similarity
+
+~b
+~a ·
+~b|
+|~a| · |
+
+of a pair of documents is deﬁned as
+
+. As in Mars, we
+
+create a matrix of characteristics for each document, calcu-
+late the distances between them, and output the distances as
+the application’s result.
+
+The evaluation has been performed using input datasets,
+generated by the original Mars applications, of 4096x4096
+and 2048x2048 for MM and SS, respectively. Considering
+Mars executions as a baseline, Anthill’s versions achieved
+speedups 1.95 and 1.26, respectively. The performance dif-
+ferences may be explained by the fact the MM tasks are
+simpler than SS, and Mars makes multiple kernel calls for
+each application, adding an extra overhead per task, which
+means that for expensive tasks, the Mars amortized over-
+head becomes negligible and vice-versa.
+
+4.3.2 KNN and Eclat Evaluation
+
+In this section we analyze the KNN and Eclat performance.
+For the CPU-only version of the algorithms, we varied the
+number of threads running in the Merger and Classiﬁer ﬁl-
+ter, which are the most costly stages. Our evaluation have
+been conducted using databases containing 160,000 train-
+ing objects and 768,000 transactions for KNN and Eclat,
+respectively.
+
+Figure 5 shows the KNN speedup, which is calculated
+based on the execution time of the single-threaded CPU-
+only version. When using 8 threads, as shown, we achieved
+near to linear speedup, while the application’s GPU based
+version have an speedup of 31.48.
+
+The Eclat performance, presented in the Figure 5, has
+also been compared to the single-threaded CPU-only ver-
+sion. For this application, the speedup using 8 cores is 7.75
+and the GPU based version achieved a speedup of 27.33.
+
+Finally, in the Figure 5, we evaluate the use of CPU
+
+87
+
+e
+m
+
+i
+t
+ 
+n
+o
+i
+t
+u
+c
+e
+x
+E
+
+e
+m
+
+i
+t
+ 
+
+n
+o
+
+i
+t
+
+u
+c
+e
+x
+E
+
+ 120
+
+ 100
+
+ 80
+
+ 60
+
+ 40
+
+ 20
+
+ 0
+
+ 160
+
+ 140
+
+ 120
+
+ 100
+
+ 80
+
+ 60
+
+ 40
+
+ 20
+
+ 0
+
+1 CPU thread
+8 CPU threads
+GPU
+GPU + 7 CPU threads
+
+p
+u
+d
+e
+e
+p
+S
+
+ 42
+ 40
+ 38
+ 36
+ 34
+ 32
+ 30
+ 28
+ 26
+ 24
+ 22
+ 20
+ 18
+ 16
+ 14
+ 12
+ 10
+ 8
+ 6
+ 4
+ 2
+ 0
+
+KNN
+
+Eclat
+
+Figure 5. KNN and Eclat speedup
+
+and GPU as coprocessors for both applications. The results
+shown that, when using 7 CPU cores in coordination with
+the GPU, we had improvements of 22.5% and 25.6% com-
+paring to the GPU-only version of the applications.
+
+4.4 Multi Machine Analysis
+
+In order to evaluate the performance of the distributed
+versions of KNN and Eclat implemented using Anthill, we
+performed scale-up tests for both algorithms. The scalabil-
+ity results are shown in Figure 6 and Figure 7.
+
+For KNN, we scaled the training set from 400,000 to
+6,000,000 objects according to the number of nodes for a
+ﬁxed number of 1,000 test objects, and 100 dimensions in
+the dual-core machine cluster, while in the octa-core clus-
+ter we scaled the training set from 160,000 up to 720,000,
+using a ﬁxed number of 4,000 test objects and 256 dimen-
+sions. For Eclat, the dataset transactions sizes varied from
+800,000 to 12,000,000 transactions to the dual-core, and
+from 768,000 to 3,072,000 transactions to the octa-core,
+with a ﬁxed number of 128 possible attributes. In both ex-
+periments the smallest dataset is used for 1 machine and the
+dataset increases proportionally to the number of nodes.
+
+The results show that both algorithms scaled up near to
+linear the dual and octa-core clusters, since execution times
+remain almost the same as we increased the number of ma-
+chines and the database size proportionally. For instance,
+when using 16 machines we spent almost the same time
+than the single machine conﬁguration, but we processed a
+dataset which is 16 times bigger.
+
+GPU
+GPU and CPU
+
+ 0
+
+ 2
+
+ 4
+
+ 6
+
+ 8
+
+ 10  12  14  16
+
+Number of machines
+
+(a) Eclat scaleup - Dual-core
+
+GPU
+GPU and CPU
+
+ 1
+
+ 2
+
+ 3
+
+ 4
+
+Number of machines
+
+(b) Eclat scaleup - Octa-core
+
+Figure 6. Eclat Scaleups
+
+5 Related Work
+
+We have recently seen a growing number of projects that
+focus on developing frameworks for high performance com-
+puting whose models are derived from the data-ﬂow com-
+puting model, e.g., MapReduce [3], SPC [2], and Dryad [8].
+These initiatives are mainly driven by the need to process a
+large amount of data from several scenarios (for instance,
+streaming digital data, biomedical image analysis, and web
+based information), and by the data-ﬂow model inherent
+parallelism.
+
+Although these systems have contributed signiﬁcantly to
+the state-of-art, developing new important features, for ex-
+ample, DataCuter has created the transparent copies mech-
+anism, which replicate the processing stages providing data
+parallelism, and SPC which is able to dynamically add and
+manage streams, their focus is not to use efﬁciently heter-
+
+88
+
+e
+m
+
+i
+t
+ 
+n
+o
+i
+t
+u
+c
+e
+x
+E
+
+e
+m
+
+i
+t
+ 
+
+n
+o
+
+i
+t
+
+u
+c
+e
+x
+E
+
+ 180
+ 160
+ 140
+ 120
+ 100
+ 80
+ 60
+ 40
+ 20
+ 0
+
+ 60
+
+ 50
+
+ 40
+
+ 30
+
+ 20
+
+ 10
+
+ 0
+
+ 1
+
+GPU
+GPU and CPU
+
+ 0
+
+ 2
+
+ 4
+
+ 6
+
+ 8
+
+ 10  12  14  16
+
+Number of machines
+
+(a) KNN scaleup - Dual-core
+
+GPU
+GPU and CPU
+
+ 2
+
+ 3
+
+ 4
+
+Number of machines
+
+(b) KNN scaleup - Octa-core
+
+Figure 7. KNN Scaleups
+
+ogeneous environments, like a cluster of CPUs and GPUs.
+Anthill is the ﬁrst middleware to provide such application
+development support in distributed environments, to the
+best of our knowledge.
+
+Different works have demonstrated the efﬁciency of
+the heterogeneous parallelism for centralized resources.
+Mars [7] is one of such systems.
+It is an implementa-
+tion of the MapReduce programming model in the context
+of GPUs. The Mars application implements a subset of
+the MapReduce API in order to allow the development of
+MapReduce applications in such environments. The work
+demonstrates the efﬁciency of the run-time system show-
+ing speedups between 1.5 and 16 for six applications previ-
+ously developed using Phoenix. That work also performed
+a very initial investigation of the gains from using GPU and
+CPU cooperatively. That evaluation was performed by di-
+viding the tasks of the MapReduce stages statically accord-
+
+89
+
+ing to the speedup between Phoenix and Mars, and process-
+ing each of the tasks’ subsets in one of the systems. The
+proposal of the Mars is interesting, but it is also limited to
+a single machine and do not fulﬁll the original goal of dis-
+tributed massive computing of the MapReduce programing
+framework [3]. In this paper we also developed and evalu-
+ated a system which is helpful for developing applications
+that run on GPU, CPU, or both, collaboratively. Anthill is a
+framework for development of applications on the scenario
+of distributed heterogeneous multi-processor and multi-core
+environments. It includes the use of GPU and CPU as co-
+processors scheduling tasks dynamically between proces-
+sors as they become available.
+
+The Merge framework [9] is another interesting pro-
+gramming model for heterogeneous environment, which, as
+Mars, proposed an implementation of Map-Reduce to GPU
+and evaluated the use of CPU and GPU as coprocessors, but
+it also is limited to a single process node. In this paper, we
+also use GPU, CPU, or both, collaboratively, but differently
+from Mars and Merge, our approach is not limited to a sin-
+gle machine, as we show in Section 4, and the programmer
+has more ﬂexibility as it can develop the application pro-
+cessing stages into the most suitable device.
+
+Hartley et al. [6] present a study of a biomedical im-
+age analysis application on cluster of GPUs and multi-cores
+machines. Their work shows the CUDA development pro-
+cess, including optimization issues, using a biomedical im-
+age processing application as an example.
+In our work
+we present a programming run-time system which provides
+an abstraction to exploit processing on clusters of CPUs
+and GPUs, and not only an application. The applications
+we present are ﬁne-grained, data-dependent, and they still
+achieved good speedups.
+
+6 Conclusions and Future Work
+
+In this paper we extended the Anthill, a stream-based and
+event-oriented run-time environment, to efﬁcient exploita-
+tion of heterogeneous environments. It creates a multi-level
+parallel execution model which efﬁciently exploits hetero-
+geneous multiprocessors machines in distributed systems,
+such as a cluster of CPUs and GPUs machines.
+
+The Anthill’s evaluation was performed using two ap-
+plications that are regular and irregular: k-nearest neigh-
+bors search (KNN) and Eclat. These applications presented
+speedups of up to 34.33 and 38.38 when using the GPU and
+CPU as co-processors, respectively. We have also compared
+Anthill to Mars, a state-of-the-art MapReduce implementa-
+tion on GPUs, and our experiments showed better speedups
+for the two applications originally implemented in Mars.
+
+Our distributed versions of the algorithms, which have
+been implemented using Anthill, showed near linear scale-
+up for both applications. As future work, we are considering
+
+[9] M. D. Linderman, J. D. Collins, H. Wang, and T. H.
+Meng. Merge: a programming model for heteroge-
+neous multi-core systems. SIGPLAN Not., 43(3):287–
+296, 2008.
+
+[10] NVIDIA. NVIDIA CUDA Compute Uniﬁed Device
+
+Architecture - Programming Guide, 2007.
+
+[11] G. Teodoro, D. Fireman, D. Guedes, W. M. Jr., and
+R. Ferreira. Achieving multi-level parallelism in ﬁlter-
+labeled stream programming model. In The 37th Inter-
+national Conference on Parallel Processing (ICPP),
+2008.
+
+[12] M. J. Zaki, S. Parthasarathy, M. Ogihara, and W. Li.
+New algorithms for fast discovery of association rules.
+In D. Heckerman, H. Mannila, D. Pregibon, R. Uthu-
+rusamy, and M. Park, editors, In 3rd Intl. Conf. on
+Knowledge Discovery and Data Mining, pages 283–
+296. AAAI Press, 12–15 1997.
+
+the extension of our framework to the context of many-core
+architectures, the porting of other applications, and further
+studies on possible dynamic scheduling policies, for exam-
+ple, by grouping tasks before submitting them to the GPU
+so that it reduces communication overheads.
+
+References
+
+[1] Ibm almaden research center: Synthetic data gener-
+ation code for associations and sequential patterns -
+http://www.almaden.ibm.com, 2007.
+
+[2] L. Amini, H. Andrade, R. Bhagwan, F. Eskesen,
+R. King, P. Selo, Y. Park, and C. Venkatramani. Spc:
+a distributed, scalable platform for data mining.
+In
+DMSSP ’06: Proceedings of the 4th international
+workshop on Data mining standards, services and
+platforms, pages 27–37, New York, NY, USA, 2006.
+ACM.
+
+[3] J. Dean and S. Ghemawat. MapReduce: Simpliﬁed
+data processing on large clusters. In Proceedings of
+the Sixth Symposium on Operating System Design and
+Implementation (OSDI’04), pages 137–150, Dezem-
+bro 2004.
+
+[4] R. Ferreira, W. M. Jr., D. Guedes, L. Drummond,
+B. Coutinho, G. Teodoro, T. Tavares, R. Araujo, and
+G. Ferreira. Anthill:a scalable run-time environment
+for data mining applications. In Symposium on Com-
+puter Architecture and High-Performance Computing
+(SBAC-PAD), 2005.
+
+[5] E. Fix and J. Hodges.
+
+Discriminatory analysis,
+nonparametric discrimination, consistency properties.
+Computer science technical report, School of Aviation
+Medicine, Randolph Field, Texas, 1951.
+
+[6] T. D. Hartley, U. V. Catalyurek, A. Ruiz, M. Ujaldon,
+F. Igual, and R. Mayo. Biomedical image analysis on
+a cooperative cluster of gpus and multicores. In 22nd
+ACM Intl. Conference on Supercomputing, Dec 2008.
+
+[7] B. He, W. Fang, Q. Luo, N. K. Govindaraju, and
+T. Wang. Mars: A mapreduce framework on graphics
+processors. In Parallel Architectures and Compilation
+Techniques, 2008.
+
+[8] M. Isard, M. Budiu, Y. Yu, A. Birrell, and D. Fetterly.
+Dryad: distributed data-parallel programs from se-
+quential building blocks. In EuroSys ’07: Proceedings
+of the 2nd ACM SIGOPS/EuroSys European Confer-
+ence on Computer Systems 2007, pages 59–72, New
+York, NY, USA, 2007. ACM.
+
+90
+
+

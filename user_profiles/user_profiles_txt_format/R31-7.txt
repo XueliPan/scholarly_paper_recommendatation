@@ -1,0 +1,1132 @@
+0
+1
+0
+2
+
+ 
+
+p
+e
+S
+9
+1
+
+ 
+
+ 
+ 
+]
+
+C
+D
+.
+s
+c
+[
+ 
+ 
+
+1
+v
+5
+6
+6
+3
+
+.
+
+9
+0
+0
+1
+:
+v
+i
+X
+r
+a
+
+A Dynamic Data Middleware Cache for
+Rapidly-growing Scientiﬁc Repositories
+
+2 Dept. of Computer Science, 4 Dept. of Physics and Astronomy,
+
+Tanu Malik1, Xiaodan Wang2, Philip Little3,
+
+Amitabh Chaudhary3, Ani Thakar4
+
+1 Cyber Center, Purdue University
+
+tmalik@cs.purdue.edu
+
+Johns Hopkins University
+
+xwang@cs.jhu.edu, thakar@pha.jhu.edu
+3 Dept. of Computer Science and Engg.,
+
+University of Notre Dame
+
+achaudha, plittle@cse.nd.edu
+
+Abstract. Modern scientiﬁc repositories are growing rapidly in size. Scientists
+are increasingly interested in viewing the latest data as part of query results.
+Current scientiﬁc middleware cache systems, however, assume repositories are
+static. Thus, they cannot answer scientiﬁc queries with the latest data. The
+queries, instead, are routed to the repository until data at the cache is refreshed.
+In data-intensive scientiﬁc disciplines, such as astronomy, indiscriminate query
+routing or data refreshing often results in runaway network costs. This severely
+aﬀects the performance and scalability of the repositories and makes poor use
+of the cache system. We present Delta a dynamic data middleware cache system
+for rapidly-growing scientiﬁc repositories. Delta’s key component is a decision
+framework that adaptively decouples data objects—choosing to keep some data
+object at the cache, when they are heavily queried, and keeping some data ob-
+jects at the repository, when they are heavily updated. Our algorithm proﬁles
+incoming workload to search for optimal data decoupling that reduces network
+costs. It leverages formal concepts from the network ﬂow problem, and is ro-
+bust to evolving scientiﬁc workloads. We evaluate the eﬃcacy of Delta, through
+a prototype implementation, by running query traces collected from a real as-
+tronomy survey.
+Keywords: dynamic data, middleware cache, network traﬃc, vertex cover, ro-
+bust algorithms
+
+1
+
+Introduction
+
+Data collection in science repositories is undergoing a transformation. This is re-
+markably seen in astronomy. Earlier surveys, such as the Sloan Digital Sky Survey
+(SDSS) [33, 40] collected data at an average rate of 5GB/day. The collected data was
+added to a database repository through an oﬀ-line process; the new repository was
+periodically released to users. However, recent surveys such as the Panoramic Survey
+Telescope & Rapid Response System (Pan-STARRS) [30] and the Large Synoptic Sur-
+vey Telescope (LSST) [23] will add new data at an average rate considerably more
+
+than 100 GB/day! Consequently, data collection pipelines have been revised to facili-
+tate continuous addition of data to the repository [18]. Such a transformation in data
+collection impacts how data is made available to users when remote data middleware
+systems are employed.
+
+Organizations deploy data middleware systems to improve data availability by re-
+ducing access times and network traﬃc [3, 34]. A critical component of middlewares
+systems are database caches that store subsets of repository data in close proximity to
+users and answer most user queries on behalf of the remote repositories. Such caches
+worked well with the old, batch method of data collection and release. But when data
+is continuously added to the repositories, cached copies of the data rapidly become
+stale. Serving stale data is unacceptable in sciences such as astronomy where users are
+increasingly interested in the latest observations. Latest observations of existing and
+new astronomical bodies play a fundamental role in time-domain studies and light-
+curve analysis [17,32]. To keep the cached copies of the data fresh, the repository could
+continuously propagate updates to the cache. But this results in runaway network costs
+in data-intensive applications.
+
+Indeed, transforming data middlewares to cache dynamic subsets of data for rapidly
+growing scientiﬁc repositories is a challenge. Scientiﬁc applications have dominant char-
+acteristics that render dynamic data caches proposed for other applications untenable.
+Firstly, scientiﬁc applications are data intensive. In PAN-STARRS for instance, as-
+tronomers expect daily data additions of atleast 100GB and a query traﬃc of 10TB
+each day. Consequently a primary concern is minimizing network traﬃc. Previously
+proposed dynamic data caches for commercial applications such as retail on the Web
+and stock market data dissemination have a primary goal of minimizing response time
+and minimizing network traﬃc is orthogonal. Such caches incorporate latest changes by
+either (a) invalidating subsets of cached data and then propagating updates or shipping
+queries, or (b) by proactively propagating updates at a ﬁxed rate. Such mechanisms are
+blind to actual queries received and thus generate unacceptable amounts of network
+traﬃc.
+
+Secondly, scientiﬁc query workloads exhibit a constant evolution in the queried data
+objects and the query speciﬁcation; a phenomenon characteristic of the serendipitous
+nature of science [25, 35, 42]. The evolution often results in entirely diﬀerent sets of
+data objects being queried in a short time period. In addition, there is no single query
+template that dominates the workload. Thus, it is often hard to extract a representative
+query workload. For an evolving workload, the challenge is in making robust decisions—
+that save network costs and remain proﬁtable over a long workload sequence. Previously
+proposed dynamic data caches often assume a representative workload of point or range
+queries [5, 9, 10].
+
+In this paper, we present Delta a dynamic data middleware cache system for rapidly
+growing scientiﬁc repositories. Delta addresses these challenges by incorporating two
+crucial design choices:
+
+(A) Unless a query demands, no new data addition to the repository is propagated
+to the cache system, If a query demands the latest change, Delta ﬁrst invalidates the
+currently available stale data at the cache. The invalidation, unlike previous systems [6,
+34], is not followed by indiscriminate shipping of queries or updates; Delta incorporates
+
+a decision framework that continually compares the cost of propagating new data
+additions to the cache with the cost of shipping the query to the server, and adaptively
+decides whether it is proﬁtable to ship queries or to ship updates.
+
+(B) In Delta, decisions are not made based on assuming some degree of workload
+stability. Often frameworks assume prior workload to be an indicator of future ac-
+cesses. Such assumptions of making statistical correlation on workload patterns lead to
+ineﬃcient decisions, especially in the case of scientiﬁc workloads that exhibit constant
+evolution.
+
+To eﬀectively implement the design choices, the decision framework in Delta decou-
+ples data objects; it chooses to host data objects for which it is cheaper to propagate
+updates, and not host data objects for which it is cheaper to ship queries. The decou-
+pling approach naturally minimizes network traﬃc. If each query and update accesses a
+single object, the decoupling problem requires simple computation: if the cost of query-
+ing an object from the server exceeds the cost of keeping it updated at the cache, then
+cache it at the middleware, otherwise not. However, scientiﬁc workloads consist of SQL
+queries that reference multiple data objects. A general decoupling problem consists of
+updates and queries on multiple data objects. We show how the general decoupling
+problem is a combinatorial optimization problem that is NP-hard.
+
+We develop a novel algorithm, VCover, for solving the general decoupling problem.
+VCover is an incremental algorithm developed over an oﬄine algorithm for the network
+ﬂow problem. VCover minimizes network traﬃc by proﬁling costs of incoming workload;
+it makes the best network cost optimal decisions as are available in hindsight. It is
+robust to changes in workload patterns as its decision making is grounded in online
+analysis. The algorithm also adapts well to a space constrained cache. It tracks an
+object’s usage and makes load and eviction decisions such that at any given time the
+set of objects in cache satisfy the maximum number of queries from the cache. We
+demonstrate the advantage of VCover for the data decoupling framework in Delta by
+presenting Beneﬁt, a heuristics based greedy algorithm that can also decouple data
+objects. Algorithms similar to Beneﬁt are commonly employed in commercial dynamic
+data caches [21].
+
+We perform a detailed experimental analysis to test the validity of the decoupling
+framework in real astronomy surveys. We have implemented both VCover and Beneﬁt and
+experimentally evaluated their performance using more than 3 Terabyte of astronomy
+workload collected from the Sloan Digital Sky Survey. We also compare them against
+three yardsticks: NoCache, Replica and SOptimal. Our experimental results show that
+Delta (using VCover) reduces the traﬃc by nearly half even with a cache that is one-
+ﬁfth the size of the server repository. Further, VCover outperforms Beneﬁt by a factor
+that varies between 2-5 under diﬀerent conditions. It’s adaptability helps it maintain
+a steady performance in the scientiﬁc real-world, where queries do not follow any clear
+patterns.
+RoadMap: We discuss related works in Section 2. The science application, i.e., the
+deﬁnition of data objects, and the speciﬁcation of queries and updates is described
+in Section 3. In this Section, we also describe the problem of decoupling data objects
+between the repository and the cache. An oﬄine approach to the data decoupling
+problem is described in Section 3.1. In Section 4, we describe an online approach,
+
+VCover, to the data decoupling problem. This approach does not make any assumptions
+about workload stability. An alternative approach, Beneﬁt, which is based on workload
+stability is described in Section 5. We demonstrate the eﬀectiveness of VCover over
+Beneﬁt in Section 6. Finally, in Section 7 we present our conclusions and future work.
+
+2 Related Work
+
+The decoupling framework proposed in Delta to minimize network traﬃc and improve
+access latency is similar to the hybrid shipping model of Mariposa [38,39]. In Mariposa,
+processing sites either ship data to the client or ship query to the server for processing.
+This paradigm has also been explored in OODBMSs [11,22] More recently, applications
+use content distribution networks for eﬃciently delivering data over the Internet [31].
+However, none of these systems consider propagating updates on the data [28]. In Delta
+the decoupling framework includes all aspects of data mobility, which include query
+shipping, update propagation and data object loading.
+
+Deolasee et al. [10] consider a proxy cache for stock market data in which, adaptively,
+either updates to a data object are pushed by the server or are pulled by the client. Their
+method is limited primarily to single valued objects, such as stock prices and point
+queries. The tradeoﬀ between query shipping and update propagation are explored
+in online view materialization systems [20, 21]. The primary focus is on minimizing
+response time to satisfy currency of queries. In most systems an unlimited cache size
+is assumed. To compare, in Beneﬁt we have developed an algorithm that uses workload
+heuristics similar to the algorithm developed in [21]. The algorithm minimizes network
+traﬃc instead of response time. Experiments show that such algorithms perform poorly
+on scientiﬁc workloads.
+
+More recent work [16] has focused on minimizing the network traﬃc. However the
+problem is focused on communicating just the current value of a single object. As a
+result the proposed algorithms do not scale for scientiﬁc repositories in which objects
+have multiple values. Alternatively, Olston et al. [27, 29] consider the precision-based
+approach to reduce network costs. In their approach, users specify precision require-
+ments for each query, instead of currency requirements or tolerance for staleness. In
+scientiﬁc applications such as the SDSS, users have zero tolerance for approximate or
+incorrect values for real attributes as an imprecise result directly impacts scientiﬁc
+accuracy.
+
+Finally, there are several dynamic data caches that maintain currency of cached
+data. These include DBProxy [1], DBCache [3], MTCache [14] and TimesTen [41] and
+the more recent [13]. These systems provide a comprehensive dynamic data caching
+infrastructure that includes mechanisms for shipping queries and updates, deﬁning data
+object granularity and specifying currency constraints. However, they lack a decision
+framework that adaptively chooses between query shipping and update propagation
+and data loading; any of the data communication method is deemed suﬃcient for
+query currency.
+
+Fig. 1. The Delta architecture.
+
+3 Delta: A Dynamic Data Middleware Cache
+
+We describe the architectural components in Delta and how data is exchanged between
+the server repository and the cache (See Figure 1). Data of a scientiﬁc repository is
+stored in a relational database system. While the database provides a natural partition
+of the data in the form of tables and columns, often spatial indices are available that
+further partition the data into “objects” of diﬀerent sizes. A rapidly-growing repository
+receives updates on these data objects from a data pipeline . The updates, predom-
+inantly, insert data into, and in some cases, modify existing data objects. Data is
+never deleted due to archival reasons. We model a repository as a set of data objects
+S = o1, . . . , oN . Each incoming update u aﬀects just one object o(u), as is common in
+scientiﬁc repositories.
+
+Data objects are stored at the cache of the middleware system to improve data
+availability and reduce network traﬃc. The cache is located along with or close to the
+clients, and thus “far” from the repository. The cache has often much less capacity than
+the original server repository and is thus space-constrained. We model the cache again
+as a subset of data objects C = o1, . . . , on. The objects are cached in entirety or no part
+of it is cached. This simpliﬁes loading of objects. Objects at the cache are invalidated
+when updates arrive for them at the server. Each user query, q, is a read-only SQL-like
+query that accesses data from a set of data objects B(q). The cache answers some
+queries on the repository’s behalf. Queries that cannot be answered by the cache are
+routed to the repository and answered directly from there. To quantify its need for
+latest data, queries may include user or system speciﬁed currency requirements in form
+of a tolerance for staleness t(q), deﬁned as follows: Given t(q), an answer to q must
+incorporate all updates received on each object in B(q) except those that arrived within
+the last t(q) time units. This is similar to the syntax for specifying t(q) as described
+in [14]. The lower the tolerance, the stricter is the user’s need for current data.
+
+To satisfy queries as per their tolerance for staleness, the cache chooses between the
+three available communication mechanisms: (a) update shipping, (b) query shipping, and
+(c) object loading. To ship updates, the system sends an update speciﬁcation including
+any data for insertion and modiﬁcation to be applied on the cached data objects. In
+shipping queries, the system redirects the query to the repository. The up-to-date result
+is then sent directly to the client. Through the object loading mechanism, the cache
+loads objects not previously in the cache, provided there is available space to load. The
+three mechanisms diﬀer from each other in terms of semantics and the cost of using
+
+MiddlewareCacheAstronomersTelescopeLANQueriesResultsQueryShippingQuery ResultsUpdatesUpdate ShippingObject LoadingRepositoryData ProcessingMinimize network trafficthem. For instance, in update shipping only the newly inserted tuples to an object are
+shipped whereas in object loading the entire data object (including the updates) is
+shipped.
+
+The system records the the cost of using each of the data communication mecha-
+nism. In Delta, we have currently focused on the network traﬃc costs due to the use of
+these mechanisms. Latency costs are discussed in Section 4. Network traﬃc costs are
+assumed proportional to the size of the data being communicated. Thus when an object
+o is loaded, a load cost, ν(o), proportional to the object’s size is added to the total
+network traﬃc cost. For each query q or update u shipped a network cost ν(q) or ν(u)
+proportional to the size of q’s result or the size of data content in u is added respec-
+tively. The proportional assumption relies on networks exhibiting linear cost scaling
+with object size, which is true for TCP networks when the transfer size is substantially
+larger than the frame size [37]. The quantitative diﬀerence in costs between the three
+mechanisms is described through an example in Section 3.1.
+
+In Delta the diﬀerence, in terms of cost, of using each communication mechanism
+leads to the formulation of the data decoupling problem. We ﬁrst describe the problem
+in words and then for ease of presentation also provide a graph-based formulation.
+
+The data decoupling problem: In the data decoupling problem we are given the set
+of objects on the repository, the online sequence of user queries at the cache, and the
+online sequence of updates at the repository. The problem is to decide which objects to
+load into the cache from the repository, which objects to evict from the cache, which
+queries to ship to the repository from the cache, and which updates to ship from the
+repository to the cache such that (a) the objects in cache never exceed the cache size,
+(b) each query is answered as per its currency requirement, and (c) the total costs,
+described next, are minimized. The total costs are the sum of the load costs for each
+object loaded, the shipping costs for each query shipped, and the shipping costs for
+each update shipped.
+Graph-based formulation: The decoupling problem given a set of objects in the
+cache, can be visualized through a graph G(V, E) in which the vertices of the graph
+are queries, updates and data objects. Data object vertices are of two kinds: one that
+are in cache, and ones that are not in cache. In the graph, an edge is drawn between
+(a) a query vertex and an update vertex, if the update aﬀects the query, and (b) a
+query vertex and a data object vertex, if the object is not in cache and is accessed
+by the query. In the graph, for presentation, edges between an update vertex and an
+object not in cache and query vertex and an object in cache are not drawn. Such a
+graph construction helps to capture the relationships between queries, updates and
+objects. We term such a graph as an interaction graph as the edges involve a mutual
+decision as to which data communication mechanism be used. The decoupling problem
+then corresponds to determining which data communication to use since the right
+combination minimizes network traﬃc costs.
+
+The interaction graph is fundamental to the data decoupling problem as algorithms
+can determine an optimal decoupling or the right combination of data communication
+mechanisms to use. The algorithms must also be robust to incoming query and update
+workloads since slight changes in the workload lead to entirely diﬀerent data communi-
+cation mechanisms becoming optimal (See design choices 1 and 1 in Section 1). This is
+
+demonstrated in the next subsection through an example. The example demonstrates
+that diﬀerent choices become optimal when the entire sequence of queries, updates and
+their accompanying costs are known in advance, and there are no cache size constraints.
+
+3.1 Determining oﬀ-line, optimal choices
+
+The objective of an algorithm for a data decoupling problem is to make decisions about
+which queries to ship, which updates to ship, and which objects to load such that the
+cost of incurred network traﬃc is minimized. This is based on an incoming workload
+pattern. The diﬃculty in determining the optimal combination of decision choices arises
+because a slight variation in the workload, i.e., change in cost of shipping queries
+or shipping updates or the query currency threshold, results in an entirely diﬀerent
+combination being optimal. This is best illustrated through an example.
+
+Fig. 2. An decoupling graph for a sample sequence. The notation: o1(10) implies size of
+object o1 is 10 GB, which is also its network traﬃc load cost. u1(o2, 1) implies update u1
+is for object o2 and has a network traﬃc shipping cost of 1GB. q3(o1, o2, o4; 15; t = 0s)
+implies query q3 accesses objects o1, o2, and o4; has a network traﬃc shipping cost of
+15GB; and has no tolerance for staleness.
+
+In the Figure2, among the four data objects o1, o2, o3, o4, objects o1, o2, o3 have been
+loaded into the cache (broken lines) and object o4 is currently not in cache (solid lines),
+and will be available for loading if there is space. Consider a sequence of updates and
+queries over the next eight seconds. Based on the graph formulation of the decoupling
+problem, we draw edges between queries, updates and the objects. Query q3 accesses
+the set o1, o2, o4 and has edges with o4, u1, and u2. since either q3 is shipped or the
+use of other data communication mechanism is necessary, namely o4 is loaded, and
+
+u1 and u2 are shipped. For q7, since object o2 is in cache, the dependence is only on
+updates u1 and u6 both of which are necessary to satisfy q7’s currency constraints. q8
+accesses set o1, o4 and so has edges with o4 and u2. Note, it does not have edges with
+u4 because shipping u4 is not necessary till object o4 is loaded into the cache. If o4 was
+loaded before u4 arrives, then an edge between u4 and q8 will be added. There is no
+edge with u5 since the tolerance for staleness of q8 permits an answer from the cached
+copy of o1 that need not be updated with u5.
+
+In the above example, the right choice of actions is to evict o3 and load o4 at the
+very beginning. Then at appropriate steps ship updates u1, u2, and u4, and the query
+q7. This will satisfy all currency requirements, and incur a network traﬃc cost of 26GB.
+Crucial to this being the best decision is that q8’s tolerance for staleness allows us to
+omit shipping u5. If that were not the case, then an entirely diﬀerent set of choices
+become optimal which include not loading o4, and just shipping queries q3, q7, and q8
+for a network cost of 28GB. Such a combination minimizes network traﬃc.
+
+In the above example, if we focus only on the internal interaction graph of cached
+objects, which is formed with nodes u1, u6 and q7, we observe that determining an
+optimal decision choice corresponds to ﬁnding the minimum-weight vertex cover [8, 43]
+on this subgraph. For lack of space, we omit a description on minimum-weight vertex
+cover and directly state the correspondence through the following theorem:
+
+Theorem 1 (Min Weight Vertex Cover). Let the entire incoming sequence of
+queries and updates in the internal interaction graph G be known in advance. Let V C
+be the minimum-weight vertex cover for G. The optimal choice is to ship the queries
+and the updates whose corresponding nodes are in V C.
+
+Proof Sketch. If the entire incoming sequence of queries and updates is known we claim
+the optimal choice is: (1) choose such that every query q is either shipped or all updates
+interacting with q are shipped, and (2) make a choice such that the total weights of
+nodes chosen for shipping is minimized. This is true since the sum of the weights of
+nodes chosen is equal to the actual network traﬃc cost incurred for the choice. This
+corresponds to the minimum-weight vertex cover problem (see deﬁnition in [12]).
+(cid:117)(cid:116)
+
+The minimum-weight vertex cover is NP-hard problem in general [36]. However, for
+our speciﬁc case the sub-graph is a bi-partite graph in that no edges exist amongst the
+set of query nodes and the set of update nodes, but only between query and update
+nodes. Thus we can still solve the minimum-weight vertex cover problem by reducing
+it to the maximum network ﬂow problem [15]. A polynomial time algorithm for the
+maximum network ﬂow problem is the Edmonds-Karp algorithm [8]. This algorithm is
+based on the fact that a ﬂow is maximum if and only if there is no augmenting path.
+The algorithm repeatedly ﬁnds an augmenting path and augments it with more ﬂow,
+until no augmenting path exists.
+
+A primary challenges in employing an algorithm for the maximum network ﬂow
+problem to Delta is in (a) knowing the sequence of events in advance, and (b) extending
+it a limited size cache. The computation of the max-cover (or equivalently determining
+the max ﬂow) changes as diﬀerent knowledge of the future becomes available. In the
+example, if we just did not know what would happen at time 8s, but knew everything
+
+before, we would not load o4, and instead ship q3 and q7. Then when q8 arrives, we
+would ship it too. Thus, diﬀerent partial knowledge of the future can lead to very
+diﬀerent decisions and costs. The decisions obtained by the computation of the max-
+cover applies only to the objects in cache. We still need a mechanism for proﬁtably
+loading objects in the cache.
+
+4 VCover
+
+VCover is an online algorithm for the data decoupling problem. It determines objects
+for which queries must be shipped and object for which updates must be shipped. The
+algorithm makes decisions in an “online” fashion, using minimal information about
+the incoming workload. In VCover we also address the second challenge of a space-
+constrained cache. The overall algorithm is shown in Figure 3.
+
+The algorithm relies on two internal modules UpdateManager and LoadManager to
+make two decisions: When a query arrives, VCover ﬁrst determines if the all objects
+accessed by the query are in cache. If all objects are in cache, this query is presented to
+the UpdateManager which chooses between shipping the outstanding updates required
+by the query, or shipping the query itself. If, instead, a query arrives that accesses
+at least one object not in cache, then VCover ships the query to the server, and also
+presents it to the LoadManager which decides, in background, whether to load the
+missing object(s) or not. We now describe the algorithms behind the UpdateManager
+and the LoadManager.
+
+1
+
+2
+
+3
+
+4
+
+5
+
+6
+
+7
+
+8
+
+VCover
+Invocation: By arriving query q, accessing objects B(q), with network traﬃc cost
+ν(q).
+Objective: To choose between invoking UpdateManager, or shipping q and invoking
+LoadManager.
+
+if all objects in B(q) are in cache then
+
+UpdateManager with query q
+
+else
+
+Ship q to server. Forward result to client
+In background: LoadManager with query q
+
+Fig. 3. The main function in VCover.
+
+UpdateManager The UpdateManager builds upon the oﬄine framework presented in
+Section 3.1 to make “online” decisions as queries and updates arrive. The Update-
+Manager incorporates the new query into an existing internal interaction graph G(cid:48) by
+adding nodes for it and the updates it interacts with and establishes the corresponding
+edges. To compute the minimum-weight vertex cover it uses the the Edmonds-Karp
+
+algorithm, which ﬁnds the maximum network ﬂow in a graph. However, instead of
+running a network ﬂow algorithm each time a query is serviced, it uses an incremental
+algorithm that ﬁnds just the change in ﬂow since the previous computation (Figure
+4). If the result of the vertex cover computation is that the query should be shipped,
+then the UpdateManager does accordingly (Lines 21–23). If not, then some updates are
+shipped.
+
+9
+
+10
+
+11
+
+12
+
+13
+
+14
+
+15
+
+16
+
+17
+
+18
+
+19
+
+20
+
+21
+
+22
+
+23
+
+UpdateManager on cache
+Invocation: By VCover with query q accessing objects B(q), with network traﬃc cost
+ν(q).
+Objective: To choose between shipping q or shipping all its outstanding interacting
+updates, and to update the interaction graph.
+
+if each update interacting with q has been shipped then
+
+Execute q in cache. Send result to client
+
+Add query vertex q with weight (ν(q)) to existing internal interaction graph G(cid:48) to get G
+foreach object o ∈ B(q) marked stale do
+foreach outstanding update u for o do
+
+Add update vertex u to G, with weight its shipping cost, if not already present
+
+foreach update vertex u interacting with q do
+
+Add edge (u, q) to G
+
+Compute minimum-weight vertex cover V C of G using incremental network-ﬂow
+algorithm
+if q ∈ V C then
+
+if q not already executed on cache then
+
+Ship q to server. Forward result to client
+
+Fig. 4. UpdateManager on cache.
+
+The key observation in computing the incremental max-ﬂow is that as vertices and
+edges are added and deleted from the graph there is no change in the previous ﬂow
+computation. Thus previous ﬂow remains a valid ﬂow though it may not be maximum
+any more. The algorithm therefore begins with a previous ﬂow and searches for aug-
+menting paths that would lead to the maximum ﬂow. As a result, for any sequence of
+queries and updates, the total time spent in ﬂow computation is not more than that
+for a single ﬂow computation for the network corresponding to the entire sequence. If
+this network has n nodes and m edges, this time is O(nm2) [8]—much less than the
+O(n2m2)-time the non-incremental version takes.
+
+The UpdateManager does not record the entire sequence of queries and updates to
+make decisions. The algorithm always works on a remainder subgraph instead of the
+subgraph made over all the queries and updates seen so far. This remainder subgraph
+is formed from an existing subgraph by excluding all update nodes picked in a vertex
+cover at any point, and all query nodes not picked in the vertex cover. The exclusion
+
+1. Let G(cid:48) be the previous internal interaction graph and H (cid:48) the corresponding network
+
+constructed in previous iteration.
+
+2. Let G be the current internal interaction graph.
+3. Add source and sink vertices to G and corresponding capacitated edges as described in [15]
+
+to construct network H.
+
+4. Find maximum ﬂow in H, based on the known maximum ﬂow for H (cid:48).
+5. Determine minimum-weight vertex for G from maximum ﬂow values of H, again as de-
+
+scribed in [15].
+
+Fig. 5. Single iteration of the incremental network ﬂow algorithm.
+
+can be safely done because in selecting the cover at any point the shipping of an
+update is justiﬁed based only on the past queries it interacts with, and not with any
+future queries or updates and therefore will never be part of future cover selection.
+This makes computing the cover robust to changes in workload. This technique also
+drastically reduces the size of the working subgraph making the algorithm very eﬃcient
+in practice.
+
+Managing Loads VCover invokes the LoadManager to determine if it is useful to load
+objects in the cache and save on network costs or ship the corresponding queries. The
+decision is only made for those incoming queries which access one or more objects not
+in cache. The diﬃculty in making this decision is due to queries accessing multiple
+objects, each of which contributes a varying fraction to the query’s total cost, ν(q).
+The objective is still to ﬁnd, in an online fashion, the right combination of objects
+that should reside in cache such that the total network costs are minimized for these
+queries.
+
+The algorithm in LoadManager builds upon the popular Greedy-Dual-Size (GDS)
+algorithm [7] for Web-style proxy caching. GDS is an object caching algorithm that
+calculates an object’s usage in the cache based on its frequency of usage, the cost of
+downloading it and its size. If the object is not being heavily used, GDS evicts the
+object. In GDS an object is loaded as soon it is requested. Such a loading policy can
+cause too much network traﬃc. In [24], it is shown that to minimize network traﬃc, it
+is important to ship queries on an object to the server until shipping costs equal to the
+object load costs have been incurred. After that any request to the object must load
+the object into the cache. The object’s usage in the cache is measured from frequency
+and recency of use and thus eviction decisions can be made similar to GDS, based on
+object’s usage in cache.
+
+In VCover queries access multiple objects and the LoadManager uses a simple twist
+on the algorithm in [24] that still ensures ﬁnding the right combination of choices. The
+LoadManager (a) randomly assigns query shipping costs among objects that a query
+accesses, and (b) defers to GDS to calculate object’s usage in the cache. The random
+assignment ensures that in expectation, objects are made candidates for load only when
+cost attributed equals the load cost. A candidate for load is considered by considering
+in random sequence the set of objects accessed by the query (Line 29 in Figure 6). At
+this point, the shipping cost could be attributed to the object.
+
+The load manager employs two techniques that makes its use of Greedy-Dual-Size
+
+more eﬃcient. We explain the need for the techniques:
+
+– Explicit tracking of the total cost (due to all queries) of each object is ineﬃcient.
+The load manager eliminates explicit tracking of the total cost by using randomized
+loading (Lines 27-35). This leads to a more space-eﬃcient implementation of the
+algorithm in which counters on each object are not maintained. When the shipping
+cost from a single query covers the entire load cost of an object, the object is
+immediately made a candidate to be loaded. Else, it is made so with probability
+equal to the ratio of the cost attributed from the query and the object’s load cost.
+– In a given subsequence of load requests generated by q, say o1, o2, . . . , om, it is
+possible that the given Aobj loads an oi only to evict it to accommodate some later
+oj in the same subsequence. Clearly, loading oi is not useful for the LoadManager.
+To iron out such ineﬃciencies we use a lazy version of Aobj, in our case Greedy-
+Dual-Size.
+
+In the LoadManager once the object is loaded, the system ensures that all updates
+that came while the object was being loaded are applied and the object is marked fresh
+by both cache and server.
+
+LoadManager on cache
+Invocation: By VCover with query q, accessing objects B(q), with network traﬃc cost
+ν(q).
+Objective: To load useful objects
+
+24
+
+25
+
+26
+
+27
+
+28
+
+29
+
+30
+
+31
+
+32
+
+33
+
+34
+
+35
+
+36
+
+37
+
+38
+
+c ← ν(q)
+while B(q) has objects not in cache and c > 0 do
+
+o ← some object in B(q) not in cache
+if c ≥ l(o) then
+
+Aobj lazy with input o
+c ← c − l(o)
+
+else
+
+With probability c/l(o): Aobj lazy with input o
+c ← 0
+
+Load and evict objects according to Aobj lazy
+if Aobj lazy loads o then
+
+Both server and cache mark o fresh
+
+/* l(o) is load cost of o */
+
+/* randomized loading */
+
+Fig. 6. LoadManager on cache given an object caching algorithm Aobj.
+
+Discussion: There are several aspects of VCover that we would like to highlight. First,
+in Delta we have focused on reducing network traﬃc. Consequently, in presenting VCover
+we have included only those decisions that reduce network traﬃc. These decisions
+naturally decrease response times of queries that access objects in cache. But queries for
+
+which updates need to be applied may be delayed. In some applications, such as weather
+prediction, which have similar rapidly-growing repositories, minimizing overall response
+time is equally important. To improve the response time performance of delayed queries,
+some updates can be preshipped, i.e., proactively sent by the server. For lack of space
+we have omitted how preshipping in VCover can further improve overall response times
+of all queries. We direct the reader to the accompanying technical report [26] for this.
+In the Delta architecture data updates correspond predominantly to data inserts
+(Section 3). This is true of scientiﬁc repositories. However the decision making in VCover
+is independent of an update speciﬁcation and can imply any of the data modiﬁcation
+statements viz. insert, delete or modify. Thus we have chosen the use of the term
+update.
+
+LoadManager adopts a randomized mechanism for loading objects. This is space-
+eﬃcient as it obviates maintaining counters on each object. This eﬃciency is motivated
+by meta-data issues in large-scale remote data access middlewares that cache data from
+several sites [26].
+
+Finally, an implementation of VCover requires a semantic framework that deter-
+mines the mapping between the query, q, and the data objects, B(q), it accesses. The
+complexity of such a framework depends upon the granularity at which data objects
+are deﬁned. If the objects are tables or columns, such a mapping can be determined by
+the speciﬁcation of the query itself. If the objects are tuples, ﬁnding such a mapping
+a-priori is diﬃcult. However for most applications such a mapping can be found by
+exploiting the semantics. For instance, in astronomy, queries specify a spatial region
+and objects are also spatially partitioned. Thus ﬁnding a mapping can be done by some
+pre-processing as described in Section 6.
+
+5 Beneﬁt: An alternative approach to the decoupling problem
+
+In VCover we have presented an algorithm that exploits the combinatorial structure
+(computing the cover) within the data decoupling problem and makes adaptive de-
+cisions using ideas borrowed from online algorithms [4]. An alternative approach to
+solving the data decoupling problem is an exponential smoothing-based algorithm that
+makes decisions based on heuristics. We term such an algorithm Beneﬁt as it is inher-
+ently greedy in its decision making.
+
+In Beneﬁt we divide the sequence of queries and updates into windows of size δ. At
+the beginning of each new window i, for each object currently in the cache, we compute
+the “beneﬁt” bi−1 accrued from keeping it in the cache during the past window (i − 1).
+bi−1 is deﬁned as the network cost the object saves by answering queries at the cache,
+less the amount of traﬃc it causes by having updates shipped for it from the server.
+Since a query answered at the cache may access multiple objects, the cost of its shipping
+(which is saved) is divided among the objects the query accesses in proportion to their
+sizes. This form of dividing the cost has been found useful in other caches as well [2,24].
+For each object currently not in cache, we compute similarly the beneﬁt it would
+have accrued if it had been in the cache during window (i − 1). But here, we further
+reduce the beneﬁt by the cost to load the object.
+
+A forecast µi of the beneﬁt an object will accrue during the next window i is then
+computed using exponential smoothing: µi = (1−α)µi−1 +αbi−1, in which µi−1 was the
+forecast for the previous window, and α, which is 0 ≤ α ≤ 1, is a learning parameter.
+We next consider only objects with positive µi values and rank them in decreasing
+order. For window i, we greedily load objects in this order, until the cache is full. Objects
+which were already present in cache in window (i − 1) don’t have to be reloaded. For
+lack of space, pseudo-code of Beneﬁt is not presented in this paper, but is included in
+the accompanying technical report.
+
+Beneﬁt reliance on heuristics is similar to previously proposed algorithms for online
+view materialization [20,21]. It, however, suﬀers from some weaknesses. The foremost is
+that Beneﬁt ignores the combinatorial structure within the problem by dividing the cost
+of shipping a query among the objects the query accesses in proportion to their sizes.
+This diﬀerence is signiﬁcant in that Beneﬁt’s performance can be proved analytically.
+However, in VCover the combinatorial structure leads to a mathematical bound on its
+performance. For details on the proof of performance, the reader is directed to the
+technical report [26]. Further, Beneﬁt’s decision making is heavily dependent on the
+size of window chosen. It also needs to maintain state for each object (the µi values,
+the queries which access it, etc.) in the database irrespective of whether it is in the
+cache or not.
+
+6 Empirical Evaluation
+
+In this section, we present an empirical evaluation of Delta on real astronomy query
+workloads and data. The experiments validate using a data decoupling framework for
+minimizing network traﬃc. Our experimental results show that Delta (using VCover)
+reduces the traﬃc by nearly half even with a cache that is one-ﬁfth the size of the
+server. VCover outperforms Beneﬁt by a factor that varies between 2-5 under diﬀerent
+conditions.
+
+6.1 Experimental Setup
+
+Choice of Survey: Data from rapidly growing repositories, such as those of the Pan-
+STARRS and the LSST, is currently unavailable for public use. Thus we used the
+data and query traces from the SDSS for experimentation. SDSS periodically publishes
+updates via new data release. To build a rapidly growing SDSS repository, we simulated
+an update trace for SDSS in consultation with astronomers. The use of SDSS data in
+validating Delta is a reasonable choice as the Pan-STARRS and the LSST databases
+have a star-schema similar to the SDSS. When open to public use, it is estimated that
+the Pan-STARRS and the LSST repositories will be queried similar to the SDSS.
+
+Setup: Our prototype system consists of a server database and a middleware cache
+database, both implemented on an IBM workstation with 1.3GHz Pentium III processor
+and 1GB of memory, running Microsoft Windows, each running a MS SQL Server
+2000 database. A sequence of data updates are applied to a server database Queries,
+each with a currency speciﬁcation criteria, arrive concurrently at a cache database.
+To satisfy queries with the latest data, the server and cache database uses MS SQL
+
+Server’s replica management system to ship queries and updates, and, when necessary,
+it uses bulk copying for object loading. The decisions of when to use each of the
+data communication mechanism is dictated by the optimization framework of Delta,
+implemented as stored procedures on the server and cache databases.
+
+Server Data: The server is an SDSS database partitioned in spatial data objects.
+To build spatial data objects, we use the primary table in SDSS, called the PhotoObj
+table, which stores data about each astronomical body including its spatial location
+and about 700 other physical attributes. The size of the table is roughly 1TB. The table
+is partitioned using a recursively-deﬁned quad tree-like index, called the hierarchical
+triangular mesh [19]. The HTM index conceptually divides the sky into partitions; in the
+database these partitions translate into roughly equi-area data objects. A partitioning
+of the sky and therefore the data depends upon the level of the HTM index chosen.
+For most experiments we used a level that consisted of 68 partitions (ignoring some
+which weren’t queried at all), containing about 800 GB of data. These partitions were
+given object-IDs from 1 to 68. Our choice of 68 objects is based on a cache granularity
+experiment explained in Section 6.2. The The data in each object varies from as low
+as 50 MB to as high as 90 GB.
+
+Growth in Data: Updates are in the form of new data inserts and are applied to a
+spatially deﬁned data object. We simulated the expected update patterns of the newer
+astronomy surveys under consultation with astronomers. Telescopes collect data by
+scanning speciﬁc regions of the sky, along great circles, in a coordinated and systematic
+fashion [40]. Updates are thus clustered by regions on the sky. Based on this pattern,
+we created a workload of 250,000 updates. The size of an update is proportional to the
+density of the data object.
+
+Queries: We extracted a query workload of about 250,000 queries received from
+January to February, 2009. The workload trace consists of several kinds of queries,
+including range queries, spatial self-join queries, simple selection queries, as well as
+aggregation queries. Preprocessing on the traces involves removing queries that query
+the logs themselves. In this trace, 98% of the queries and 99% of the network traﬃc
+due to the queries is due to the PhotoObj table or views deﬁned on PhotoObj. Any
+query which does not query the PhotoObj is bypassed and shipped to the server.
+
+Costs: The traﬃc cost of shipping a query is the actual number of bytes in its
+results on the current SDSS database. The traﬃc cost of shipping an update was chosen
+to match the expected 100 GB of update traﬃc each day in the newer databases.
+
+A sample of the query and update event sequence is shown in Figure 7. The sequence
+is along the x-axis, and for each event, if it is an update, we put a blue diamond next
+to the object-ID aﬀected by the update. If the event is a query, we put a yellow dot
+next to all object-IDs accessed by the query. Even though this rough ﬁgure only shows
+a sample of the updates and queries, and does not include the corresponding costs of
+shipping, it supports what we discovered in our experiments: object-IDs 22, 23, 24, 62,
+63, 64 are some of the query hotspots, while object-IDs 11, 12, 13, 30, 31, 32 are some
+of the update hotspots. The ﬁgure also indicates that real-world queries do not follow
+any clear patterns.
+
+Fig. 7. (a) Object-IDs corresponding to each query (red ring) or update (blue cross)
+event. Queries evolve and cluster around diﬀerent objects over time. (b) Cumulative
+traﬃc cost. VCover, almost as good as SOptimal, outperforms others.
+
+Two Algorithms, Three Yardsticks We compare the performances of VCover, the
+core algorithm in Delta with Beneﬁt, the heuristic algorithm that forecasts using ex-
+ponential smoothing. We also compare the performance of these two algorithms with
+three other policies. These policies act as yardsticks in that the algorithm can be con-
+sidered poor or excellent if it performs better or worse than these policies. The policies
+are:
+• NoCache: Do not use a cache. Ship all queries to the server. Any algorithm (in our
+case VCover and Beneﬁt), which has a performance worse than NoCache is clearly of
+no use.
+
+• Replica: Let the cache be as large as the server and contain all the server data.
+To satisfy queries with the most current data, ship all updates to the cache as soon
+as they arrive at server. If VCover and Beneﬁt, both of which respect a cache size
+limitation, perform better than Replica they are clearly good.
+
+• SOptimal: Decide on the best static set of objects to cache after seeing the entire
+query and update sequence. Conceptually, its decision is equivalent to the single
+decision of Beneﬁt using a window-size as large as the entire sequence, but in an
+oﬄine manner. To implement the algorithm we loads all objects it needs at the
+beginning and do not ever evict any object. As updates arrive for objects in cache
+they are shipped. Any online algorithm, which cannot see the queries and updates
+in advance, but with performance close to the SOptimal is outstanding.
+
+Default parameter values, warmup period Unless speciﬁed otherwise, in the fol-
+lowing experiments we set the cache size to 30% of server size,and the window size δ in
+Beneﬁt to 1000. The choice are obtained by varying the parameters in the experiment
+to obtain the optimal value. The cache undergoes an initial warm-up period of about
+250,000 events for both VCover and Beneﬁt. A large warm-up period is a characteristic
+of this particular workload trace in which queries with small query cost occur earlier
+in trace. As a result objects have very low probability of load. In this warm-up period
+the cache remains nearly empty and almost all queries are shipped. In general, our
+
+102030405060125K250K375KObject-IDQuery Update Event Sequence50100150200250250k300k350k400k450kCumulative Traffic Cost (GB)Query Update Event SequenceNoCacheReplicaBenefitVCoverSOptimalexperience with other workload traces of similar size have shown that a range of a
+warm period can be anywhere from 150,000 events to 300,000 events. To focus on the
+more interesting post warm-up period we do not show the events and the costs incurred
+during the warmup period.
+
+6.2 Results
+
+Minimizing traﬃc cost The cumulative network traﬃc cost along the query-update
+event sequence for the two algorithms and three yardsticks is in Figure 7(a). VCover
+is clearly superior to NoCache and Beneﬁt: as more query and update events arrive it
+continues to perform better than them and at the end of the trace has an improvement
+by a factor of at least 2 with Beneﬁt, and to Replica by a factor about 1.5. (For replica
+load costs and cache size constraints are ignored.) Further, as more data intensive
+queries arrive, Beneﬁt is barely better than NoCache. VCover closely follows SOptimal
+until about Event 430K, when it diverges, leading to a ﬁnal cost about 40% (35 GB)
+higher. On closer examination of the choices made by the algorithm, we discovered that,
+with hindsight, SOptimal determines that Object-ID 39 of 38 GB and Object-ID 29 of
+4 GB would be useful to cache and loads them at the beginning. But VCover discovers
+it only after some high-shipping cost queries that arrive for these objects, and loads
+them around Event 430K, thus paying both the query shipping cost and load cost.
+Varying number of updates A general-purpose caching algorithm for dynamic data
+should maintain its performance in the face of diﬀerent rates of updates and queries. In
+Figure 8(b) we plot the ﬁnal traﬃc cost for each algorithm for diﬀerent workloads, each
+workload with the same 250,000 queries but with a diﬀerent number of updates. The
+simplistic yardstick algorithms NoCache and Replica do not take into account the relative
+number of updates and queries. Since the queries remain the same, the cost of NoCache
+is steady at 300 GB. But as the number of updates increase the cost of Replica goes up:
+the three-fold increase in number of updates results in a three-fold increase in Replica’s
+cost. The other three algorithms, in contrast, show only a slight increase in their cost
+as the number of updates increase. They work by choosing the appropriate objects to
+cache for each workload, and when the updates are more, they compensate by keeping
+fewer objects in the cache. The slight increase in cost is due to query shipping cost
+paid for objects which are no longer viable to cache. This experiment illustrates well
+the beneﬁts of Delta irrespective of the relative number of queries and updates.
+Choice of objects In Figure 8(a) we plot VCover’s cumulative traﬃc cost, along the
+event sequence, for diﬀerent choices of data objects. Each choice corresponds to a
+diﬀerent level in the quad tree structure in SDSS, from a set of 10 objects corresponding
+to large-area upper-level regions, to a set of 532 objects corresponding to small-area
+lower-level regions. Each set covers the entire sky and contains the entire data. The
+performance of VCover improves dramatically as number of number of objects increase
+(sizes reduce) until it reaches 91 and then begins to slightly worsen again. The initial
+improvement is because as objects become smaller in size, less space in the cache is
+wasted, the hotspot decoupling is at a ﬁner grain, and thus more eﬀective. But this
+trend reverses as the objects become too small since the likelihood that future queries
+are entirely contained in the objects in cache reduces, as explained next. It has been
+observed in scientiﬁc databases that it is more likely that future queries access data
+
+Fig. 8. (a) Traﬃc cost for varying number of updates. (b) VCover’s cumulative traﬃc
+cost for diﬀerent choices of object sets.
+
+which is “close to” or “related to,” rather than the exact same as, the data accessed
+by current queries [24]. In astronomy, e.g., this is partly because of several tasks that
+scan the entire sky through consecutive queries.
+
+7 Conclusion
+
+Repositories in data-intensive science are growing rapidly in size. Scientists are also
+increasingly interested in the time dimension and thus demand latest data to be part
+of query results. Current caches provide minimal support for incorporating the latest
+data at the repository; many of them assume repositories are static. This often results
+in runaway network costs.
+
+In this paper we presented Delta a dynamic data middleware cache system for
+rapidly growing repositories. Delta is based on a data decoupling framework—it sepa-
+rates objects that are rapidly growing from objects that are heavily queried. By eﬀective
+decoupling the framework naturally minimizes network costs. Delta relies on VCover, a
+robust, adaptive algorithm that decouples data objects by examining the cost of usage
+and currency requirements. VCover’s decoupling is based on sound graph theoretical
+principles making the solution nearly optimal over evolving scientiﬁc workloads. We
+compare the performance of VCover with Beneﬁt, a greedy heuristic, which is commonly
+employed in dynamic data caches for commercial applications. Experiments show that
+Beneﬁt scales poorly than VCover on scientiﬁc workloads in all respects.
+
+A real-world deployment of Delta would need to also consider several other issues
+such as reliability, failure-recovery, and communication protocols. The future of appli-
+cations, such as the Pan-STARRS and the LSST depends on scalable network-aware
+solutions that facilitate access to data to a large number of users in the presence of
+overloaded networks. Delta is a step towards meeting that challenge.
+Acknowledgments The authors sincerely thank Alex Szalay for motivating this prob-
+lem to us, and Jim Heasley for describing network management issues in designing
+
+50100150200250300350400450125k187k250k312k375kTraffic Cost (GB)Number of UpdatesNoCacheReplicaBenefitVCoverSOptimal50100150200250k300k350k400k450kVCover’s Cumulative Traffic Cost (GB)Query Update Event Sequence10 Objects20 Objects68 Objects91 Objects134 Objects285 Objects532 Objectsdatabase repositories for the Pan-STARRS survey. Ani Thakar acknowledges support
+from the Pan-STARRS project.
+
+References
+
+1. K. Amiri, S. Park, R. Tewari, and S. Padmanabhan. DBProxy: a dynamic data cache for
+
+web applications. In Proc. Int’l. Conf. on Data Engineering, 2003.
+
+2. A. Bagchi, A. Chaudhary, M. T. Goodrich, C. Li, and M. Shmueli-Scheuer. Achieving
+communication eﬃciency through push-pull partitioning of semantic spaces to disseminate
+dynamic information. Transactions on Knowledge and Data Engineering, 18(10), 2006.
+
+3. C. Bornh¨ovd, M. Altinel, S. Krishnamurthy, C. Mohan, H. Pirahesh, and B. Reinwald.
+DBCache: middle-tier database caching for highly scalable e-business architectures. In
+Proc. ACM SIGMOD Int’l. Conf. on Management of Data, 2003.
+
+4. A. Borodin and R. El-Yaniv. Online computation and competitive analysis. Cambridge
+
+University Press, 1998.
+
+5. K. S. Candan, W. S. Li, Q. Luo, W. P. Hsiung, and D. Agrawal. Enabling dynamic
+content caching for database-driven web sites. In Proc. ACM SIGMOD Int’l. Conf. on
+Management of Data, 2001.
+
+6. K. S. Candan, W.-S. Li, Q. Luo, W.-P. Hsiung, and D. Agrawal. Enabling dynamic content
+
+caching for database-driven web sites. SIGMOD Record, 30(2):532–543, 2001.
+
+7. P. Cao and S. Irani. Cost-aware www proxy caching algorithms. In Proc. of the USENIX
+
+Symposium on Internet Technologies and Systems, 1997.
+
+8. T. Corman, C. Leiserson, R. Rivest, and C. Stein. Introduction to algorithms. MIT press
+
+Cambridge, MA, USA, 1990.
+
+9. S. Dar, M. J. Franklin, B. T. Jonsson, D. Srivastava, and M. Tan. Semantic data caching
+
+and replacement. In Proc. Int’l. Conf. on Very Large Databases, 1996.
+
+10. P. Deolasee, A. Katkar, A. Panchbudhe, K. Ramamritham, and P. Shenoy. Adaptive
+push-pull: disseminating dynamic web data. In Proc. 10th Int’l. World Wide Web Conf.,
+2001.
+
+11. O. Deux et al. The story of O2. Trans. on Knowledge and Data Engineering, 2(1), 1990.
+12. M. Garey and D. Johnson. Computers and intractability: a guide to NP-completeness.
+
+WH Freeman and Company, San Francisco, California, 1979.
+
+13. C. Garrod, A. Manjhi, A. Ailamaki, B. Maggs, T. Mowry, C. Olston, and A. Tomasic.
+Scalable query result caching for web applications. In Proc. Int’l. Conf. on Very Large
+Databases, 2008.
+
+14. H. Guo, P. Larson, R. Ramakrishnan, and J. Goldstein. Support for relaxed currency and
+consistency constraints in mtcache. In Proc. ACM SIGMOD Int’l. Conf. on Management
+of Data, 2004.
+
+15. D. Hochbaum, editor. Approximation Algorithms for NP-hard Problems. PWS Publishing
+
+Company, 1997.
+
+16. Y. Huang, R. Sloan, and O. Wolfson. Divergence Caching in Client Server Architectures.
+In Proc. 3rd International Conference on Parallel and Distributed Information Systems,
+1994.
+
+17. N. Kaiser. Pan-starrs: a wide-ﬁeld optical survey telescope array. Ground-based Telescopes,
+
+5489(1):11–22, 2004.
+
+pages 154–164, 2002.
+
+18. N. Kaiser et al. Pan-STARRS: a large synoptic survey telescope array. In Proc. SPIE,
+
+19. P. Kunszt, A. Szalay, and A. Thakar. The hierarchical triangular mesh. In Mining the
+
+Sky: Proc. MPA/ESO/MPE Workshop, 2001.
+
+20. A. Labrinidis and N. Roussopoulos. Webview materialization. SIGMOD Record, 29(2),
+
+2000.
+
+21. A. Labrinidis and N. Roussopoulos. Exploring the tradeoﬀ between performance and data
+
+freshness in database-driven web servers. The VLDB Journal, 13(3), 2004.
+
+22. C. Lecluse, P. Richard, and F. Velez. O2, an object-oriented data model. SIGMOD Record,
+
+17(3):424–433, 1988.
+
+23. Large Synoptic Survey Telescope. http://www.lsst.org.
+24. T. Malik, R. Burns, and A. Chaudhary. Bypass caching: Making scientiﬁc databases good
+
+network citizens. In Proc. Int’l. Conf. on Data Engineering, 2005.
+
+25. T. Malik, R. Burns, and N. Chawla. A black-box approach to query cardinality estimation.
+
+In Proc. 3rd Conf. on Innovative Data Systems Research, 2007.
+
+26. T. Malik, X. Wang, P. Little, A. Chaudhary, and A. R. Thakar. Robust caching for rapidly-
+growing scientiﬁc repositories. http://www.cs.purdue.edu/~tmalik/Delta-Full.pdf,
+2010.
+
+27. C. Olston, B. T. Loo, and J. Widom. Adaptive precision setting for cached approximate
+
+values. ACM SIGMOD Record, 30, 2001.
+
+28. C. Olston, A. Manjhi, C. Garrod, A. Ailamaki, B. M. Maggs, and T. C. Mowry. A
+
+scalability service for dynamic web applications. In CIDR, 2005.
+
+29. C. Olston and J. Widom. Best-eﬀort cache synchronization with source cooperation. In
+
+Proc. ACM SIGMOD Int’l. Conf. on Management of Data, 2002.
+
+30. Pan-STARRS—Panoramic Survey Telescope and Rapid Response System. http:\www.
+
+pan-starrs.ifa.hawaii.edu.
+
+31. G. Peng. CDN: Content distribution network. Arxiv preprint cs.NI/0411069, 2004.
+32. P. Protopapas, R. Jimenez, and C. Alcock. Fast identiﬁcation of transits from light-curves.
+
+Journal reference: Mon. Not. Roy. Astron. Soc, 362:460–468, 2005.
+
+33. Sloan Digital Sky Survey. www.sdss.org.
+34. A. Shoshani, A. Sim, and J. Gu. Storage Resource Managers: Essential Components for
+
+the Grid. Kluwer Academic Publishers, 2004.
+
+35. V. Singh, J. Gray, A. R. Thakar, A. S. Szalay, J. Raddick, B. Boroski, S. Lebedeva, and
+B. Yanny. SkyServer Traﬃc Report: The First Five Years, MSR-TR-2006-190. Technical
+report, Microsoft Technical Report, Redmond, WA, 2006.
+36. S. Skiena. The algorithm design manual. Springer, 1998.
+37. W. Stevens. TCP/IP illustrated (vol. 1): the protocols. Addison-Wesley Longman Pub-
+
+lishing Co., Inc. Boston, MA, USA, 1993.
+
+38. M. Stonebraker, P. M. Aoki, R. Devine, W. Litwin, and M. Olson. Mariposa: A new
+architecture for distributed data. In Proc. of the Internationall Conference on Data En-
+gineering, 1994.
+
+39. M. Stonebraker, P. M. Aoki, W. Litwin, A. Pfeﬀer, A. Sah, J. Sidell, C. Staelin, and A. Yu.
+
+Mariposa: A wide-area distributed database system. The VLDB Journal, 5(1), 1996.
+
+40. A. S. Szalay, J. Gray, A. R. Thakar, P. Z. Kunszt, T. Malik, J. Raddick, C. Stoughton,
+and J. vandenBerg. The SDSS skyserver: public access to the Sloan Digital Sky Server
+data. In Proc. ACM SIGMOD Int’l. Conf. on Management of Data, 2002.
+
+41. The Times Ten Team. In-memory data management in the application tier. In Proc. of
+
+the International Conference on Data Engineering, 2000.
+
+42. X. Wang, T. Malik, R. Burns, S. Papadomanolakis, and A. Ailamaki. A workload-driven
+unit of cache replacement for mid-tier database caching. In Advances in Databases: Con-
+cepts, Systems and Applications, volume 4443, pages 374–385, 2007.
+
+43. E. W. Weisstein.
+
+Vertex cover.
+
+from mathworld–a wolfram web resource.
+
+http://mathworld.wolfram.com/VertexCover.html.
+
+

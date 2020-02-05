@@ -1,0 +1,2836 @@
+Cost-Efﬁcient Soft Error Protection for Embedded
+
+Microprocessors
+
+Jason A. Blome, Shantanu Gupta, Shuguang
+
+Feng, Scott Mahlke
+
+Advanced Computer Architecture Lab
+University of Michigan - Ann Arbor, MI
+
+{jblome, shangupt, shoe, mahlke}@umich.edu
+
+Daryl Bradley
+
+ARM Ltd.
+
+Cambridge, United Kingdom
+daryl.bradley@arm.com
+
+ABSTRACT
+Device scaling trends dramatically increase the susceptibility of mi-
+croprocessors to soft errors. Further, mounting demand for em-
+bedded microprocessors in a wide array of safety critical appli-
+cations, ranging from automobiles to pacemakers, compounds the
+importance of addressing the soft error problem. Historically, soft
+error tolerance techniques have been targeted mainly at high-end
+server markets, leading to solutions such as coarse-grained mod-
+ular redundancy and redundant multithreading. However, these
+techniques tend to be prohibitively expensive to implement in the
+embedded design space. To address this problem, we ﬁrst present
+a thorough analysis of the effects of soft errors on a production-
+grade, fully synthesized implementation of an ARM926EJ-S em-
+bedded microprocessor. We then leverage this analysis in the de-
+sign of two orthogonal low-cost soft error protection techniques
+that can be tuned to achieve variable levels of fault coverage as a
+function of area and power constraints. The ﬁrst technique uses a
+small cache of live register values in order to provide nearly twice
+the fault coverage of a register ﬁle protected using traditional er-
+ror correcting codes at little or no additional area cost. The sec-
+ond technique is a statistical method used to signiﬁcantly reduce
+the overhead of deploying time-delayed shadow latches for low-
+latency fault detection.
+
+Categories and Subject Descriptors
+B.5.3 [Reliability and Testing]: [Built-in tests]; C.3 [Special-
+Purpose and Application-Based Systems]: [Real-time and Em-
+bedded Systems]
+
+General Terms
+Reliability, Design, Experimentation
+
+Keywords
+Reliability, Soft Errors, Embedded Processors
+
+1.
+
+INTRODUCTION
+
+A soft error, or single event upset (SEU), is deﬁned as a tran-
+sient piece of incorrect machine state. A soft error in logic occurs
+
+Permission to make digital or hard copies of all or part of this work for
+personal or classroom use is granted without fee provided that copies are
+not made or distributed for proﬁt or commercial advantage and that copies
+bear this notice and the full citation on the ﬁrst page. To copy otherwise, to
+republish, to post on servers or to redistribute to lists, requires prior speciﬁc
+permission and/or a fee.
+CASES’06, October 23–25, 2006, Seoul, Korea.
+Copyright 2006 ACM 1-59593-543-6/06/0010 ...$5.00.
+
+when the result of a transient fault in logic propagates to a storage
+element and is latched. A soft error in a memory element occurs
+when sufﬁcient charge is generated to invert the value stored in the
+memory element. Transient faults can be the result of electrical
+noise, such as crosstalk, or high-energy particle strikes. Soft errors
+due to energetic particle strikes are typically caused by either al-
+pha particles, which can be emitted by radioactive contaminants in
+microprocessor packaging materials, or high-energy neutrons from
+cosmic radiation. While dealing with alpha particles is largely a
+manufacturing issue, addressing neutron strikes poses a signiﬁcant
+problem because adequate shielding is prohibitively expensive.
+
+Current device scaling trends suggest that dramatic increases in
+microprocessor soft error rates (SER) are inevitable. Device scal-
+ing results in lower operating voltages, which in turn reduces the
+energy required to cause a voltage pulse at the output of a logic gate
+or invert the value stored within a sequential element. Thus, lower-
+energy particle strikes that did not pose a threat in past technology
+generations could induce transient errors in future technology gen-
+erations. Further, the rate of particle strikes increases exponentially
+as the energy level of the particles decrease [19]. Therefore, with
+each new technology generation, the rate of particle strikes that
+may potentially affect the logical operation of the microprocessor
+increases signiﬁcantly. These trends, coupled with an explosive
+growth of embedded microprocessor distribution for a number of
+safety-critical applications suggests a strong need for understand-
+ing reliability as it applies to the embedded design space.
+
+Traditionally, reliability research has focused largely on the high-
+performance server market. High availability systems, such as the
+IBM G5 server [17] and the HP NonStop architecture [4], rely on
+large scale modular redundancy to provide fault tolerance. Other
+research has focused on providing fault protection using redundant
+multithreading [13, 14]. In general, these techniques are expensive
+in terms of both the area and power required for redundant compu-
+tation and are not generally appropriate for embedded designs.
+
+The design constraints of the embedded domain differ substan-
+In the embed-
+tially from those in the high-performance arena.
+ded design space, area and power are primary constraints which
+are balanced with processor performance. This typically leads to
+longer clock cycle times, larger logic depths between sequential
+state elements, and a higher degree of signal fan-out in embedded
+designs. Further, high performance microprocessors typically em-
+ploy a large amount of out-of-order execution hardware and specu-
+lative state. These mechanisms can decrease the overall utilization
+of the chip, lowering the probability that a particle strike will af-
+fect a sensitive piece of state within the design, and increasing the
+amount of fault masking. In general, high performance micropro-
+cessor cores tend to have much more area devoted to sequential
+state than to combinational logic. This invariably affects the be-
+
+havior of soft errors on the design. Since the design constraints for
+the embedded domain are considerably different from those in the
+high-performance domain, it stands to reason that methods for fault
+tolerance will also vary dramatically.
+
+In order to fully understand the way in which soft errors af-
+fect embedded microprocessors, we conduct a thorough analysis
+of the behavior of faults on an ARM926EJ-S embedded core. In
+these experiments, we measure the amount of fault masking that oc-
+curs when faults are injected into both state elements and combina-
+tional logic and also analyze the propagation behavior of the errors
+throughout the design. We then use this study to motivate two soft
+error mitigation techniques appropriate for the embedded design
+space. First, we propose the register value cache, a small and efﬁ-
+cient mechanism that protects the register ﬁle against faults occur-
+ring in both sequential state elements and combinational read/write
+logic within the register ﬁle. This design provides higher fault
+coverage at a lower area overhead than traditional error correcting
+codes (ECC). Second, we propose a method for the strategic de-
+ployment of transient pulse detectors using time-delayed shadow
+latches, which provides a high degree of fault coverage for the rest
+of the design, while only requiring a small number of detectors.
+
+The contributions of this work are as follows:
+
+• An empirical derivation of the logical and temporal soft error
+
+masking rates for a commercial embedded microprocessor.
+
+• An analysis of the error fan-out and propagation behavior of
+
+soft errors in a commercial embedded microprocessor.
+
+• A lightweight architectural technique for protecting register
+ﬁles from faults in both combinational and sequential logic.
+
+• A statistical technique for deploying time-delayed shadow
+latches for tolerating soft errors occurring in arbitrary logic
+elements.
+
+2. FAULT ANALYSIS OF THE ARM926EJ-S
+
+PROCESSOR CORE
+
+Though the effects of transient faults on high-performance mi-
+croarchitectures have been studied in the past [11] [18], relatively
+little published data exists regarding their effects on embedded de-
+signs. Previous work that does involve embedded-style micropro-
+cessors typically focuses on the effects of transient faults at the
+macrocell and software levels [8] [15]. In order to motivate archi-
+tectural and microarchitectural solutions to the soft error problem,
+the goal of the following analysis is to understand how transient
+faults affect an embedded microprocessor at the circuit level and
+how these faults propagate throughout system state. In this section,
+we provide a brief overview of the ARM926EJ-S microprocessor,
+describe our fault analysis framework, and present detailed results
+describing fault masking and propagation throughout the micropro-
+cessor core.
+
+2.1 Fault Analysis Framework
+
+The soft error analysis conducted in this work uses a Verilog
+model of an ARM926EJ-S microprocessor [1]. The ARM926EJ-S
+is a 32-bit embedded architecture with a standard ﬁve stage pipeline
+consisting of fetch, decode, execute, memory and write-back stages.
+The datapath of the core is depicted in Figure 1. The implementa-
+tion used in this work has 37 architecturally deﬁned registers (31
+32-bit general purpose and six status registers), 4 KB of instruction
+cache, and 4 KB of data cache. The Verilog model was synthe-
+sized using Synopsys Physical Compiler with scan-chain insertion
+
+Instruction Fetch
+
+Instruction Decode
+
+Data Interface
+
+Multiply
+
+Data
+Cache
+MMU
+
+Write buffer/
+Bus Interface
+
+Shift
+
+ALU
+
+Data
+Address
+Logic
+
+Instruction
+
+Cache
+
+MMU
+
+Instruction
+Address
+
+Logic
+
+Register
+Bank
+
+Mux
+
+Array
+
+Bus Interface
+
+ARM926EJ−S
+
+1: A block diagram of the ARM926EJ-S ﬁve-stage pipeline
+
+testbench
+
+benchmark
+
+reference
+
+design
+
+test
+
+design
+
+error checking
+and logging
+
+fault injection
+
+scheduler
+
+fault injection / error analysis framework
+
+report generation
+
+2: Overview of the soft error injection and analysis framework
+
+and design-for-test methodologies using an Artisan library charac-
+terized for a 130 nm process. The synthesized netlist and a hand-
+designed ﬂoorplan were processed in Avanti Astro for clock tree
+synthesis and physical placement. Once fully synthesized with all
+design rule constraints satisﬁed, timing information was extracted
+in Standard Delay Format so that it could be annotated onto the
+netlist and simulated using Synopsys VCS.
+
+The testbench used for simulation instantiates a pair of the syn-
+thesized netlists: a reference design and the unit under test. Both
+netlists are annotated with the timing information gathered from the
+synthesis and layout tools. The testbench also includes a behavioral
+memory model that is used to load benchmarks for the simulations.
+An overview of the soft error test harness is shown in Figure 2.
+
+The soft error injection and analysis framework used in our ex-
+periments is composed of a set of Verilog Programming Interface
+(VPI) libraries that are invoked at the start of each simulation. Upon
+invocation, the framework probes the design to derive the set of all
+sequential state elements and combinational logic gates within the
+unit under test. Depending on the simulation parameters, the frame-
+work may schedule fault injection experiments at arbitrary points
+in time for arbitrary durations, selecting a random design element
+(register or logic gate) as a fault injection target and inverting the
+value at the node’s output.
+
+Experiments are conducted targeting both sequential state ele-
+ments and combinational logic gates. Workload-speciﬁc analysis
+is carried out by running benchmark code for an image processing
+algorithm which maps an input image from the RGB to the YUV
+color space. Upon initialization, the framework will select a ran-
+dom point in time between 2,500 and 5,000 cycles after the start
+of simulation to conduct its ﬁrst fault injection. If the fault is to be
+injected into a combinational logic element, the fault injection time
+
+is randomly selected in picoseconds, and the fault duration is ran-
+domly selected on the interval [0.25 ∗ CLK, CLK], where CLK
+is the cycle time of 5 ns. If the experiment is for a sequential state
+element, the fault injection time is scheduled at a random future
+rising edge of the clock signal and will be held for the duration of
+one cycle.
+
+At fault injection time, depending on the type of injection exper-
+iment being simulated (faults in combinational logic or sequential
+state), a random design element is selected for fault injection from
+the unit under test. If the fault is to be injected into a logic element,
+a random logic gate in the design is selected and the value present
+on it’s output is inverted, simulating a transient fault caused by a
+particle strike. Similarly, when faults in registers are being simu-
+lated, a random register is selected and its output is inverted. When
+a fault is injected into the design, the framework logs the fault site,
+the time of injection, and the pulse duration.
+
+After a fault has been injected into the system, every microarchi-
+tectural register in the unit under test is compared against its dual in
+the reference design at each subsequent rising clock edge. Further,
+all top-level output ports on the design (I/O buses, coprocessor in-
+terface, test equipment) and inputs into the caches are checked to
+ensure that no corrupt values have escaped from the core datapath.
+If, during the ﬁrst cycle after fault injection, no register, cache, or
+top-level port mismatches occur, the injected fault did not affect
+the system, and so a new random time in the future is selected for
+another fault injection experiment. If any register, cache, or port
+mismatches does occur, the fault analysis framework logs the rela-
+tive cycle and site of the error for later analysis.
+
+The fault analysis framework continues to track the progress of
+errors throughout the system for a given number of cycles after
+the fault injection. If during this period, no errors are present, and
+no errors have propagated out to the caches or top-level ports, the
+system is clean, and the fault was successfully masked, allowing
+a new time for fault injection to be scheduled. If top-level port or
+cache errors did occur, or a latent error still lingers in the design that
+has not yet affected architectural state, then simulation halts, and
+error logs are written for post-processing to analyze propagation
+and architectural state effects. Though latent errors in the design
+may not have caused errors in software-visible state, they still pose
+a threat and may potentially cause data corruption given a more
+diverse workload.
+
+2.2 Fault Analysis Results
+
+In this section, we provide an empirical derivation of the soft
+error masking rate for the ARM926EJ-S processor core, as well as
+a detailed examination of the soft error propagation behavior. The
+soft error rate is directly related to a set of derating factors that
+mask faults from being latched at the output of a circuit. The three
+circuit-level derating factors that affect the SER are as follows:
+
+• Logical masking: Logical masking occurs when a transient
+pulse is effectively gated from all possible target sequential
+state elements; for example, a transient pulse at the output of
+a circuit that is ANDed with 0 will be logically masked.
+
+• Temporal masking: Temporal masking (or latching-window
+masking) occurs when a transient pulse propagates to a state
+element, but does not arrive within the capture window of the
+state element.
+
+• Electrical masking: Electrical masking occurs when a tran-
+sient pulse is attenuated by subsequent logic gates such that
+the pulse does not affect the output of the circuit.
+
+The experiments presented in this work examine the effects of
+
+Error Location
+Microarchitectural state
+Architectural state
+Top-level port
+
+Logical Masking Rate
+
+6.47%
+88.35%
+89.32%
+
+1: Average logical masking rate for soft errors occurring in sequential
+state elements.
+
+both logical and temporal masking on the overall soft error rate,
+but leave electrical masking for future work.
+
+2.2.1 Logical and Temporal Masking
+
+In this set of experiments, we derive the rates at which injected
+faults are masked from affecting different classes of processor state:
+microarchitectural state, architectural state, and the top-level output
+ports of the design (I/O buses, coprocessor interface, test equip-
+ment) while the image processing benchmark, rgb2yuv, is executed
+on the processor model. We deﬁne the architectural state as the
+set of 37 software-visible physical registers deﬁned in the ARM
+instruction set architecture [16] and the microarchitectural state as
+the set of all state elements within the design, excluding the ar-
+chitectural registers. In the ﬁrst experiment, we restrict our fault
+injections to only sequential state elements and observe the rate at
+which the different classes of errors appear over a period of 200 cy-
+cles subsequent to fault injection. The results of this experiment is
+presented in Table 1. These results demonstrate the average logical
+masking rate for faults occurring in sequential state elements.
+
+Table 1 shows that when a fault occurs within a state element, it
+is very common for microarchitectural state to remain corrupted
+in the cycles subsequent to fault injection, with only about 6%
+of faults being masked from affecting the microarchitectural state.
+Though the microarchitectural state masking rate is quite low (and
+thus the error rate is quite high), these faults rarely propagate into
+the architectural register ﬁle or to the top-level ports of the design
+where they have the potential to corrupt software state. The second
+row in Table 1 shows that only about 11% of the injected faults ac-
+tually affect the ARM926EJ-S architectural registers, and the third
+row shows that even fewer faults are propagated outside of the core
+from toplevel ports within the 200 cycle experiment window.
+
+Since combinational logic nodes consume nearly 58% of the cell
+area of the ARM926EJ-S design, we expand upon the previous
+study and next examine the effects of faults injected at arbitrary
+combinational logic nodes. Here we introduce two sets of data,
+the ﬁrst presents the masking rates for the different types of er-
+rors, based on a pulse being injected at clock cycle boundaries and
+lasting for the duration of an entire clock cycle. This experiment
+yields the average logical masking rate for faults occurring at arbi-
+trary logic nodes. Then, in the second experiment, we uniformly
+select a random point in time at which to inject a fault, irrespective
+of clock cycle boundaries. We hold this fault for a random duration
+on the interval [0.25 ∗ CLK, CLK]. This experiment results in the
+average combined temporal and logical masking rate of the micro-
+processor core. The results of these two experiments are shown in
+columns two and three respectively of Table 2.
+
+The results presented in Table 2 demonstrate that the microar-
+chitectural masking rate for faults in combinational logic is sub-
+stantially higher than the microarchitectural masking rate observed
+for faults occurring in sequential state. Nevertheless, it would be
+a mistake to take this to mean that faults in combinational logic
+are less signiﬁcant than faults in sequential state. Though there is
+a large disparity between these microarchitectural masking rates,
+the difference is not nearly so pronounced at the software interface.
+Table 2 shows that the architectural masking rate for faults occur-
+ring in logic is only about 8% greater than for faults occurring in
+
+Logical Masking Rate Logical + Timing Masking Rate
+
+Error Location
+Microarchitectural state
+Architectural state
+Top-level port
+
+78.44%
+94.74%
+95.12%
+
+83.76%
+96.59%
+96.33%
+
+2: Average logical and logical and temporal masking rates for soft errors occurring in combinational logic.
+
+ 0.12
+
+ 0.1
+
+ 0.08
+
+ 0.06
+
+ 0.04
+
+ 0.02
+
+s
+r
+o
+r
+r
+
+E
+ 
+d
+e
+s
+s
+e
+r
+p
+x
+E
+
+ 
+f
+o
+ 
+y
+c
+n
+e
+u
+q
+e
+r
+F
+
+Seq. State: Microarchitectural State Errors
+Seq. State: Architectural State Errors
+Seq. State: Top-level Port Errors
+Comb. Logic: Microarchitectural State Errors
+Comb. Logic: Architectural State Errors
+Comb. Logic: Top-level Port Errors
+
+s
+r
+o
+r
+r
+
+E
+
+ 
+f
+
+o
+ 
+r
+e
+b
+m
+u
+N
+
+ 60
+
+ 50
+
+ 40
+
+ 30
+
+ 20
+
+ 10
+
+ 0
+
+ 0
+1500 1750 2000 2250 2500 2750 3000 3250 3500 3750 4000 4250 4500 4750 5000
+
+Fault Duration (picoseconds)
+
+1
+
+2
+
+3
+
+4
+
+5
+
+6
+
+7
+
+8
+
+13
+
+14
+
+15
+
+16
+
+17
+
+18
+
+19
+
+20
+
+11
+
+10
+
+9
+12
+Elapsed Cycles
+
+3: Relative frequency for which incorrect state is observed within the pro-
+cessor as a function of transient pulse duration
+
+4: Average number of incorrect bits for various error types over the span of
+twenty cycles following the fault injection. Faults are injected in sequential
+state and combinational logic elements
+
+sequential state. Further, even though the architectural masking
+rate for faults occurring in combinational logic tends to be slightly
+higher, we will demonstrate in Section 2.2.2 that faults in combina-
+tional logic tend to be much more insidious.
+
+In order to illustrate the effects of latching-window masking and
+pulse duration on the overall soft error rate, we provide a further
+analysis of faults occurring at worst-case nodes in the design. In
+this experiment, we restrict fault injection to the output of sequen-
+tial state elements and vary the pulse duration randomly across the
+clock cycle time, thus ensuring the worst case delay for each prop-
+agation path between the fault injection site and the target state
+elements. Histogram data representing the frequency with which a
+given fault duration causes an error is shown in Figure 3.
+
+Figure 3 shows that there is a deﬁnite correlation between the
+fault duration and the likelihood that errors are expressed in the
+microprocessor. However, this ﬁgure demonstrates that even rela-
+tively small pulses may be responsible for a signiﬁcant percentage
+of the total soft error rate. In addition, it is important to note that the
+results presented in Figure 3 are conservative, since particle strikes
+are likely to be random throughout the depth of the circuit. Further,
+as technology scales, the latching window will become a more sig-
+niﬁcant portion of the clock cycle time, further marginalizing the
+effects of latching window masking.
+
+2.2.2 Soft Error Propagation Behavior
+
+In this section, we analyze how soft errors propagate throughout
+the microprocessor core over time. The effects of transient faults
+on both architectural and microarchitectural state as well as the
+toplevel ports of the design are analyzed in the cycles subsequent
+to fault injection. In these experiments, only fault injection data for
+those faults that have caused at least a single bit error are used, and
+the number and type of errors present in the core over the cycles
+following fault injection are analyzed. Figure 4 demonstrates the
+average number of state bit errors for each class of error discussed
+in the previous section. In Figure 4, each data point represents the
+average number of bit errors that are present in the design for a par-
+ticular error class, given that at least a single error of that class was
+expressed over the course of the experiment.
+
+Figure 4 demonstrates a large disparity between how faults oc-
+curring in sequential state affect the processor core as opposed to
+faults in combinational logic. In the ﬁrst cycle after fault injection,
+faults occurring in combinational logic typically cause more than
+27 bits of incorrect microarchitectural state and can cause six bits
+of corrupt architectural state on average, whereas faults in sequen-
+tial state typically only cause only single bit errors of any class.
+From Figure 4, it is clear that faults occurring in combinational
+logic cannot be accurately modeled as single bit state errors.
+It
+is important to note that although Section 2.2.1 shows the mask-
+ing rate for faults in combinational logic is about 8% higher, more
+than 58% of the design is consumed by combinational logic, mean-
+ing that more faults are likely to occur in the combinational logic
+than in the sequential state elements, potentially offsetting the de-
+scripency in masking. Further, these faults are likely to corrupt
+signiﬁcantly more system state. It is also interesting to note from
+Figure 4, on average, when faults in logic cause an error in architec-
+tural state, they often cause multi-bit errors within the register ﬁle,
+whereas faults in state elements rarely demonstrate such effects.
+
+In order to better understand the propagation of errors within the
+system and how they may potentially affect software state, the next
+experiment is focussed solely on the propagation behavior of soft
+errors into architectural state. Figures 5(a) and 5(b) demonstrate the
+relative frequency of architectural state bit errors manifested during
+the ten cycles after fault injection.
+
+Figure 5(a) shows that multi-bit architectural state errors tend
+to occur very rarely when faults are injected into sequential logic.
+This corroborates the position that simply applying error correct-
+ing codes (ECC) to the words stored within the register ﬁle is a po-
+tentially valuable tool in protecting against the effects of transient
+faults occurring in state elements. However, Figure 5(b), demon-
+strates that when transient faults occur in combinational logic, and
+they manifest as errors in architectural state, multi-bit errors of four
+bits or more account for more than 45% of the occurrences. Fur-
+ther, as shown by the spike at the tail end of Figure 5(b), more than
+15% of the faults occurring in combinational logic cause more than
+90% of the architectural state bits (∼ 1000 state elements) to hold
+
+Cycle 1
+Cycle 2
+
+Cycle 3
+Cycle 4
+
+Cycle 5
+Cycle 6
+
+Cycle 7
+Cycle 8
+
+Cycle 9
+Cycle 10
+
+Cycle 1
+Cycle 2
+
+Cycle 3
+Cycle 4
+
+Cycle 5
+Cycle 6
+
+Cycle 7
+Cycle 8
+
+Cycle 9
+Cycle 10
+
+ 1
+
+ 0.8
+
+ 0.6
+
+ 0.4
+
+ 0.2
+
+ 1
+
+ 0.8
+
+ 0.6
+
+ 0.4
+
+ 0.2
+
+y
+c
+n
+e
+u
+q
+e
+r
+F
+ 
+e
+v
+i
+t
+a
+e
+R
+
+l
+
+y
+c
+n
+e
+u
+q
+e
+r
+F
+e
+v
+i
+t
+
+ 
+
+l
+
+a
+e
+R
+
+y
+c
+n
+e
+u
+q
+e
+r
+F
+ 
+e
+v
+i
+t
+a
+e
+R
+
+l
+
+y
+c
+n
+e
+u
+q
+e
+r
+F
+e
+v
+i
+t
+
+ 
+
+l
+
+a
+e
+R
+
+ 1
+
+ 0.8
+
+ 0.6
+
+ 0.4
+
+ 0.2
+
+ 0
+
+ 1
+
+ 0.8
+
+ 0.6
+
+ 0.4
+
+ 0.2
+
+ 0
+
+ 0
+
+1
+
+2
+
+4
+
+16
+
+8
+Number of Architectural Errors
+
+32
+
+64
+
+128
+
+(a) Frequencies for the given number of architectural state er-
+rors when faults are injected into registers
+
+Cycle 1
+Cycle 2
+
+Cycle 3
+Cycle 4
+
+Cycle 5
+Cycle 6
+
+Cycle 7
+Cycle 8
+
+Cycle 9
+Cycle 10
+
+256
+
+512
+
+1024
+
+1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32
+
+Corrupt Bits per Architectural Register
+
+(a) Frequency that a given number of bits per architectural
+register are corrupted when faults are injected into a state ele-
+ment
+
+Cycle 1
+Cycle 2
+
+Cycle 3
+Cycle 4
+
+Cycle 5
+Cycle 6
+
+Cycle 7
+Cycle 8
+
+Cycle 9
+Cycle 10
+
+ 0
+
+1
+
+2
+
+4
+
+16
+
+8
+Number of Architectural Errors
+
+32
+
+64
+
+128
+
+256
+
+512
+
+1024
+
+(b) Frequencies for the given number of architectural state er-
+rors when faults are injected into logic
+
+5: Architectural state errors
+
+incorrect values. This is typically the result of faults occurring in
+extremely sensitive design for test logic, such as scan-enable nodes.
+To highlight the nuances of the architectural effects presented in
+Figure 5(b), we also study the number of incorrect bits per architec-
+tural register that are corrupted over time. Figure 6(a) the majority
+of faults injected into state elements cause only single bit errors in
+architectural state.In contrast to this, Figure 6(b) demonstrates that
+multi-bit errors, where the entire 32 bits of the architectural register
+are corrupted, tend to be the norm for faults occurring in combina-
+tional logic. Very often, this is the result of faults occurring in the
+read/write logic of the register ﬁle, causing an incorrect register to
+be read or written. In the case of an incorrect write address, the
+result is actually a pair of incorrect 32-bit architectural registers,
+one for the incorrectly written register and one for the register that
+should have been written, neither of which could have been recov-
+ered using ECC.
+
+2.2.3 Soft Error Analysis Discussion
+
+The experiments conducted in Section 2.2.2 lead to two impor-
+tant insights about how to efﬁciently provide soft error protection.
+First, the majority of the faults (both in combinational and sequen-
+tial logic) that affect the architectural state of the processor actu-
+ally occur within the register ﬁle. The standard practice of apply-
+ing ECC can only handle faults occurring directly in the register
+state array and does not provide coverage for faults ocurring in the
+read/write logic. Since the majority of the cell area within the reg-
+ister ﬁle is consumed by combinational logic, it is clear that ECC is
+unlikely to supply adequate protection. Therefore, a low-cost tech-
+
+1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32
+
+(b) Frequency that a given number of bits per architectural
+register are corrupted when faults are injected into logic
+
+Corrupt Bits per Architectural Register
+
+6: Number of bits that are corrupted per architectural register
+
+nique that defends the register ﬁle against faults in both the state
+array and the combinational logic is necessary to provide signiﬁ-
+cant protection for the microprocessor core.
+
+The second insight is derived from the observation that faults
+occurring in arbitrary combinational logic exhibit a high degree of
+fanout, causing errors in a large number of sequential state ele-
+ments. This property can be exploited to minimize the number of
+fault detection sites necessary to provide adequate coverage. By us-
+ing the set of most vulnerable state elements (nodes with high error
+fan-in) to guide the placement of fault detection units it is possible
+to achieve high fault coverage with minimal overhead.
+
+In the following sections, we present two techniques which lever-
+age these insights to provide signiﬁcant soft error coverage with
+little area and power overhead.
+
+3. FAULT MITIGATION TECHNIQUES
+
+In this section, we leverage the data presented in Section 2.2 to
+motivate two complementary techniques for addressing soft errors
+within an embedded microprocessor. The purpose of the techniques
+presented in this section is to provide scalable mechanisms for ad-
+dressing a statistically signiﬁcant portion of faults with minimal
+area and power overhead. We show that by targeting only highly
+vulnerable portions of the design, we can achieve substantial fault
+coverage with little expense.
+
+Our analyses demonstrate that the majority of faults affecting the
+operation of software occur within the architectural register ﬁle.
+The ﬁrst technique that we present addresses these faults using a
+
+mechanism referred to as the register value cache (RVC) in Sec-
+tion 3.1. The RVC relies on locality of reference, maintaining du-
+plicate copies of only the most recently used register data in or-
+der to provide high fault coverage. Unlike traditional mechanisms,
+such as ECC, the RVC protects against faults occurring in both the
+combinational logic and the state array, yielding more than twice
+the fault coverage. Further, the coverage provided by the RVC may
+be increased by simply adding more cache entries, thus balancing
+constraints for area and power against fault tolerance.
+
+To address faults occurring outside of the register ﬁle, we lever-
+age the signiﬁcant amount of observed fault fan-out within the core,
+demonstrated in Section 2.2, to strategically deploy transient pulse
+detectors at high fan-in state elements. We then use these detectors
+to proactively ﬂush processor state and correct transient errors oc-
+curring in microarchitectural state. The process of determining the
+most effective location for these pulse detectors and inserting them
+into the design is fully automatable and the subject of ongoing re-
+search. We demonstrate how this technique can be used to translate
+available area and power into fault coverage in Section 3.2.
+
+3.1 Register Value Cache
+
+The register ﬁle in the ARM926EJ-S microprocessor consumes
+only 8.7% of the total core area, yet 57.4% of the faults that result
+in errors at the software interface (architectural registers, memory,
+instruction cache, or data cache) occur within the register ﬁle. This
+implies that any efﬁcient strategy for tolerating soft errors must im-
+plement a mechanism for handling faults occurring within the reg-
+ister ﬁle.
+
+The traditional technique for dealing with faults occurring in
+large state arrays is to employ error correcting codes (ECC). How-
+ever, ECC in the context of the register ﬁle is problematic for sev-
+eral reasons, especially for processors implementing the ARM in-
+struction set. First, the ARM instruction set allows for up to three
+register read operations and up to two write operations per cycle.
+This signiﬁcantly complicates the logic within the register ﬁle and
+requires that an ECC protected register ﬁle include three ECC en-
+code units and two ECC decode and correct units, each of which is
+expensive to implement, both in power and area. In addition, ECC
+is limited in terms of the amount of fault coverage it can provide
+for the register ﬁle, since ECC can only protect against faults which
+occur directly in the register state array.
+
+Sequential state consumes only 44.1% of the ARM926EJ-S reg-
+ister ﬁle cell area. If particle strikes are assumed to be uniformly
+distributed over the area of the processor core, then more faults are
+likely to occur in the read/write logic of the register ﬁle than in the
+state array. This has serious implications for the efﬁcacy of ECC
+as a soft error tolerance mechanism. Since ECC is only capable
+of correcting single bit errors occurring in the actual state array,
+more than 55% of the faults occurring in the register ﬁle will go
+potentially undetected.
+
+In order to address the shortcomings of ECC in protecting the
+register ﬁle, we propose a new mechanism called the register value
+cache (RVC). The RVC is capable of detecting and correcting faults
+occurring in both the combinational and sequential logic of the reg-
+ister ﬁle.
+It maintains duplicate copies of the most recently ac-
+cessed values within the register ﬁle, allowing for a high degree
+of fault coverage without duplicating the entire register ﬁle. Also,
+since the inputs to the register ﬁle are split off and fed directly to
+the RVC, the read/write control logic for the register ﬁle is essen-
+tially duplicated. A detailed schematic of the RVC implementation
+is shown in Figure 7.
+
+The RVC is implemented as a separate module alongside the reg-
+ister ﬁle, and all read/write address and enable inputs to the register
+
+ﬁle are duplicated and fed to the RVC. On a read operation, if the
+RVC contains the requested read value, it provides the duplicate
+data and asserts the appropriate valid signal. The read results from
+the RVC and the register ﬁle are then compared and the result of
+the comparison is ANDed with the valid signal to determine if an
+error is present. If an error is present, the processor stall signal is
+asserted and the processor pipeline must stall for one cycle while
+the RVC determines whether the value it supplied was correct. This
+is done by conducting a cyclic redundancy check (CRC) on the reg-
+ister value contained in the cache. If the CRC check fails, then the
+value contained in the register ﬁle was correct, while if the CRC
+check passes, then the value in the RVC was correct. It is assumed
+here that the probability of multiple particle strikes where both the
+RVC and the register ﬁle are corrupted and the corrupted values
+correspond to the same register value is negligible.
+
+There are two main reasons for using CRC in the RVC rather
+than ECC. First, the former is much cheaper to implement in terms
+of both area and power. Second, since there are already two copies
+of the register read data, it is only necessary to determine which of
+the two values is correct, not to actually ﬁnd and correct the error,
+removing the need for expensive error correction logic.
+
+The RVC employs two CRC units for the purpose of encoding
+and decoding read/write values for the cache. The CRC units use
+a ﬁve bit CRC polynomial for encoding up to two write values per
+cycle. Since the CRC value is only checked when the output from
+the register ﬁle does not match the output of the RVC, at which
+point the processor pipeline is already stalled, one of the CRC units
+may be reused for checking the CRC on a mismatched read value.
+The operation of the RVC on read and write requests is described
+as follows:
+
+Write request: When the write enable signal is asserted, the RVC
+checks to see if the register to be written already has an entry
+assigned to it in the value array. This is done by checking the
+index array value corresponding to the register number. If the
+index array value is valid, it is used as the write address for
+the value array. In the case that the index array value is not
+valid, the least recently used value is evicted from the cache.
+While the write value address calculation is taking place, a
+ﬁve-bit CRC value is computed and forwarded to the value
+array.
+
+Read request: On a register read request, the index array entry
+corresponding to the register read number is checked for a
+valid entry. If the entry is valid, the associated output valid
+signal is asserted and the address from the index array entry
+is forwarded to the value array. The value array sets the read
+output data to the value stored in the cache, and forwards
+the read value as well as its CRC value to the previous value
+buffer. The read value and the CRC must be copied to this
+temporary buffer in order to handle the case where a read
+value mismatch has occurred for a register that was both read
+from and written to in the previous cycle. If the index array
+entry is not valid, the appropriate valid line is deasserted and
+the output data value is set to {32’bx}.
+The output from the register ﬁle and RVC are compared, and
+if the comparison fails AND the valid line for the read ad-
+dress is asserted, the two read results are temporarily buffered
+and the pipeline is stalled for one cycle. During this cycle,
+the RVC conducts a CRC check on the previously read RVC
+value.
+If the CRC check fails, then the error signal is as-
+serted and the buffered value from the register ﬁle is identi-
+ﬁed as the correct value, otherwise the buffered value from
+the cache is assumed to be the correct value.
+
+wr_en0
+wr_reg0
+wr_data0
+
+wr_en1
+wr_reg1
+wr_data1
+
+rd_reg0
+rd_reg1
+rd_reg2
+
+wr_data0
+
+check_crc
+
+wr_data1
+
+wr_en0
+wr_en1
+
+wr_reg0
+wr_reg1
+rd_reg0
+rd_reg1
+rd_reg2
+
+Basic Register File
+
+r
+e
+d
+o
+c
+e
+d
+
+rd_data0
+rd_data1
+rd_data2
+
+Register Value Cache
+
+Index
+
+Values
+
+error
+
+rd_data0
+rd_valid0
+rd_data1
+rd_valid1
+rd_data2
+rd_valid2
+
+Register file with RVC
+
+Buffer/By−pass
+
+Output
+
+Logic
+
+rd_data0
+rd_data1
+rd_data2
+
+stall
+
+CMP
+
+CMP
+
+CMP
+
+check_crc
+
+CRC unit
+
+CRC unit
+
+index
+
+i
+
+c
+g
+o
+
+l
+ 
+
+n
+o
+
+i
+
+ 
+
+i
+t
+c
+v
+e
++
+ 
+r
+e
+d
+o
+c
+e
+d
+
+r
+e
+d
+o
+c
+e
+d
+
+wr_idx0
+wr_idx1
+rd_idx0
+rd_idx1
+rd_idx2
+
+CMP
+
+error
+
+Value
+
+CRC
+
+Previous Value
+
+CRC
+
+rd_data0
+rd_data1
+rd_data2
+
+rd_valid0
+rd_valid1
+rd_valid2
+
+Register Value Cache (RVC)
+
+7: Incorporation of the register value cache into a processor core
+
+y
+c
+n
+e
+u
+q
+e
+r
+F
+e
+v
+i
+t
+
+ 
+
+l
+
+a
+e
+R
+
+ 0.07
+
+ 0.06
+
+ 0.05
+
+ 0.04
+
+ 0.03
+
+ 0.02
+
+ 0.01
+
+ 0
+
+3.2 Time-delayed Shadow Latches
+
+In order to provide fault tolerance for faults occurring outside of
+the register ﬁle, we ﬁrst determine which of these faults are most
+critical. Our results demonstrate that less than 30% of the faults
+injected into sequential logic which are observable at the software
+interface occur outside of the register ﬁle, as opposed to more than
+50% for faults injected into combinational logic. In order to achieve
+a high degree of fault coverage while still maintaining low over-
+head, we speciﬁcally target faults occurring in combinational logic
+using transient pulse detectors. Though these pulse detectors are
+ideal for detecting faults in combinational logic, they also provide
+fault detection for faults occurring in sequential state elements as
+well.
+
+To maintain low power and area overhead, we exploit the fault
+fanout observed in Section 2.2 to strategically place transient pulse
+detection units at high fan-in sequential state elements. Conve-
+niently, these high fan-in elements, also tend to be the nodes re-
+sponsible for generating errors at the software interface when faults
+are injected into sequential state, and so these detectors also provide
+fault coverage for faults occurring in state elements. Since these
+detectors are being used speciﬁcally to protect against soft errors
+occurring in the microarchitectural state outside of the register ﬁle,
+once an error is detected, it can be corrected by simply ﬂushing the
+processor pipeline.
+
+To help motivate the strategic placement of detectors at only a
+small subset of state elements within the design, we demonstrate
+the frequency of multi-bit errors that are observed in the cycle
+
+2
+
+4
+
+8
+
+16
+
+32
+
+64
+
+128
+
+256
+
+512 1024 2048 4096 8192 16384
+
+Number of Microarchitectural Errors
+
+8: Frequencies for the given number of microarchitectural state errors for
+faults that are injected into combinational logic.
+
+directly after a fault has been injected into combinational logic.
+These results are shown in Figure 8.
+
+Figure 8 shows that more than 30% of faults in combinational
+logic, that actually result in errors, result in multi-bit errors. Fur-
+ther, more than 20% of these errors are of ten bits or more. It is
+also interesting to note the outlying data which shows that almost
+5% of the faults result in more than 8,000 incorrect bits of state.
+This sort of occurrence is especially problematic and typically the
+result of faults occurring at nodes used in design for test, such as
+scan chains, and other general test logic.
+
+D
+
+CLK
+
+Main Flip−Flop
+
+Q
+
+delay
+
+Shadow
+
+Latch
+
+Error
+
+9: Time-delayed shadow latch used for transition detection.
+
+In Figure 9, we demonstrate the design for the transition detec-
+tion circuit used in this work, which is presented in the Razor [2]
+dynamic voltage scaling system. This ﬁgure depicts a standard ﬂip-
+ﬂop, which is augmented with a time-delayed shadow latch. For
+this detector, the input signal to the latch is split off and subjected
+to a delay proportional to the width of the pulses that are to be de-
+tected. The delayed input is then passed to a shadow latch and an
+error signal is generated if the output of the shadow latch and the
+ﬂip-ﬂop do not match. This particular detection mechanism is ca-
+pable of detecting faults occurring both in the logic cone feeding
+the ﬂip-ﬂop, and the ﬂip-ﬂop itself. There are a number engineer-
+ing difﬁculties involved in implementing such a system, which are
+beyond the scope of this paper, that are discussed in [5].
+
+Since an automated tool for placing these detectors and integrat-
+ing them into the microprocessor core is the subject of ongoing re-
+search and future work, we present a manual technique for placing
+fault detectors in order to determine the achievable fault coverage
+as a function of the number of detection units used in the design.
+To determine the most valuable detection points, we ﬁrst conduct
+statistical analysis using Monte Carlo fault injection simulations
+on the ARM926EJ-S core. We then rank order the set of ﬂip-ﬂops
+which should be protected based on the number of unique fault sites
+that would be covered by protecting the ﬂip-ﬂop. Once this rank-
+order has been generated, the amount of fault coverage for the chip
+can be incrementally improved by replacing traditional ﬂip-ﬂops
+with the enhanced ﬂip-ﬂops within the design. This allows chip de-
+signers to systematically tweak fault coverage as a function of the
+area and power budgets available for fault tolerance. In Section 4.2,
+we explore the cost versus fault coverage achieved by augmenting
+the ARM926EJ-S with these transition detection circuits.
+
+4. EVALUATION
+
+In this section, we conduct a number of experiments to demon-
+strate the efﬁcacy of the two proposed soft error protection mech-
+anisms. We evaluate the fault coverage provided when each tech-
+nique is applied in isolation as well as when they are employed
+cooperatively. For each experiment, we detail the amount of fault
+coverage gained with respect to its cost, in terms of both area and
+power.
+
+4.1 Register Value Cache Analysis
+
+To evaluate the RVC, we ﬁrst derive a bound for the maximum
+fault coverage achievable. This bound is calculated by analyzing
+the hit rate of RVCs of various sizes and multiplying the hit rate
+by the percentage of faults that occur within the register ﬁle that
+lead to errors at the software interface. We determine the hit rate
+by simulating the RVC operating on a set of traces from the Medi-
+aBench benchmarks [9]. These benchmarks were compiled using
+the arm-linux-gcc cross compiler version 2.95 and were simulated
+on the SimpleScalar ARM926EJ simulator [3]. The hit rates for
+various size RVCs are shown in Figure 10.
+
+As shown in Figure 10, an RVC with 6 entries demonstrates an
+average hit rate of more than 90%, and an RVC with 8 entries has
+an average hit rate of better than 95%. Some benchmarks exhibited
+
+ 1
+
+ 0.95
+
+ 0.9
+
+ 0.85
+
+ 0.8
+
+e
+t
+a
+R
+
+ 
+t
+i
+
+H
+
+cjpeg
+djpeg
+epic
+unepic
+g721decode
+g721encode
+pegwitdecode
+pegwitencode
+rawcaudio
+rawdaudio
+average
+
+ 0.75
+
+6
+
+8
+
+10
+12
+Number of Entries
+
+14
+
+16
+
+10: Register value cache hit rates as a function of the number of entries in
+the cache
+
+hit rates of 99% with a cache of only six entries, but on average,
+a 99% hit rate required at least a 12 entry cache. Hit rates of this
+magnitude demonstrate that high fault coverage can be gained with
+relatively few cache entries, allowing for small and efﬁcient RVC
+designs.
+
+In order to evaluate the cost of implementing various RVC de-
+signs in comparison to traditional fault tolerance techniques, we
+augmented the ARM926EJ-S register ﬁle with ECC protection. We
+implemented ECC protection circuits using minimum odd-weight-
+column SEC-DED codes as described in [7]. The ECC protected
+register ﬁle required two ECC encode units, one for each of the po-
+tential write operations, and three ECC decode and error correction
+units, one for each of the potential read operations. We also imple-
+mented the RVC with a variety of sizes ranging from 6 to 16 entries
+at intervals of two. Area results for the baseline ARM926EJ-S ECC
+protected register ﬁle and each of the RVC designs were generated
+by the Synopsys Physical Compiler, and power numbers were gen-
+erated by the Synopsys Power Compiler. The area results for each
+of the conﬁgurations are shown in Figure 11(a) and the power re-
+sults are shown in Figure 11(b).
+
+The data presented in Figure 11 demonstrates the percent area
+and power overhead for the ARM926EJ-S core for each fault toler-
+ant register ﬁle conﬁguration. These results indicate that an RVC of
+eight entries or less will consume both less on-chip area and power
+than a register ﬁle augmented with ECC. In general, the area re-
+quirements for the RVC tend to scale regularly, while the power
+requirements tended to be more erratic. This was largely due to
+synthesis optimizations which could utilize more efﬁcient logic for
+cache sizes which were a power of two.
+
+The fault coverage provided by protecting the register ﬁle is
+
+bounded by the fact that only 57.4% of the faults that were visible
+at the software interface occurred within the register ﬁle. This cov-
+erage bound is further reduced for ECC implementations because
+ECC can only detect and correct faults occurring in the actual reg-
+ister state array. Only 44.1% of the register ﬁle is sequential state,
+and so we can conservatively estimate the fault coverage of the
+ECC protection to be (57.4% * 44.1%) = 25.31%. This estimate
+is conservative because a modest fraction of the sequential state
+elements within the register ﬁle is microarchitectural state rather
+than architected registers. They would not be protected by ECC
+and could further degrade the fault coverage provided by ECC.
+
+Since the RVC is capable of protecting against both faults oc-
+curring in combinational logic and sequential state elements, the
+fault coverage for the RVC design is bounded only by the cache
+hit rate multiplied by the coverage gained by protecting the regis-
+ter ﬁle. We assume here that the probability of multiple concurrent
+
+e
+g
+a
+r
+e
+v
+o
+C
+
+ 
+t
+l
+u
+a
+F
+%
+
+ 
+
+ 70
+
+ 60
+
+ 50
+
+ 40
+
+ 30
+
+ 20
+
+ 10
+
+ 0
+
+d
+a
+e
+h
+r
+e
+v
+O
+ 
+a
+e
+r
+A
+%
+
+ 
+
+ 7
+
+ 6
+
+ 5
+
+ 4
+
+ 3
+
+ 2
+
+ 1
+
+ 0
+
+d
+a
+e
+h
+r
+e
+v
+O
+
+ 
+r
+e
+w
+o
+P
+%
+
+ 
+
+ 14
+
+ 12
+
+ 10
+
+ 8
+
+ 6
+
+ 4
+
+ 2
+
+ 0
+
+B
+
+a
+
+s
+
+B
+
+a
+
+s
+
+B
+
+a
+
+s
+
+B
+
+a
+
+s
+
+B
+
+a
+
+s
+
+B
+
+a
+
+s
+
+B
+
+a
+
+s
+
+elin
+
+e
+ 
++
+
+elin
+
+e
+ 
++
+
+elin
+
+e
+ 
++
+
+elin
+
+e
+ 
++
+
+elin
+
+e
+ 
++
+
+elin
+
+e
+ 
++
+
+elin
+
+e
+ 
++
+
+E
+
+C
+
+C
+
+C
+
+C
+
+C
+
+C
+
+C
+
+C
+
+a
+
+c
+
+h
+
+e
+
+6
+
+a
+
+c
+
+h
+
+e
+
+8
+
+a
+
+c
+
+h
+
+e
+
+1
+
+0
+
+a
+
+c
+
+h
+
+e
+
+1
+
+2
+
+a
+
+c
+
+h
+
+e
+
+1
+
+4
+
+a
+
+c
+
+h
+
+e
+
+1
+
+6
+
+B
+
+a
+
+s
+
+elin
+
+B
+
+a
+
+s
+
+elin
+
+B
+
+a
+
+s
+
+elin
+
+B
+
+a
+
+s
+
+elin
+
+B
+
+a
+
+s
+
+elin
+
+B
+
+a
+
+s
+
+elin
+
+B
+
+a
+
+s
+
+elin
+
+e
+ 
++
+ 
+
+E
+
+C
+
+C
+
+e
+ 
++
+ 
+
+e
+ 
++
+ 
+
+e
+ 
++
+ 
+
+e
+ 
++
+ 
+
+e
+ 
++
+ 
+
+e
+ 
++
+ 
+
+C
+
+C
+
+C
+
+C
+
+C
+
+C
+
+a
+
+c
+
+h
+
+e
+
+6
+
+a
+
+c
+
+h
+
+e
+
+8
+
+a
+
+c
+
+h
+
+e
+
+1
+
+0
+
+a
+
+c
+
+h
+
+e
+
+1
+
+2
+
+a
+
+c
+
+h
+
+e
+
+1
+
+4
+
+a
+
+c
+
+h
+
+e
+
+1
+
+6
+
+(a) Percent core area overhead for an RVC with varied sizes
+
+Configuration
+
+12: Fault coverage for a variety of register ﬁle conﬁgurations
+
+Configuration
+
+and the test set is used to evaluate the fault coverage achieved when
+deploying the detectors accordingly. For the second experiment we
+present the average achieved coverage over several thousand trials.
+We refer to the results from these two experiments as the coverage
+limit study and the observed coverage respectively.
+
+In Figure 13, we present a study of the amount of area and power
+overhead incurred by augmenting ﬂip-ﬂops with the time-delayed
+shadow latches described in Section 3.2. As mentioned in Sec-
+tion 3.2, an automated technique for inserting these detectors into
+a microprocessor core is the subject of future work, and here we
+present only a manual technique. The overhead for inserting these
+detectors is presented in terms of the additional logic cell over-
+head alone, however, preliminary experiments show that intercon-
+nect costs will not signiﬁcantly impact the results presented.
+
+Figure 13 demonstrates two sets of data, one for the coverage
+limit study and one for the observed coverage as described above.
+The limit study demonstrates that in the best case, less than 30%
+of the registers in the design would need to be augmented in order
+to achieve 99.9% fault coverage for faults occurring outside of the
+register ﬁle. For the observed coverage metric in Figure 13, our
+results show that on average, 90% fault coverage could be acheived
+by augmenting approximately 25% of the state elements within the
+design.
+
+4.3 Combined Approach Analysis
+
+The techniques proposed in this paper work together in a coop-
+erative fashion to address disjoint sets of faults. Here, we present
+an analysis of the combined fault coverage that can be achieved by
+employing both techniques together to tolerate soft errors. The area
+and power numbers shown here represent the combined cost of im-
+plementing the two techniques, in terms of the logic cell overhead
+alone.
+
+Figure 14(a) demonstrates the combined cell area overhead and
+Figure 14(b) demonstrates the combined total power overhead for
+each technique discussed in this paper. Each line in Figures 14(a)
+and 14(b) represents a different register ﬁle conﬁguration and its
+effectiveness when used in conjunction with the amount of area
+and power budgeted for the time-delayed shadow latches described
+in 3.2. For each graph, fault coverage increases with the percent
+overhead as more transient pulse detectors are added to the design.
+Several observations can be made from this data. First, it is clear
+that ECC is far less effective than the RVC in protecting the reg-
+ister ﬁle from corruption. Second, the increase in area overhead
+for different conﬁgurations of RVC is almost negligible, while the
+power overhead increase is slightly more dramatic. However, the
+majority of the power overhead comes from the addition of more
+
+B
+
+a
+
+s
+
+B
+
+a
+
+s
+
+B
+
+a
+
+s
+
+B
+
+a
+
+s
+
+B
+
+a
+
+s
+
+B
+
+a
+
+s
+
+eli
+
+n
+
+e
+ 
++
+
+eli
+
+n
+
+e
+ 
++
+
+eli
+
+n
+
+e
+ 
++
+
+eli
+
+n
+
+e
+ 
++
+
+eli
+
+n
+
+e
+ 
++
+
+eli
+
+n
+
+e
+ 
++
+
+B
+
+a
+
+s
+
+eli
+
+n
+
+E
+
+C
+
+C
+
+C
+
+C
+
+C
+
+C
+
+C
+
+a
+
+c
+
+h
+
+e
+
+6
+
+a
+
+c
+
+h
+
+e
+
+8
+
+a
+
+c
+
+h
+
+e
+
+1
+
+0
+
+a
+
+c
+
+h
+
+e
+
+1
+
+2
+
+a
+
+c
+
+h
+
+e
+
+1
+
+4
+
+e
+ 
++
+
+C
+
+a
+
+c
+
+h
+
+e
+
+1
+
+6
+
+(b) Percent core power overhead for an RVC with varied sizes
+
+Configuration
+
+11: Area and power analysis of register value cache implementations
+
+particle strikes is negligible. Figure 12 presents the achievable fault
+coverage for various fault tolerant register ﬁle conﬁgurations.
+
+Figure 12 demonstrates that an RVC, with as few as eight entries,
+is capable of delivering more than twice the fault coverage of an
+ECC protected register ﬁle. Even more importantly, the RVC can
+be scaled to 14 entries, increasing the fault coverage to 99% of the
+faults affecting the register ﬁle, while increasing the area and power
+overhead by only about 1% over the cost of implementing ECC.
+
+4.2 Time-delayed Shadow Latch Analysis
+
+In this section, we analyze the area and power requirements nec-
+essary for adding sufﬁcient detectors to achieve a given amount of
+fault coverage. A large number of Monte Carlo fault simulations
+were conducted to identify state elements for potential augmen-
+tation with time-delayed shadow latches. In these experiments, a
+counter is maintained for each state element within the design. The
+counter is incremented every time the state element is corrupted
+within the ﬁrst cycle following a fault injection. As a result, the
+counter associated with each state element reﬂects the number of
+distinct faults that would be detected by augmenting that state ele-
+ment with a pulse detection unit. The set of state elements is then
+rank-ordered using these counter values. Two experiments, pro-
+vided with this prioritized list of candidate state elements, are per-
+formed to determine the amount of attainable fault coverage.
+
+The ﬁrst experiment presents a limit study that demonstrates an
+upper bound on the number of faults covered as each state element
+is protected with a shadow latch. In the second experiment, the fault
+injection data is divided into training data and test data. The train-
+ing set is used to generate the candidate list described previously
+
+500
+
+1000
+
+1500
+
+2000
+
+2500
+
+3000
+
+Number of detectors
+
+ 0
+
+ 0
+
+ 40
+
+ 35
+
+ 30
+
+ 25
+
+ 20
+
+ 15
+
+ 10
+
+ 5
+
+ 40
+
+ 35
+
+ 30
+
+ 25
+
+ 20
+
+ 15
+
+ 10
+
+ 5
+
+e
+g
+a
+r
+e
+v
+o
+C
+
+ 
+t
+l
+u
+a
+F
+
+ 
+t
+n
+e
+c
+r
+e
+P
+
+e
+g
+a
+r
+e
+v
+o
+C
+
+ 
+t
+l
+
+u
+a
+F
+
+ 
+t
+
+n
+e
+c
+r
+e
+P
+
+SL+ECC
+SL+Cache6
+SL+Cache8
+SL+Cache10
+SL+Cache12
+SL+Cache14
+SL+Cache16
+
+SL+ECC
+SL+Cache6
+SL+Cache8
+SL+Cache10
+SL+Cache12
+SL+Cache14
+SL+Cache16
+
+ 20
+
+ 1
+
+ 100
+
+ 90
+
+ 80
+
+ 70
+
+ 60
+
+ 50
+
+ 40
+
+ 30
+
+ 100
+
+ 90
+
+ 80
+
+ 70
+
+ 60
+
+ 50
+
+ 40
+
+ 30
+
+e
+g
+a
+r
+e
+v
+o
+C
+
+ 
+t
+l
+u
+a
+F
+
+ 
+t
+n
+e
+c
+r
+e
+P
+
+e
+g
+a
+r
+e
+v
+o
+C
+
+ 
+t
+l
+
+u
+a
+F
+
+ 
+t
+
+n
+e
+c
+r
+e
+P
+
+Percent Coverage: Limit
+Percent Coverage: Observed
+
+ 0.5
+
+ 1
+
+ 1.5
+
+ 2
+
+ 2.5
+
+ 3
+
+ 3.5
+
+ 4
+
+ 4.5
+
+ 2
+
+ 3
+
+ 4
+
+ 5
+
+ 6
+
+ 7
+
+Percent Area Overhead
+
+(a) Percent area overhead for transient fault detection units.
+The secondary x axis shows the number of detectors (i.e. the
+number of ﬂip-ﬂops augmented with detection units)
+
+Percent Area Overhead
+
+(a) Percent area overhead for the combined technique. Area
+increases as a function of the number of detectors used to at-
+tain fault coverage.
+
+500
+
+1000
+
+1500
+
+2000
+
+2500
+
+3000
+
+Number of detectors
+
+Percent Coverage: Limit
+Percent Coverage: Observed
+
+ 0
+
+ 0
+
+ 1
+
+ 2
+
+ 3
+
+ 4
+
+Percent Power Overhead
+
+ 5
+
+ 6
+
+(b) Percent power overhead for transient fault detection units.
+The secondary x axis shows the number of detectors (i.e. the
+number of ﬂip-ﬂops augmented with detection units)
+
+13: Area and power analysis for transient fault detection units
+
+time-delayed shadow latches, which tend to yield diminishing re-
+turns. Lastly, more than 80% fault coverage can be achieved at
+a cost of less than 14% power overhead and less than 6% in area
+overhead.
+
+5. RELATED WORK
+
+Kim and Somani [8] conducted software-simulated fault injec-
+tion campaigns on an RTL model of the PicoJava-II microproces-
+sor to determine the soft error sensitivity of logic blocks within the
+design. The soft error sensitivity (SES) metric used in this work
+is deﬁned as the probability that a soft error within a given logic
+block will cause the processor to enter an incorrect architectural
+state. The fault model used in this work is similar to our own,
+though the authors of this paper conduct error analysis strictly at
+the architectural level.
+
+In [11], Mukherjee et al. deﬁne the term architectural vulnera-
+bility factor (AVF) to be the probability that a fault in a microar-
+chitectural structure will cause an error in program output. The
+authors use a performance simulator of the Itanium II microarchi-
+tecture to determine the AVFs for structures within their simulated
+microarchitecture. Our work presents similar results at the archi-
+tectural level for faults injected into sequential state , but focuses
+on the microarchitectural effects of soft errors on a less aggressive
+processor core.
+
+Wang, et al. [18] characterize the effects of soft errors on an out-
+of-order, superscalar Alpha-like processor core. The fault model
+
+ 20
+
+ 8
+
+ 9
+
+ 10
+
+ 11
+
+ 13
+
+ 12
+ 15
+Percent Power Overhead
+
+ 14
+
+ 16
+
+ 17
+
+ 18
+
+ 19
+
+(b) Percent power overhead for the combined technique.
+Power increases as a function of the number of detectors used
+to attain fault coverage.
+
+14: Area and power analysis for the combined technique. SL represents
+the time delayed redundant latch technique, ECC represents the error cor-
+recting codes technique for register ﬁle protection and CacheX represents
+the register value cache technique with X number of cache entries.
+
+used in this work simulates single bit ﬂips in sequential state ele-
+ments within the design, and an analysis of the failure modes exhib-
+ited in simulation is described. In their work, the authors explore
+the effects of soft errors on a substantially different microarchitec-
+tural model and propose techniques for detecting soft errors based
+on symptoms observed at the software interface.
+
+Saggese, et al. [15] present a similar analysis of the effects of
+soft errors occurring in both sequential state elements and combina-
+tional logic on a DLX microprocessor model. The error manifesta-
+tion rates demonstrated in their work are corroborated by our own,
+however, in our work we have chosen to focus on the error propa-
+gation behavior exhibited at the microarchitectural level rather than
+a sensitivity analysis of different blocks within the design.
+
+In [10], the authors present a technique for protecting register
+ﬁles in high-performance architectures from faults that may oc-
+cur when the clock frequency is aggressively scaled. The authors
+speciﬁcally target systems with large physical register ﬁles typi-
+cally found in superscalar pipelines and store redundant live regis-
+ter values in unused physical registers. Though the idea proposed
+here is similar in nature to our own, it only feasible for systems
+with large, underutilized register ﬁles, and provides no coverage
+when the register ﬁle is fully utilized.
+
+In this work, we leverage a large body of research [5] [6] [12]
+
+focused on circuits for detecting delay faults caused by electrical
+noise, particle strikes and inadequate voltage levels. This work
+provides the basis for the proposed strategic placement of transient
+fault detectors. We exploit the circuit-level characteristics of em-
+bedded microprocessors in order to efﬁciently utilize this technol-
+ogy.
+
+6. CONCLUSION
+
+This work presents a thorough analysis of soft errors on an
+
+ARM926EJ-S core. This analysis was done in order to motivate
+low-overhead soft error tolerance mechanisms appropriate for the
+embedded design space. We demonstrate how soft errors in com-
+binational logic affect the behavior of soft errors at the microarchi-
+tectural level, and why this is important in the embedded domain.
+For mitigating soft errors, we present two low-overhead comple-
+mentary techniques that provide scalable fault coverage as a func-
+tion of the available area and power budgets. In the ﬁrst technique,
+we introduce the register value cache, an architectural mechanism,
+that provides twice the fault coverage of ECC when applied to the
+register ﬁle and costs less to implement in terms of both area and
+power. The second technique that we present makes use of time-
+delayed shadow latches for fault detection. It identiﬁes high fan-in
+nodes in the microprocessor core for placing these detectors and
+achieves up to 40% fault coverage. In conjunction, the two pro-
+posed fault tolerance techniques can provide approximately 84%
+fault coverage while incurring less than 5.5% area overhead and
+about 14% power overhead.
+
+7. REFERENCES
+
+[1] ARM Ltd. ARM926EJ-S Technical Reference Manual, Jan.
+2004. http://www.arm.com/pdfs/DDI0198D 926 TRM.pdf.
+
+[2] T. Austin, D. Blaauw, T. Mudge, and K. Flautner. Making
+
+typical silicon matter with razor. IEEE Computer,
+37(3):57–65, Mar. 2004.
+
+[3] T. Austin, E. Larson, and D. Ernst. Simplescalar: An
+
+infrastructure for computer system modeling. IEEE
+Transactions on Computers, 35(2):59–67, Feb. 2002.
+
+[4] D. Bernick, B. Bruckert, P. D. Vigna, D. Garcia, R. Jardine,
+J. Klecka, and J. Smullen. Nonstop Advanced Architecture.
+In International Conference on Dependable Systems and
+Networks, pages 12–21, June 2005.
+
+[5] S. Das, D. Roberts, S. Lee, S. Pant, D. Blaauw, T. Austin,
+
+K. Flautner, and T. Mudge. A self-tuning dvs processor using
+delay-error detection and correction. IEEE Journal of
+Solid-State Circuits, 41(4):792–804, 2006.
+
+[6] P. Franco and E. J. McCluskey. On-line delay testing of
+
+digital circuits. In Proc. of the 1994 IEEE VLSI Test
+Symposium, pages 167–173, 1994.
+
+[7] M. Y. Hsiao. A class of optimal minimum
+
+odd-weight-column sec-ded codes. IBM Journal of Research
+and Development, 14(4):395–401, 1970.
+
+[8] S. Kim and A. Somani. Soft error sensitivity characterization
+
+for microprocessor dependability enhancement strategy. In
+International Conference on Dependable Systems and
+Networks, pages 416–428, June 2002.
+
+[9] C. Lee, M. Potkonjak, and W. Mangione-Smith.
+
+MediaBench: A tool for evaluating and synthesizing
+multimedia and communications systems. In Proc. of the
+30th Annual International Symposium on Microarchitecture,
+pages 330–335, 1997.
+
+[10] G. Memik, M. Chowdhury, A. Mallik, and Y. Ismail.
+Engineering over-clocking: Reliability-performance
+trade-offs for high-performance register ﬁles. In
+International Conference on Dependable Systems and
+Networks, pages 770–779, June 2005.
+
+[11] S. S. Mukherjee, C. Weaver, J. Emer, S. Reinhardt, and
+
+T. Austin. A systematic methodology to compute the
+architectural vulnerability factors for a high performance
+microprocessor. In International Symposium on
+Microarchitecture, pages 29–42, Dec. 2003.
+
+[12] M. Nicolaidis. Time redundancy based soft-error tolerance to
+
+rescue nanometer technologies. In Proc. of the 1999 IEEE
+VLSI Test Symposium, pages 86–94, 1999.
+
+[13] S. K. Reinhardt and S. S. Mukherjee. Transient fault
+
+detection via simulataneous multithreading. In Proc. of the
+27th Annual International Symposium on Computer
+Architecture, pages 25–36, June 2000.
+
+[14] E. Rotenberg. AR-SMT: A microarchitectural approach to
+
+fault tolerance in microprocessors. In International
+Symposium on Fault Tolerant Computing, pages 84–91,
+1999.
+
+[15] G. P. Saggese, A. Vetteth, Z. Kalbarczyk, and R. Iyer.
+
+Microprocessor sensitivity to failures: Control vs. execution
+and combinatorial vs. sequential logic. In International
+Conference on Dependable Systems and Networks, pages
+760–769, June 2005.
+
+[16] D. Seal. ARM Architecture Reference Manual.
+
+Addison-Wesley, London, UK, 2000.
+
+[17] L. Spainhower and T. Gregg. IBM S/390 Parallel Enterprise
+
+Server G5 Fault Tolerance: A Historical Perspective. IBM
+Journal of Research and Development, 43(6):863–873, 1999.
+
+[18] N. J. Wang, J. Quek, T. M. Rafacz, and S. J. Patel.
+Characterizing the Effects of Transient Faults on a
+High-Performance Processor Pipeline. In International
+Conference on Dependable Systems and Networks, page 61,
+June 2004.
+
+[19] J. Zeigler. Terrestrial cosmic ray intensities. IBM Journal of
+
+Research and Development, 42(1):117–139, 1998.
+
+

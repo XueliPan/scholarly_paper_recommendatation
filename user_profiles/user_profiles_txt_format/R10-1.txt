@@ -1,0 +1,1117 @@
+Automated Tracing of I/O Stack!
+
+Seong Jo Kim1, Yuanrui Zhang1, Seung Woo Son2, Ramya Prabhakar1,
+
+Mahmut Kandemir1, Christina Patrick1, Wei-keng Liao3, and Alok Choudhary3
+
+1 Department of Computer Science and Engineering
+
+Pennsylvania State University, University Park, PA, 16802, USA
+
+2 Mathematics and Computer Science Division
+
+Argonne National Laboratory, Argonne, IL, 60439, USA
+
+3 Department of Electrical Engineering and Computer Science
+
+Northwestern University, Evanston, IL 60208, USA
+
+Abstract. Eﬃcient execution of parallel scientiﬁc applications requires
+high-performance storage systems designed to meet their I/O require-
+ments. Most high-performance I/O intensive applications access multiple
+layers of the storage stack during their disk operations. A typical I/O re-
+quest from these applications may include accesses to high-level libraries
+such as MPI I/O, executing on clustered parallel ﬁle systems like PVFS2,
+which are in turn supported by native ﬁle systems like Linux. In order to
+design and implement parallel applications that exercise this I/O stack,
+it is important to understand the ﬂow of I/O calls through the entire
+storage system. Such understanding helps in identifying the potential
+performance and power bottlenecks in diﬀerent layers of the storage hi-
+erarchy. To trace the execution of the I/O calls and to understand the
+complex interactions of multiple user-libraries and ﬁle systems, we pro-
+pose an automatic code instrumentation technique, which enables us to
+collect detailed statistics of the I/O stack. Our proposed I/O tracing tool
+traces the ﬂow of I/O calls across diﬀerent layers of an I/O stack, and
+can be conﬁgured to work with diﬀerent ﬁle systems and user-libraries.
+It also analyzes the collected information to generate output in terms of
+diﬀerent user-speciﬁed metrics of interest.
+
+Keywords: Automated code instrumentation, Parallel I/O, MPI-IO,
+MPICH2, PVFS2.
+
+1 Introduction
+
+Emerging data-intensive applications make signiﬁcant demands on storage sys-
+tem performance and, therefore, face what can be termed as I/O Wall, that
+is, I/O behavior is the primary factor that determines application performance.
+Clearly, unless the I/O wall is properly addressed, scientists and engineers will
+not be able to exploit the full potential of emerging parallel machines when
+
+! This work is supported in part by NSF grants 0937949, 0621402, 0724599, 0821527,
+0833126, 0720749, 0621443, 0724599, and 0833131 and DOE grants DEAC02-
+06CH11357, DE-FG02-08ER25848, DE-SC0002156, and DESC0001283.
+
+R. Keller et al. (Eds.): EuroMPI 2010, LNCS 6305, pp. 72–81, 2010.
+c
+!
+
+Springer-Verlag Berlin Heidelberg 2010
+
+Automated Tracing of I/O Stack
+
+73
+
+(cid:4)(cid:393)(cid:393)(cid:367)(cid:349)(cid:272)(cid:258)(cid:410)(cid:349)(cid:381)(cid:374)
+(cid:87)(cid:396)(cid:381)(cid:336)(cid:396)(cid:258)(cid:373)(cid:859)
+(cid:87)(cid:396)(cid:381)(cid:336)(cid:396)(cid:258)(cid:373)
+
+(cid:68)(cid:87)(cid:47)(cid:18)(cid:44)(cid:1006) (cid:87)(cid:115)(cid:38)(cid:94)(cid:1006)
+
+(cid:68)(cid:87)(cid:47)(cid:18)(cid:44)(cid:1006)(cid:859)
+
+g
+
+pp
+
+•Application segment 
+to be instrumented
+•Metrics of interest
+•Locations of library 
+sources
+
+(cid:18)(cid:381)(cid:374)(cid:296)(cid:349)(cid:336)(cid:437)(cid:396)(cid:258)(cid:410)(cid:349)(cid:381)(cid:374)(cid:3)
+
+(cid:296)(cid:349)(cid:367)(cid:286)
+
+(cid:4)(cid:393)(cid:393)(cid:367)(cid:349)(cid:272)(cid:258)(cid:410)(cid:349)(cid:381)(cid:374)(cid:3)
+
+(cid:393)(cid:396)(cid:381)(cid:336)(cid:396)(cid:258)(cid:373)
+
+(cid:87)(cid:258)(cid:396)(cid:400)(cid:286)(cid:396)
+(cid:87)(cid:396)(cid:381)(cid:271)(cid:286)
+(cid:94)(cid:286)(cid:367)(cid:286)(cid:272)(cid:410)(cid:381)(cid:396)
+(cid:94)(cid:286)(cid:367)(cid:286)(cid:272)(cid:410)(cid:381)(cid:396)
+(cid:87)(cid:396)(cid:381)(cid:271)(cid:286)
+(cid:47)(cid:374)(cid:400)(cid:286)(cid:396)(cid:410)(cid:286)(cid:396)
+
+(cid:18)(cid:381)(cid:282)(cid:286)
+(cid:18)(cid:381)(cid:282)(cid:286)(cid:3)
+
+(cid:47)(cid:374)(cid:400)(cid:410)(cid:396)(cid:437)(cid:373)(cid:286)(cid:374)(cid:410)(cid:286)(cid:396)
+
+(cid:87)(cid:115)(cid:38)(cid:94)(cid:1006)(cid:859)
+
+Tracing 
+Tracing
+Records
+
+Instrumented
+
+(cid:28)(cid:454)(cid:286)(cid:272)(cid:437)(cid:410)(cid:349)(cid:381)(cid:374)(cid:3)
+
+Code
+
+(cid:28)(cid:374)(cid:336)(cid:349)(cid:374)(cid:286)
+
+(cid:24)(cid:258)(cid:410)(cid:258)(cid:3)
+
+(cid:87)(cid:396)(cid:381)(cid:272)(cid:286)(cid:400)(cid:400)(cid:349)(cid:374)(cid:336)
+(cid:87)(cid:396)(cid:381)(cid:272)(cid:286)(cid:400)(cid:400)(cid:349)(cid:374)(cid:336)(cid:3)
+
+(cid:28)(cid:374)(cid:336)(cid:349)(cid:374)(cid:286)
+
+Output 
+Statistics
+
+Fig. 1. Our automated I/O tracing tool takes as input the application program, I/O
+stack information and a conﬁguration ﬁle which captures the metrics of interest, lo-
+cations of target sources, and a description of the region of interest in the code. It
+automatically generates and runs instrumented code, and ﬁnally collects and analyzes
+all the statistics on the ﬂy.
+
+running large-scale parallel applications from bioinformatics, climate prediction,
+computational chemistry, and brain imaging domains.
+
+The ﬁrst step in addressing the I/O wall is to understand it. Unfortunately,
+this is not trivial as I/O behavior today is a result of complex interactions
+that take place among multiple software components, which can be referred to,
+collectively, as I/O Stack. For example, an I/O stack may contain an application
+program, a high-level library such as MPI-IO [8], a parallel ﬁle system such as
+PVFS [3], and a native ﬁle system such as Linux. A high-level I/O call in an
+application program ﬂows through these layers in the I/O stack and, during this
+ﬂow, it can be fragmented into multiple smaller calls (sub-calls) and the sub-
+calls originating from diﬀerent high-level calls can contend for the same set of
+I/O resources such as storage caches, I/O network bandwidth, disk space, etc.
+Therefore, understanding the I/O wall means understanding the ﬂow of I/O calls
+over the I/O stack.
+
+To understand the behavior of an I/O stack, one option is to let the applica-
+tion programmer/user to instrument the I/O stack manually. Unfortunately, this
+approach (manual instrumentation) is very diﬃcult in practice and extremely
+error prone. In fact, tracking even a single I/O call may necessitate modiﬁcations
+to numerous ﬁles and passing information between them.
+
+Motivated by this observation, in this work, we explore automated instru-
+mentation of the I/O stack. In this approach, as shown in Figure 1, instead
+of instrumenting the source code of applications and other components of the
+I/O stack manually, an application programmer speciﬁes what portion of the
+application code is to be instrumented and what statistics are to be collected.
+The proposed tool takes this information as input along with the description
+of the target I/O stack and the source codes of the application program and
+other I/O stack software, and generates, as output, an instrumented version of
+the application code as well as instrumented versions of the other components
+
+74
+
+S.J. Kim et al.
+
+(software layers) in the I/O stack. All necessary instrumentation of the com-
+ponents in the I/O stack (application, libraries, ﬁle systems) are carried out
+automatically.
+
+A unique aspect of our approach is that it can work with diﬀerent I/O stacks
+
+and with diﬀerent metrics of interest (e.g., I/O latency, I/O throughput, I/O
+power). Our experience with this tool is very encouraging so far. Speciﬁcally,
+using this tool, we automatically instrumented an I/O-intensive application and
+collected detailed performance and power statistics on the I/O stack.
+
+Section 2 discusses the related work on code instrumentation and proﬁling.
+Section 3 explains the details of our proposed automated I/O tracing tool. An
+experimental evaluation of the tool is presented in Section 4. Finally, Section 5
+concludes the paper with a summary of the planned future work.
+
+2 Related Work
+
+Over the past decade many code instrumentation tools that target diﬀerent ma-
+chines and applications have been developed and tested. ATOM [24] inserts probe
+code into the program at compile time. Dynamic code instrumentation [1,2,17],
+on the other hand, intercepts the execution of an executable at runtime to in-
+sert user-deﬁned codes at diﬀerent points of interest. HP’s Dynamo [1] monitors
+an executable’s behavior through interpretation and dynamically selects hot in-
+struction traces from the running program.
+
+Several techniques have been proposed in the literature to reduce instrumen-
+tation overheads. Dyninst and Paradyn use fast breakpoints to reduce the over-
+heads incurred during instrumentation. They both are designed for dynamic
+instrumentation [12]. In comparison, FIT [5] is a static system that aims re-
+targetability rather than instrumentation optimization. INS-OP [15] is also a dy-
+namic instrumentation tool that applies transformations to reduce the overheads
+in the instrumentation code. In [27], Vijayakumar et al. propose an I/O tracing
+approach that combines aggressive trace compression. However, their strategy
+does not provide ﬂexibility in terms of target metric speciﬁcation. Tools such
+as CHARISMA [20], Pablo [23], and TAU (Tuning and Analysis Utilities) [19]
+are designed to collect and analyze ﬁle system traces [18]. For the MPI-based
+parallel applications, several tools, such as MPE (MPI Parallel Environment) [4]
+and mpiP [26], exist. mpiP is a lightweight proﬁling tool for identifying com-
+munication operations that do not scale well in the MPI-based applications. It
+reduces the amount of proﬁle data and overheads by collecting only statisti-
+cal information on MPI functions. Typically, the trace data generated by these
+proﬁling tools are visualized using tools such as Jumpshot [28], Nupshot [14],
+Upshot [11], and PerfExplorer [13].
+
+Our work is diﬀerent from these prior eﬀorts as we use source code analysis
+to instrument the I/O stack automatically. Also, unlike some of the existing
+proﬁling and instrumentation tools, our approach is not speciﬁc to MPI or to a
+pre-determined metric; instead, it can target an entire I/O stack and work with
+diﬀerent performance and power related metrics.
+
+Automated Tracing of I/O Stack
+
+75
+
+3 Our Approach
+
+3.1 High-Level View of Automated Instrumentation
+
+Our goal is to provide an automated I/O tracing functionality for parallel appli-
+cations that exercise multiple layers of an I/O stack, with minimal impact to the
+performance. To this end, we have implemented in this work an automated I/O
+tracing tool that, as illustrated in Figure 1, comprises three major components:
+code instrumenter, execution engine, and data processing engine.
+
+As shown in Figure 1, the code instrumenter consists of the parser, the probe
+selector, and the probe inserter. In this context, a probe is a piece of code being
+inserted into the application code and I/O stack software (e.g., in the source
+codes of MPI-I/O and PVFS2), which helps us collect the required statistics.
+The code instrumenter takes as input the application program, high level I/O
+metrics of interest written in our speciﬁcation language, and the target I/O stack
+(which consists of the MPI library and PVFS2 in our current testbed).
+
+The parser parses I/O metrics of interest from the conﬁguration ﬁle, extracts
+all necessary information to instrument the I/O stack in a hierarchial fashion
+from top to bottom, and stores it to be used later by other components of the
+tool. After that, the probe selector chooses the most appropriate probes for the
+high-level metrics speciﬁed by the user. Finally, the probe inserter automatically
+inserts the necessary probes into the proper places in the I/O stack. Note that,
+depending on the target I/O metrics of interest, our tool may insert multiple
+probes in the code. Table 1 lists a representative set of high-level metrics that
+can be traced using our tool.
+
+Table 1. Sample high-level metrics that can be traced and collected using the tool
+
+I/O latency experienced by each I/O call in each layer (client, server, or disk) in the stack
+Throughput achieved by a given I/O read and write call
+Average I/O access latency in a given segment of the program
+Number of I/O nodes participating in each collective I/O
+Amount of time spent during inter-processor communication in executing a collective I/O call
+Disk power consumption incurred by each I/O call
+Number of disk accesses made by each I/O call
+
+The execution engine compiles and runs the instrumented I/O stack, and
+generates the required trace. Finally, the data processing engine analyzes the
+trace log ﬁles and returns statistics based on the user’s queries. The collected
+statistics can be viewed from diﬀerent perspectives. For example, the user can
+look at the I/O latency/power breakdown at each server or at each client. The
+amount of time spent by an I/O call at each layer of the target I/O stack can
+also be visualized.
+
+3.2 Technical Details of Automated Instrumentation
+
+In this section, we discuss details of the code instrumenter component of our
+tool. Let us assume, for the purpose of illustration, that the user is interested
+
+76
+
+S.J. Kim et al.
+
+-A [application.c, application]
+-L [$MPICH2, $PVFS2, ClientMachineInfo, $Log]
+-O [w]
+-C [100-300]
+-S [4, <3 max>, <3 max>, <3 max>, <3 max>, <3 max>]
+-T [4, <3, mpi.0.log , mpi.1.log, mpi.2.log>, <3, client.0.log, client.1.log, client.2.log>,
+
+<3, server.0.log, server.1.log,server.2.log>, <3, disk.0.log, disk.1.log,disk.2.log>]
+
+-Q [latency, inclusive, all, list:, list:*, list:*, list:*]
+-P [App;common;App-probe1;-l main;before]
+-P [App;common;App-probe2;-l MPI_Comm_rank;after]
+-P [App;common;App-Start-probe;-l MPI_File_read;before]
+-P [App;common;App-Start-probe4;-l MPI_File_write;before]
+-P [MPI;latency;MPI-Start-probe;-n 74;$MPICH2/mpi/romio/mpi-io/read.c]
+-P [MPI;latency;MPI-End-probe;-n 165;$MPICH2/mpi/romio/mpi-io/read.c]
+-P [MPI;latency;MPI-Start-probe;-n 76;$MPICH2/mpi/romio/mpi-io/read_all.c]
+-P [MPI;latency;MPI-End-probe;-n 118;$MPICH2/mpi/romio/mpi-io/read_all.c]
+-P [MPI;latency;MPI-End-probe;-n 73;$MPICH2/mpi/romio/mpi-io/write.c]
+-P [MPI;latency;MPI-End-probe;-n 168;$MPICH2/mpi/romio/mpi-io/write.c]
+-P [MPI;latency;MPI-Start-probe;-n 75;$MPICH2/mpi/romio/mpi-io/write_all.c]
+-P [MPI;latency;MPI-End-probe;-n 117;$MPICH2/mpi/romio/mpi-io/write_all.c]
+-P [MPI;latency;MPI-probe;-n 62;$MPICH2/mpi/romio/mpi-io/adio/ad_pvfs2_read.c]
+-P [MPI;latency;MPI-probe;-n 295;$MPICH2/mpi/romio/mpi-io/adio/ad_pvfs2_write.c]
+-P [PVFSClient;latency;Client-Start-probe;-n 372;$PVFS2/client/sysint/sys-io.sm]
+-P [PVFSClient;latency;Client-End-probe;-n 397;$PVFS2/client/sysint/sys-io.sm]
+-P [PVFSClient;latency;Client-probe;-n 670;$PVFS2/client/sysint/sys-io.sm]
+-P [PVFSServer;latency;.Server-Start-probe;-n 153;$PVFS2/server/io.sm]
+-P [PVFSServer;latency;.Server-End-probe;-n 5448;$PVFS2/io/job/job.c]
+-P [PVFSServer;latency;.Disk-start-probe;-n 1342;$PVFS2/io/flow/flowproto-bmi-trove/flowproto
+
+-P [PVFSServer;latency;.Disk-end-probe1;-n 1513;$PVFS2/io/flow/flowproto-bmi-trove/flowproto-
+
+-P [PVFSServer;latency;.Disk-end-probe2;-n 1513;$PVFS2/io/flow/flowproto-bmi-trove/flowproto-
+
+-multiqueue.c]
+
+multiqueue.c]
+
+multiqueue.c]
+
+Fig. 2. An example conﬁguration ﬁle
+
+in collecting statistics about the execution latency of each I/O call in each layer
+of the I/O stack, that is, the amount of time spent by an I/O call in MPI-I/O,
+PVFS2 client, PVFS2 server, and disk layers. A sample conﬁguration ﬁle that
+captures this request is given in Figure 2. This ﬁle is written in our speciﬁcation
+language, and Table 2 describes the details of each parameter in the conﬁguration
+ﬁle. Let us now explain the contents of this sample conﬁguration ﬁle.
+
+Parameter Description
+
+-A
+-L
+-O
+-C
+-S
+-T
+-Q
+-P
+
+Table 2. Flags used in a conﬁguration ﬁle
+
+In this example, the user
+wants to collect the execu-
+tion latency of MPI-IO write
+operations
+(indicated using
+-O[w])
+that occur between
+lines 100 to 300 of an applica-
+tion program called, applica-
+tion.c. Also, the user speciﬁes
+three I/O stack layers, which
+are MPI-IO, PVFS2 client,
+and PVFS2 server (below the
+application program). Finally, the user describes the trace log ﬁle names and
+their locations for the data processing engine. Based on the target metric of in-
+terest, that is latency, the most appropriate latency probes can be automatically
+inserted into the designated places in the probe speciﬁcation.
+
+Application ﬁle name or path
+Path for I/O libraries
+Operation of interest
+Code segment of interest to trace
+I/O stack speciﬁcation
+Tracing ﬁle location generated by our tool
+Metric of interest
+Probe name and inserting location
+
+(cid:4)(cid:393)(cid:393)(cid:367)(cid:349)(cid:272)(cid:258)(cid:410)(cid:349)(cid:381)(cid:374)
+
+(cid:68)(cid:87)(cid:47)(cid:18)(cid:44)(cid:1006)
+
+(cid:87)(cid:115)(cid:38)(cid:94)(cid:1006)(cid:3)(cid:18)(cid:367)(cid:349)(cid:286)(cid:374)(cid:410)
+
+(cid:87)(cid:115)(cid:38)(cid:94)(cid:1006)(cid:3)(cid:94)(cid:286)(cid:396)(cid:448)(cid:286)(cid:396)
+
+(cid:68)(cid:87)(cid:47)(cid:890)(cid:38)(cid:349)(cid:367)(cid:286)(cid:890)(cid:449)(cid:396)(cid:349)(cid:410)(cid:286)(cid:890)(cid:258)(cid:367)(cid:367)(cid:894)(cid:895)(cid:854)
+
+(cid:68)(cid:87)(cid:47)(cid:890)(cid:38)(cid:349)(cid:367)(cid:286)(cid:890)(cid:449)(cid:396)(cid:349)(cid:410)(cid:286)(cid:890)(cid:258)(cid:367)(cid:367)(cid:894)(cid:895)
+
+(cid:4)(cid:24)(cid:47)(cid:75)(cid:47)(cid:890)(cid:87)(cid:115)(cid:38)(cid:94)(cid:1006)(cid:890)(cid:116)(cid:396)(cid:349)(cid:410)(cid:286)(cid:18)(cid:381)(cid:374)(cid:410)(cid:349)(cid:336)(cid:894)(cid:895)
+
+(cid:4)(cid:24)(cid:47)(cid:75)(cid:47)(cid:890)(cid:87)(cid:115)(cid:38)(cid:94)(cid:1006)(cid:890)(cid:116)(cid:396)(cid:349)(cid:410)(cid:286)(cid:94)(cid:410)(cid:396)(cid:349)(cid:282)(cid:286)(cid:282)(cid:894)(cid:895)
+
+(cid:87)(cid:115)(cid:38)(cid:94)(cid:890)(cid:400)(cid:455)(cid:400)(cid:890)(cid:349)(cid:381)(cid:894)(cid:895)
+
+(cid:349)(cid:381)(cid:890)(cid:282)(cid:258)(cid:410)(cid:258)(cid:890)(cid:400)(cid:286)(cid:410)(cid:437)(cid:393)(cid:890)(cid:373)(cid:400)(cid:336)(cid:393)(cid:258)(cid:349)(cid:396)(cid:400)(cid:894)(cid:895)
+
+(cid:349)(cid:381)(cid:890)(cid:400)(cid:410)(cid:258)(cid:396)(cid:410)(cid:890)(cid:296)(cid:367)(cid:381)(cid:449)(cid:894)(cid:895)(cid:3)
+
+(cid:296)(cid:367)(cid:381)(cid:449)(cid:890)(cid:272)(cid:258)(cid:367)(cid:367)(cid:271)(cid:258)(cid:272)(cid:364)(cid:894)(cid:895)(cid:3)
+
+(cid:296)(cid:367)(cid:381)(cid:449)(cid:890)(cid:373)(cid:437)(cid:367)(cid:410)(cid:349)(cid:395)(cid:437)(cid:286)(cid:437)(cid:286)(cid:890)(cid:393)(cid:381)(cid:400)(cid:410)(cid:894)(cid:895)
+
+(cid:410)(cid:396)(cid:381)(cid:448)(cid:286)(cid:890)(cid:449)(cid:396)(cid:349)(cid:410)(cid:286)(cid:890)(cid:272)(cid:258)(cid:367)(cid:367)(cid:271)(cid:258)(cid:272)(cid:364)(cid:890)(cid:296)(cid:374)(cid:894)(cid:895)
+
+(cid:271)(cid:373)(cid:349)(cid:890)(cid:396)(cid:286)(cid:272)(cid:448)(cid:890)(cid:272)(cid:258)(cid:367)(cid:367)(cid:271)(cid:258)(cid:272)(cid:364)(cid:890)(cid:296)(cid:374)(cid:894)(cid:895)
+
+(cid:24)(cid:349)(cid:400)(cid:364)
+
+(cid:104)(cid:400)(cid:286)(cid:396)(cid:3)(cid:400)(cid:393)(cid:286)(cid:272)(cid:349)(cid:296)(cid:349)(cid:272)(cid:258)(cid:410)(cid:349)(cid:381)(cid:374)
+
+(cid:18)(cid:381)(cid:282)(cid:286)(cid:3)
+
+(cid:47)(cid:374)(cid:400)(cid:410)(cid:396)(cid:437)(cid:373)(cid:286)(cid:374)(cid:410)(cid:286)(cid:396)
+
+Automated Tracing of I/O Stack
+
+77
+
+(cid:4)(cid:393)(cid:393)(cid:367)(cid:349)(cid:272)(cid:258)(cid:410)(cid:349)(cid:381)(cid:374)(cid:859)
+
+(cid:68)(cid:87)(cid:47)(cid:18)(cid:44)(cid:1006)(cid:859)
+
+(cid:4)(cid:393)(cid:393)(cid:882)(cid:94)(cid:410)(cid:258)(cid:396)(cid:410)(cid:882)(cid:87)(cid:396)(cid:381)(cid:271)(cid:286)
+(cid:68)(cid:87)(cid:47)(cid:890)(cid:38)(cid:349)(cid:367)(cid:286)(cid:890)(cid:449)(cid:396)(cid:349)(cid:410)(cid:286)(cid:890)(cid:258)(cid:367)(cid:367)(cid:894)(cid:3)(cid:857)(cid:3)(cid:853)(cid:3)IOCallIDs(cid:895)(cid:854)
+(cid:4)(cid:393)(cid:393)(cid:882)(cid:28)(cid:374)(cid:282)(cid:882)(cid:87)(cid:396)(cid:381)(cid:271)(cid:286)
+
+(cid:68)(cid:87)(cid:47)(cid:75)(cid:47)(cid:890)(cid:38)(cid:349)(cid:367)(cid:286)(cid:890)(cid:449)(cid:396)(cid:349)(cid:410)(cid:286)(cid:890)(cid:258)(cid:367)(cid:367)(cid:894)(cid:3)(cid:857)(cid:3)(cid:853)(cid:3)IOCallIDs(cid:895)(cid:3)(cid:898)
+
+(cid:68)(cid:87)(cid:47)(cid:882)(cid:94)(cid:410)(cid:258)(cid:396)(cid:410)(cid:882)(cid:87)(cid:396)(cid:381)(cid:271)(cid:286)
+(cid:68)(cid:87)(cid:47)(cid:882)(cid:28)(cid:374)(cid:282)(cid:882)(cid:87)(cid:396)(cid:381)(cid:271)(cid:286)
+
+(cid:899)
+
+(cid:4)(cid:24)(cid:47)(cid:75)(cid:47)(cid:890)(cid:87)(cid:115)(cid:38)(cid:94)(cid:1006)(cid:890)(cid:116)(cid:396)(cid:349)(cid:410)(cid:286)(cid:18)(cid:381)(cid:374)(cid:410)(cid:349)(cid:336)(cid:894)(cid:3)(cid:857)(cid:3)(cid:853)(cid:3)
+
+(cid:4)(cid:24)(cid:47)(cid:75)(cid:47)(cid:890)(cid:87)(cid:115)(cid:38)(cid:94)(cid:1006)(cid:890)(cid:116)(cid:396)(cid:349)(cid:410)(cid:286)(cid:94)(cid:410)(cid:396)(cid:349)(cid:282)(cid:286)(cid:282)(cid:894)(cid:3)(cid:857)(cid:3)(cid:853)(cid:3)
+
+IOCallIDs(cid:895)(cid:3)(cid:898)
+
+(cid:68)(cid:87)(cid:47)(cid:882)(cid:87)(cid:396)(cid:381)(cid:271)(cid:286)
+(cid:87)(cid:115)(cid:38)(cid:94)(cid:890)(cid:400)(cid:455)(cid:400)(cid:890)(cid:449)(cid:396)(cid:349)(cid:410)(cid:286)(cid:894)(cid:857)(cid:3)(cid:853)(cid:3)IOCallIDs(cid:895)(cid:854)
+
+(cid:899)
+(cid:87)(cid:115)(cid:38)(cid:94)(cid:1006)(cid:3)(cid:18)(cid:367)(cid:349)(cid:286)(cid:374)(cid:410)(cid:859)
+(cid:87)(cid:115)(cid:38)(cid:94)(cid:890)(cid:400)(cid:455)(cid:400)(cid:890)(cid:349)(cid:381)(cid:894)(cid:3)(cid:857)(cid:3)(cid:853)(cid:3)*IOCallIDs(cid:895)(cid:3)
+(cid:898)
+
+(cid:18)(cid:367)(cid:349)(cid:286)(cid:374)(cid:410)(cid:882)(cid:94)(cid:410)(cid:258)(cid:396)(cid:410)(cid:882)(cid:87)(cid:396)(cid:381)(cid:271)(cid:286)
+(cid:857)(cid:856)
+(cid:410) (cid:28) (cid:282) (cid:87) (cid:271)
+(cid:18)(cid:367)(cid:349)(cid:286)(cid:374)(cid:410)(cid:882)(cid:28)(cid:374)(cid:282)(cid:882)(cid:87)(cid:396)(cid:381)(cid:271)(cid:286)
+(cid:18)(cid:367)(cid:349)
+
+(cid:899)
+(cid:87)(cid:115)(cid:38)(cid:94)(cid:1006)(cid:3)(cid:94)(cid:286)(cid:396)(cid:448)(cid:286)(cid:396)(cid:859)
+(cid:349)(cid:381)(cid:890)(cid:400)(cid:410)(cid:258)(cid:396)(cid:410)(cid:890)(cid:296)(cid:367)(cid:381)(cid:449)(cid:894)(cid:895)(cid:3)(cid:898)
+
+(cid:94)(cid:286)(cid:396)(cid:448)(cid:286)(cid:396)(cid:882)(cid:94)(cid:410)(cid:258)(cid:396)(cid:410)(cid:882)(cid:87)(cid:396)(cid:381)(cid:271)(cid:286)
+
+(cid:899)
+
+IOCallIDs(cid:895)(cid:3)(cid:898)
+
+(cid:68)(cid:87)(cid:47)(cid:882)(cid:87)(cid:396)(cid:381)(cid:271)(cid:286)
+(cid:87)(cid:115)(cid:38)(cid:94)(cid:890)(cid:400)(cid:455)(cid:400)(cid:890)(cid:449)(cid:396)(cid:349)(cid:410)(cid:286)(cid:894)(cid:857)(cid:3)(cid:853)(cid:3)IOCallIDs(cid:895)(cid:854)
+
+(cid:899)
+
+(cid:899)
+
+(cid:349)(cid:381)(cid:890)(cid:282)(cid:258)(cid:410)(cid:258)(cid:890)(cid:400)(cid:286)(cid:410)(cid:437)(cid:393)(cid:890)(cid:373)(cid:400)(cid:336)(cid:393)(cid:258)(cid:349)(cid:396)(cid:400)(cid:894)(cid:3)(cid:857)(cid:3)(cid:853)(cid:3)*IOCallIDs(cid:895)(cid:3)
+(cid:898)
+
+(cid:18)(cid:367)(cid:349)(cid:286)(cid:374)(cid:410)(cid:882)(cid:87)(cid:396)(cid:381)(cid:271)(cid:286)
+(cid:87)(cid:47)(cid:69)(cid:100) (cid:94)(cid:28)(cid:90)(cid:115)(cid:28) (cid:90)(cid:28)(cid:89) (cid:47)(cid:75)(cid:38)(cid:47)(cid:62)(cid:62)(cid:894)(cid:3)(cid:857)(cid:853)
+(cid:853)
+
+(cid:890) (cid:89)(cid:890)
+
+(cid:890)
+
+(cid:894)
+
+*IOCallIDs)
+
+(cid:296)(cid:367)(cid:381)(cid:449)(cid:890)(cid:272)(cid:258)(cid:367)(cid:367)(cid:271)(cid:258)(cid:272)(cid:364)(cid:894)(cid:895)(cid:898)
+
+(cid:94)(cid:286)(cid:396)(cid:448)(cid:286)(cid:396)(cid:882)(cid:28)(cid:374)(cid:282)(cid:882)(cid:87)(cid:396)(cid:381)(cid:271)(cid:286)
+
+(cid:296)(cid:367)(cid:381)(cid:449)(cid:890)(cid:373)(cid:437)(cid:367)(cid:410)(cid:349)(cid:395)(cid:437)(cid:286)(cid:437)(cid:286)(cid:890)(cid:393)(cid:381)(cid:400)(cid:410)(cid:894)(cid:895)
+
+(cid:24)(cid:349)(cid:400)(cid:364)(cid:882)(cid:28)(cid:374)(cid:282)(cid:882)(cid:393)(cid:396)(cid:381)(cid:271)(cid:286)(cid:1006)
+
+(cid:410)(cid:396)(cid:381)(cid:448)(cid:286)(cid:890)(cid:449)(cid:396)(cid:349)(cid:410)(cid:286)(cid:890)(cid:272)(cid:258)(cid:367)(cid:367)(cid:271)(cid:258)(cid:272)(cid:364)(cid:890)(cid:296)(cid:374)(cid:894)(cid:895)
+
+(cid:271)(cid:373)(cid:349)(cid:890)(cid:396)(cid:286)(cid:272)(cid:448)(cid:890)(cid:272)(cid:258)(cid:367)(cid:367)(cid:271)(cid:258)(cid:272)(cid:364)(cid:890)(cid:296)(cid:374)(cid:894)(cid:895)
+
+(cid:24)(cid:349)(cid:400)(cid:364)(cid:882)(cid:94)(cid:410)(cid:258)(cid:396)(cid:410)(cid:882)(cid:393)(cid:396)(cid:381)(cid:271)(cid:286)
+
+(cid:24)(cid:349)(cid:400)(cid:364)(cid:882)(cid:28)(cid:374)(cid:282)(cid:882)(cid:393)(cid:396)(cid:381)(cid:271)(cid:286)(cid:1005)
+
+(cid:24)(cid:349)(cid:400)(cid:364)
+
+Fig. 3. Illustration of inserting probes into the application program and I/O stack
+components by our code instrumenter. Application!, MPICH2!, PVFS2 Client!, and
+PVFS2 Server! represent the instrumented I/O stack.
+
+Figure 3 illustrates how the code instrumenter works. It takes as an input
+the user conﬁguration ﬁle along with MPI-IO and PVFS2. The parser parses
+this conﬁguration ﬁle and extracts all the information required by the other
+components such as the probe inserter and the data processing engine. Based on
+the speciﬁed target metric, i.e., the execution latency of MPI write operations
+in all the layers including MPI-IO, PVFS2 client, PVFS2 server, and disk, the
+probe selector employs only the write-related latency probes, which helps to
+minimize the overheads associated with the instrumentation. Then, following
+the call sequence of MPI write function, from the MPI-IO library though the
+PVFS2 client to the PVFS2 server in Figure 3, the probe inserter selectively
+inserts the necessary probes into the start point and the end point of each layer
+described in the conﬁguration ﬁle.
+
+After the instrumentation, the probe inserter compiles the instrumented code.
+During the compilation, it also patches a small array structure, called IOCal-
+lID, to the MPI-IO and PVFS2 functions to be matched for tracing. IOCallIDs
+contain information about each layer such as the layer ID and the I/O type.
+When IOCallIDs are passed from the MPI-IO layer to the PVFS2 client layer,
+the inserted probe extracts the information from them and generates the log ﬁles
+with the latency statistics at the boundary of each layer.
+
+Note that a high-level MPI-IO call can be fragmented into multiple small
+sub-calls. For example, in two-phase I/O [6], which consists of an I/O phase and
+a communication phase, tracing an I/O call across the layer boundaries in the
+I/O stack is not trivial. In our implementation, each call has a unique ID in the
+current layer and passes it to the layer below. This help us to connect the high-
+level call to its sub-calls in a hierarchical fashion. It also helps the data processing
+engine (see Figure 1) to combine the statistics coming from diﬀerent layers in a
+
+78
+
+S.J. Kim et al.
+
+!"#$%&’()*+
+
+,$-&./%&’()*+ 0
+
+!"#$%&’()*&+), -$
+
+%&+, .$/$%&+, 0$/$%&+, 1
+
+!"#$%&’()
+
+,-.&/"0$12#&34&
+/35$%&/"#$%6
+
+!"#$%&’()
+
+,-.&/0123042/
+15&617$%&6"#$%8
+
+1&’()*+ 3
+
+1&’()*+ 2
+
+1&’()*+ 4
+
+!"#$%&’(*+)
+
+%&+, .
+
+%&+, 0
+
+%&+, 1
+
+!"#$%&’(*+)
+
+Fig. 4. Computation of I/O latency and I/O throughput metrics
+
+systematic way (for example, all the variables that hold latency information at
+diﬀerent layers are associated with each other using these IDs).
+
+In the PVFS2 server layer, our tool uses a unique structure, called
+ﬂow desciptor, to perform the requested I/O operations from the PVFS2 client.
+The probe inserted into the start point in the server layer extracts the infor-
+mation in the IOCallIDs passed from the PVFS2 client and packs it into the
+ﬂow descriptor. Since the ﬂow descriptor is passed to the entire PVFS2 server,
+the probe in the server extracts the necessary information from it to collect the
+latency related statistics without much complexity.
+
+The execution engine runs the instrumented code and generates the trace
+log ﬁles in each layer. Finally, the data processing engine analyzes all the trace
+log ﬁles and collects the execution I/O latency induced by each MPI operation
+in each layer. The I/O latency value computed at each layer is equal to the
+maximum value of the I/O latencies obtained from diﬀerent layers below it.
+However, the computation of I/O throughput value is additive, i.e., the I/O
+throughput computed at any layer is the sum of I/O throughputs from diﬀerent
+sub-layers below it. Figure 4 illustrates the computation of these metrics. To
+compute the I/O power, we use the power model described in [9].
+
+4 Evaluation
+
+To demonstrate the operation of our tracing tool, we ran a benchmark program us-
+ing three PVFS2 servers and three PVFS2 clients on a Linux cluster that consists
+of 6 dual-core processor nodes, AMD Athlon MP2000+, connected through Ether-
+net and Myrinet. Each node of this system runs a copy of PVFS2 and MPICH2. To
+measure disk power consumption per I/O call, we used the disk energy model [9]
+based on the data sheets of the IBM Ultrastar 36Z15 disk [25]. Table 3 gives the
+important metrics used to calculate power consumption.
+
+Parameter
+
+Default Value
+
+Disk drive module
+
+Storage capacity (GB)
+
+Table 3. Important disk parameters for
+power calculation
+
+In our evaluation, we used the
+FLASH I/O benchmark [7] that simu-
+lates the I/O pattern of FLASH [29].
+It creates the primary data structures
+in the FLASH code and generates
+three ﬁles: a checkpoint ﬁle, a plot ﬁle
+for center data, and a plot ﬁle for cor-
+ner data, using two high-level I/O li-
+braries: PnetCDF [16] and HDF5 [10].
+The in-memory data structures are 3D sub-blocks of size 8x8x8 or 16x16x16. In
+the simulation, 80 of these blocks are held by each processor and are written to
+
+Active power consumption (Watt)
+
+Idle power consumption (Watt)
+
+Maximum disk speed (RPM)
+
+36.7
+15000
+13.5
+10.2
+
+IBM36Z15
+
+Automated Tracing of I/O Stack
+
+79
+
+Client 0
+nxb=8  nyb=8  nyz=8
+
+193.3
+
+Server 0
+nxb=8  nyb=8  nyz=8
+
+ 100
+
+)
+c
+e
+s
+m
+
+(
+ 
+
+y
+c
+n
+e
+t
+a
+L
+
+ 80
+
+ 60
+
+ 40
+
+ 20
+
+ 0
+
+ 5
+
+ 12
+
+ 10
+
+)
+c
+e
+s
+/
+B
+M
+
+i
+
+(
+ 
+h
+t
+d
+w
+d
+n
+a
+B
+
+ 8
+
+ 6
+
+ 4
+
+ 2
+
+ 0
+
+ 5
+
+ 200
+
+ 150
+
+ 100
+
+)
+c
+e
+s
+m
+
+(
+ 
+
+y
+c
+n
+e
+t
+a
+L
+
+ 50
+
+ 2
+
+ 1.8
+
+ 1.6
+
+ 1.4
+
+ 1.2
+
+ 1
+
+ 0.8
+
+ 0.6
+
+ 0.4
+
+ 0.2
+
+l
+
+)
+e
+u
+o
+J
+(
+ 
+n
+o
+i
+t
+p
+m
+u
+s
+n
+o
+C
+ 
+r
+e
+w
+o
+P
+
+ 0
+
+ 5
+
+ 6
+
+ 7
+
+ 8
+
+ 9  10  11  12  13  14  15  16  17
+
+ 6
+
+ 7
+
+ 8
+
+ 9  10  11  12  13  14  15  16  17
+
+ 0
+
+ 5
+
+mpi-log
+
+client 0
+
+server 2
+
+MPI-IO Call ID
+
+server 0
+
+server 1
+
+mpi-log 0
+client 0
+
+server 0
+mpi-log.1
+
+client 1
+server 0
+
+mpi-log 2
+client 2
+
+server 0
+
+MPI-IO Call ID
+
+Fig. 5. Latency of Client 0 using PnetCDF
+
+Fig. 6. Latency of Server 0 using PnetCDF
+
+Client 0
+Client 1
+Client 2
+
+Server 0
+
+nxb=8  nyb=8  nyz=8
+
+Client 0
+Client 1
+Client 2
+
+Server 0
+
+nxb=8  nyb=8  nyz=8
+
+ 6
+
+ 7
+
+ 8
+
+ 9  10  11  12  13  14  15  16  17
+
+ 6
+
+ 7
+
+ 8
+
+ 9  10  11  12  13  14  15  16  17
+
+MPI-IO Call ID
+
+MPI-IO Call ID
+
+Fig. 7. Disk throughput of Server 0 using
+PnetCDF
+
+Fig. 8. Power consumption of Server 0 us-
+ing PnetCDF
+
+three ﬁles with 50 MPI File write all function calls. We used the sub-blocks of
+size 8x8x8. nxb, nyb, and nyz in Figures 5 through 9 represent these sub-block
+sizes.
+
+First, Figure 5 shows the I/O latencies experienced by each MPI-IO call from
+Client 0’s perspective when PnetCDF is used. MPI-IO calls 6-17 are shown with
+latencies (in milliseconds) taken in mpi-log, Client 0, Server 0, Server 1, and
+Server 2, from left to right. We see that MPI-IO call 16 takes 193.3 milliseconds
+in mpi-log, but only 32 milliseconds in Server 1. In this experiment, some of
+the MPI-IO calls (0-5, 18-45) calls are directed to the metadata server to write
+header information of each ﬁle. These calls were not recorded in the I/O server
+log ﬁle. Figure 6, on the other hand, plots the latencies observed from Server 0’s
+perspective. The three bars for every call ID represent cumulative latencies from
+each client (Client 0, Client 1 and Client 2 from left to right). Further, each bar
+also gives a breakdown of I/O latency (in milliseconds) taken for the request to
+be processed in the MPI-IO, PVFS client, and PVFS server layers, respectively.
+From this result, one can see, for example, that Client 1 and Client 2 spend less
+time than Client 0 in the Server 0 as far as call ID 16 is concerned. These two
+plots in Figure 5 and Figure 6 clearly demonstrate that our tool can be used to
+study the I/O latency breakdown, from both clients’ and server’s perspectives.
+
+80
+
+S.J. Kim et al.
+
+Client 0
+
+ 180
+
+ 140
+
+ 160
+
+ 120
+
+ 100
+
+)
+c
+e
+s
+m
+
+nxb=8  nyb=8  nyz=8
+
+Figure 7 illustrates the I/O through-
+put in Server 0. One can observe from
+this plot the detailed I/O throughput
+patterns of diﬀerent clients regarding
+this server. Comparing Figure 6 with
+Figure 7, one can also see that the
+bottleneck I/O call in the application
+code depends on whether I/O latency
+or I/O throughput is targeted. Fig-
+ure 8, on the other hand, presents the
+power consumption results for Server
+0. We see that most of the power is
+consumed by I/O call 15, and except for this call, power consumptions of Client
+0 and Client 1 are similar on this server.
+
+Fig. 9. Latency of Client 0 using HDF5
+
+ 0  1  2  3  4  5  6  7  8  9  10  11  12  13
+
+MPI-IO Call ID
+
+(
+ 
+y
+c
+n
+e
+t
+a
+L
+
+server 1
+
+server 0
+
+server 2
+
+mpi-log
+
+client 0
+
+ 20
+
+ 60
+
+ 40
+
+ 80
+
+ 0
+
+Our ﬁnal set of results are given in Figure 9 and depict the I/O latency values
+observed from Client 0’s viewpoint when using HDF5, instead of PnetCDF.
+Overall, these sample set of results clearly show that our tool can be used to
+collect and analyze detailed latency, throughput, and power statistics regarding
+the I/O stack.
+
+5 Concluding Remarks and Future Work
+
+Performing code instrumentation manually is often diﬃcult and could be error-
+prone. Hence, we propose an automatic instrumentation technique that can be
+used to trace and analyze scientiﬁc applications using high level I/O libraries
+like PnetCDF, HDF5, or MPI I/O over ﬁle systems like PVFS2 and Linux. The
+tracing utility uses existing MPI I/O function calls and therefore adds minimum
+overhead to the application execution. It takes target high level metrics like I/O
+latency, I/O throughput and I/O power as well as a description of the target I/O
+stack as input and analyzes the collected information to generate output in terms
+of diﬀerent user-speciﬁed metrics. As our future work, we plan to extend our
+analysis to other available I/O benchmarks, such as S3D-IO [22] and GCRM [21],
+to characterize their I/O behavior. We also plan to investigate techniques for
+dynamic code instrumentation that makes use of information available at run-
+time to generate/restructure code for data optimization.
+
+References
+
+(2000)
+
+1. Bala, V., et al.: Dynamo: A transparent dynamic optimization system. In: PLDI
+
+2. Bruening, D.L.: Eﬃcient, transparent, and comprehensive runtime code manipu-
+
+lation. PhD thesis, MIT, Cambridge, MA, USA (2004)
+
+3. Carns, P.H., et al.: PVFS: A parallel ﬁle system for linux clusters. In: Proceedings
+
+of the Annual Linux Showcase and Conference (2000)
+
+4. Chan, A., et al.: User’s guide for MPE: Extensions for MPI programs (1998)
+
+Automated Tracing of I/O Stack
+
+81
+
+5. De Bus, B., et al.: The design and implementation of FIT: A ﬂexible instrumenta-
+
+tion toolkit. In: Proceedings of PASTE (2004)
+
+6. del Rosario, J.M., et al.: Improved parallel I/O via a two-phase run-time access
+
+strategy. SIGARCH Comput. Archit. News 21(5), 31–38 (1993)
+
+7. Fisher, R.T., et al.: Terascale turbulence computation using the ﬂash3 application
+
+framework on the IBM Blue Gene/L system. IBM J. Res. Dev. 52(1/2) (2008)
+
+8. Gropp, W., et al.: MPI — The Complete Reference: the MPI-2 Extensions, vol. 2.
+
+9. Gurumurthi, S., et al.: DRPM: Dynamic speed control for power management in
+
+MIT Press, Cambridge (1998)
+
+server class disks. In: ISCA (2003)
+
+10. HDF (Hierarchical Data Format) , http://www.hdfgroup.org
+11. Herrarte, V., Lusk, E.: Studying parallel program behavior with upshot. Technical
+
+Report ANL–91/15, Argonne National Laboratory (1991)
+
+12. Hollingsworth, J.K., et al.: MDL: A language and compiler for dynamic program
+instrumentation. In: Malyshkin, V.E. (ed.) PaCT 1997. LNCS, vol. 1277, Springer,
+Heidelberg (1997)
+
+13. Huck, K.A., Malony, A.D.: PerfExplorer: A Performance Data Mining Framework
+
+For Large-Scale Parallel Computing. In: SC (2005)
+
+14. Karrels, E., Lusk, E.: Performance analysis of MPI programs. In: Workshop on
+
+Environments and Tools For Parallel Scientiﬁc Computing (1994)
+
+15. Kumar, N., et al.: Low overhead program monitoring and proﬁling. In: Proceedings
+
+16. Li, J., et al.: Parallel netCDF: A high-performance scientiﬁc I/O interface. In: SC
+
+of PASTE (2005)
+
+(2003)
+
+17. Luk, C.-K., et al.: Pin: Building customized program analysis tools with dynamic
+
+instrumentation. In: PLDI (2005)
+
+18. Moore, S., et al.: Review of performance analysis tools for MPI parallel programs.
+In: Cotronis, Y., Dongarra, J. (eds.) PVM/MPI 2001. LNCS, vol. 2131, p. 241.
+Springer, Heidelberg (2001)
+
+19. Moore, S., et al.: A scalable approach to MPI application performance analysis.
+In: Di Martino, B., Kranzlm¨uller, D., Dongarra, J. (eds.) EuroPVM/MPI 2005.
+LNCS, vol. 3666, pp. 309–316. Springer, Heidelberg (2005)
+
+20. Nieuwejaar, N., et al.: File-access characteristics of parallel scientiﬁc workloads.
+
+IEEE Transactions on Parallel and Distributed Systems 7, 1075–1089 (1996)
+
+21. Randall, D.A.: Design and testing of a global cloud-resolving model (2009)
+22. Sankaran, R., et al.: Direct numerical simulations of turbulent lean premixed com-
+
+bustion. Journal of Physics: Conference Series 46(1), 38 (2006)
+
+23. Simitci, H.: Pablo MPI Instrumentation User’s Guide. University of Illinois. Tech.
+
+24. Srivastava, A., Eustace, A.: ATOM: A system for building customized program
+
+analysis tools. In: PLDI (1994)
+
+25. Ultrastar, I.: 36Z15 Data Sheet (2010), http://www.hitachigst.com/hdd/ultra/
+
+26. Vetter, J., Chambreau, C.: mpiP: Lightweight, scalable MPI proﬁling (2010),
+
+http://mpip.sourceforge.net/
+
+27. Vijayakumar, K., et al.: Scalable I/O tracing and analysis. In: Supercomputing
+
+28. Zaki, O., et al.: Toward scalable performance visualization with jumpshot. Int. J.
+
+High Perform. Comput. Appl. 13(3), 277–288 (1999)
+
+29. Fryxell, B., et al.: FLASH: Adaptive Mesh Hydrodynamics Code. The Astrophys-
+
+ical Journal Supplement Series 131 (2000)
+
+Report (1996)
+
+ul36z15.htm
+
+PDSW (2009)
+
+

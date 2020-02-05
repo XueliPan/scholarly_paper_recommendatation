@@ -1,0 +1,1688 @@
+234
+
+IEEE TRANSACTIONS ON PARALLEL AND DISTRIBUTED SYSTEMS, VOL. 16, NO. 3, MARCH 2005
+
+A Complete Compiler Approach to
+Auto-Parallelizing C Programs for
+
+Multi-DSP Systems
+
+Bjo¨ rn Franke and Michael F.P. O’Boyle
+
+Abstract—Auto-parallelizing compilers for embedded applications have been unsuccessful due to the widespread use of pointer
+arithmetic and the complex memory model of multiple-address space digital signal processors (DSPs). This paper develops, for the
+first time, a complete auto-parallelization approach, which overcomes these issues. It first combines a pointer conversion technique
+with a new modulo elimination transformation for program recovery enabling later parallelization stages. Next, it integrates a novel data
+transformation technique that exposes the processor location of partitioned data. When this is combined with a new address resolution
+mechanism, it generates efficient programs that run on multiple address spaces without using message passing. Furthermore, as
+DSPs do not possess any data cache structure, an optimization is presented which transforms the program to both exploit remote data
+locality and local memory bandwidth. This parallelization approach is applied to the DSPstone and UTDSP benchmark suites, giving an
+average speedup of 3.78 on four Analog Devices TigerSHARC TS-101 processors.
+
+Index Terms—Parallel processors, interprocessor communications, real-time and embedded systems, signal processing systems,
+measurement, evaluation, modeling, simulation of multiple-processor systems, conversion from sequential to parallel forms,
+restructuring, reverse engineering, and reengineering, performance measures, compilers, arrays.
+
+(cid:1)
+
+1 INTRODUCTION
+
+MULTIPROCESSOR DSPs provide a cost effective solution to
+
+embedded applications requiring high performance.
+Although there are sophisticated optimizing compilers and
+techniques targeted at single DSPs [1],
+there are no
+successful parallelizing compilers. The reason is simple,
+the task is complex. It requires the combination of a number
+of techniques to overcome the particular problems encoun-
+tered with compiling for DSPs, namely, the programming
+idiom used and the challenging multiple-address space
+architecture.
+
+Applications are written in C and make extensive use of
+pointer arithmetic [3]. This alone will prevent most auto-
+parallelizing compilers from attempting parallelization. The
+use of modulo addressing prevents standard data depen-
+dence analysis and will also cause parallelization failure.
+This article describes two program recovery techniques that
+will
+translate restricted pointer arithmetic and modulo
+addresses into a form suitable for optimization.
+
+Multiprocessor DSPs have a multiple-address memory
+model, which is globally addressable, similar to the Cray
+T3D/E [4]. This reduces the hardware cost of supporting a
+single-address space, eliminating the need for hardware
+consistency engines, but places pressure on the compiler to
+either generate message-passing code or some other means
+to ensure correct execution. This paper describes a mapping
+and address resolution technique that allows remote data to
+
+. The authors are with the University of Edinburgh, Institute for Computing
+Systems Architecture (ICSA), James Clerk Maxwell Building, Mayfield
+Road, Edinburgh EH9 3JZ, United Kingdom.
+E-mail: {bfranke, mob}@inf.ed.ac.uk.
+
+Manuscript received 23 Mar. 2004; accepted 2 Aug. 2004; published online 20
+Jan. 2005.
+For information on obtaining reprints of this article, please send e-mail to:
+tpds@computer.org, and reference IEEECS Log Number TPDS-0081-0304.
+
+the need for message-passing.
+
+be accessed without
+It
+achieves this by developing a baseline mechanism similar
+to that used in generating single-address space code whilst
+allowing further optimizations to exploit
+the multiple-
+address architecture.
+
+As there is no cache structure, the compiler can neither
+rely on caches to exploit temporal reuse of remote data nor
+on large cache line sizes to exploit spatial locality. Instead,
+multiple-address space machines rely on effective use of
+Direct Memory Access (DMA) transfers [3]. This article
+describes multiple-address space specific locality optimiza-
+tions that improve upon our baseline approach. This is
+achieved by determining the location of data and trans-
+forming the program to exploit locality in DMA transfers of
+remote data. It also exploits the increased bandwidth that is
+typically available to data that is guaranteed to be on-chip.
+These location specific optimizations are not required for
+program correctness (as in the case of message-passing
+machines [4], [5], [6]) but allow a safe, incremental approach
+to improving program performance.
+
+In this paper, new techniques are developed and
+combined with previous work in a manner that allows,
+for the first
+time, efficient mapping of standard DSP
+benchmarks written in C to multiple-address space em-
+bedded systems.
+
+This paper is organized as follows: Section 2 provides a
+motivating example and is followed by four sections on
+notation, program recovery, data parallelization, and
+locality optimizations. Section 7 provides an overall algo-
+rithm and extensive evaluation of our approach on the
+DSPstone [2] and UTDSP [7] benchmark suites, which
+contain kernels and full scale embedded applications. This
+is followed by a review of the extensive related work and
+some concluding remarks.
+
+1045-9219/05/$20.00 (cid:1) 2005 IEEE
+
+Published by the IEEE Computer Society
+
+FRANKE AND O’BOYLE: A COMPLETE COMPILER APPROACH TO AUTO-PARALLELIZING C PROGRAMS FOR MULTI-DSP SYSTEMS
+
+235
+
+Fig. 1. Example showing the substitution of linear pointer based array traversals with explicit array references (Loop 1) and the elimination of modulo
+array indexing (Loop 2) by repeated strip-mining. (a) Original code, (b) array recovery and strip-mine, and (c) remove pointers and strip-mine.
+
+2 MOTIVATION AND EXAMPLES
+Auto-parallelizing compilers that take as input sequential
+code and produce parallel code as output have been studied
+in the scientific computing domain for many years. In the
+embedded domain, multiprocessor DSPs are a more recent
+compilation target. At first glance, DSP applications seem
+ideal candidates for auto-parallelization; many of them
+have static control-flow and linear accesses to matrices and
+vectors. However, auto-parallelizing compilers have not
+been developed due to the widespread practice of using
+postincrement pointer accesses [2]. Furthermore, multi-
+processor DSPs typically have distributed address spaces
+removing the need for expensive memory coherency
+hardware. This saving at
+the hardware level greatly
+increases the complexity of the compiler’s task.
+
+To illustrate the main points of this paper, two examples
+are presented allowing a certain separation of concerns. The
+first example demonstrates how program recovery can be
+used to aid later stages of parallelization. The second
+example demonstrates how a program containing remote
+accesses is transformed incrementally to ensure correctness
+and, wherever possible, exploits the multiple-address space
+memory model.
+
+2.1 Program Recovery Example
+The code in Fig. 1a is typical of C programs written for DSP
+processors and contains fragments from the DSPstone and
+UTDSP benchmark suites. The use of postincrement pointer
+traversal is a well-known idiom [2]. Although the underlying
+algorithm of the first loop nest is linear matrix algebra, this
+current form will prevent optimizing compilers from
+performing aggressive optimization and attempts at paralle-
+lization. Circular buffer access is a frequently occurring idiom
+in DSP programs and is typically represented as a modulo
+expression in one or more of the array subscripts as can be
+
+seen in the second loop nest. Such nonlinear expressions will
+again defeat most data dependence techniques and prevent
+further optimization and parallelization.
+
+In our program recovery scheme, the pointers are first
+replaced with array references based on the loop iterator,
+and the modulo accesses are removed by applying a
+suitable strip-mining transformation to give the new code
+in Fig. 1b. Removing the pointer arithmetic and repeated
+strip-mining gives the code in Fig. 1c. The new form is now
+suitable for parallelization, and although the new code
+contains linear array subscripts, these are easily optimized
+by code hoisting and strength reduction in standard native
+compilers.
+
+2.2 Memory Model
+Our approach exploits the fact that, although multiproces-
+sor DSP machines typically have multiple address spaces,
+part of each processor’s memory space is visible from other
+processors, unlike pure message-passing machines. Each
+processor has its internal address space, which is purely
+local and not reflected on the external bus. In addition, part
+of each processor’s memory forms a global address space
+where each processor is assigned a certain range of
+addresses (see Fig. 2 where the shaded region denotes the
+portion of global addresses physically resident on that
+processor). This global address space is used for bus-based
+accesses to remote data. Thus, each processor has its own
+private internal memory address range and can refer to
+global addresses on remote processors.
+
+However, unlike single address space machines, there is
+no global memory allocation. Each processor may only
+allocate data either to its internal memory or to that part of
+its address space visible to other processors. Thus, in order
+to refer to remote data, a processor must know both the
+
+236
+
+IEEE TRANSACTIONS ON PARALLEL AND DISTRIBUTED SYSTEMS, VOL. 16, NO. 3, MARCH 2005
+
+evaluates a subset of the original iteration space and refers
+to globally allocated arrays.
+
+To access remote data in multiple address space machines,
+however, the processor location of partitioned data needs to
+be explicitly available. Our scheme achieves this by data strip-
+mining [9] each array to form a two-dimensional array whose
+inner index is to correspond with the four processors. Fig. 3b
+shows the program after partitioning by data strip-mining
+and applying a suitable automatically generated loop
+recovery [9] transformation. Assuming the z loop is
+parallelized, array a is now partitioned such that
+a[0][0...7] is written on processor 0 and a[1][0...7]
+written on processor 1, etc. Similarly for arrays b and c. For a
+multiple-address space machine, we now need to generate a
+separate program for each processor, i.e., explicitly enumer-
+ate the processor ID loop, z. The partitioned code for
+processor 0 (as specified by z) is shown in Fig. 3c. The code
+for processors 1, 2, and 3 are identical except for #define z
+1, 2, or 3. Multiple address space machines require remote,
+globally-accessible data to have a distinct name to local data.1
+Thus, each of the globally-accessible subarrays are renamed
+as follows: a[0][0...7] becomes a0[0...7] and
+a[1][0...7] becomes a1[0...7], etc. Similarly for
+arrays b and c. On processor 0, a0 is declared as a variable
+residing on that processor, while a1, a2, and a3 are declared
+extern (see Fig. 3d). For processor 1, a1 is declared local and
+the remaining arrays are declared extern.
+
+To access both local and remote data, a local pointer
+array is set up on each processor. This simple descriptor
+data structure is an array containing four pointer elements,
+which are assigned to the start address of the local arrays on
+the four processors. We use the original name of the array
+a[][] as the pointer array *a[] and then initialize the
+pointer array to point to the four distributed arrays int
+*a[4] = {a0, a1, a2, a3} (see Fig. 3d). Using the
+original name means that we have exactly the same array
+access form in all uses of the array as in Fig. 3c. This has
+been achieved by using the property that multidimensional
+arrays in C are arrays of arrays and that higher dimensions
+arrays are defined as containing an array of pointers to
+subarrays.2 From a code generation point of view, this
+greatly simplifies implementation and avoids complex and
+difficult to automate message passing.
+
+While this program will execute correctly and provides a
+baseline means of generating code for any references,
+remote or otherwise, on a multiple-address space machine
+it
+introduces runtime overhead and does not exploit
+locality. Each array reference requires a pointer look-up
+and, as the native compiler does not know the eventual
+location of the data, it must schedule load/stores that will
+fit on an external
+interconnect network or bus. As
+bandwidth to on-chip SRAM is greater, this will result in
+underutilization of available bandwidth. It is straightfor-
+ward to identify local references and to replace the indirect
+pointer array access with the local array name by examining
+the value of the partitioned indices to see if it equals the
+local processor ID, z.
+
+Data references that are sometimes local and sometimes
+remote can be isolated by index splitting the program
+section and replacing the local references with local names.
+This is shown in Fig. 4a. The access to c in the second loop
+
+1. Otherwise, they are assumed to be private copies.
+2. As defined in Section 6.5.2.1 of the ANSI C standard, paragraphs 3
+
+and 4.
+
+Fig. 2. Logical memory organization and aliasing of
+multiprocessor addresses for a four processor system.
+
+internal and
+
+identity of the remote processor and the location in memory
+of the required data value.
+
+To further complicate matters,
+
+the internal memory
+address space of a processor and the address space globally
+visible by other processors actually refer to the same
+physical memory. This is illustrated in Fig. 2 where the
+internal memory addresses and globally visible addresses
+correspond to the same locations. Local data can therefore
+be accessed both directly using its local address or via the
+globally visible multiprocessor address space. Accesses to
+local data via the local address space are, however, faster
+than accesses to the same data via the shared multi-
+processor address space as no bus transactions are required.
+We have developed a novel technique, which combines
+single-address space parallelization approaches with a
+novel address resolution mechanism that,
+for linear
+accesses, determines at compile time the processor and
+memory location of all data items. Nonlinear accesses are
+resolved during runtime by means of a simple descriptor
+data structure. This allows us to take advantage of the
+higher bandwidth to and the lower latency of local memory
+whilst maintaining correctness of the overall parallelization
+scheme.
+
+2.3 Parallelization Example
+Once we have recovered the linear access structure of a
+program, we must then partition and map it efficiently onto
+the multiple-address space memory model of the machine.
+Consider the first array recovered loop nest in Fig. 1c. It
+is a simple outer vector product and is used to illustrate the
+techniques needed for multiple-address space paralleliza-
+tion. Assuming four processors, single address space
+compilers [8] would simply partition the iteration space
+across the four processors. This is shown in Fig. 3a. Each
+processor has an identical copy of this program and makes
+a runtime call
+then
+
+to determine its processor ID.
+
+It
+
+FRANKE AND O’BOYLE: A COMPLETE COMPILER APPROACH TO AUTO-PARALLELIZING C PROGRAMS FOR MULTI-DSP SYSTEMS
+
+237
+
+Fig. 3. Example contrasting (a) the standard approach to shared-memory parallelization and (b) the novel scheme including data transformation,
+(c) creation one program per processor, and (d) address resolution applied to first loop in Fig. 1a.
+
+is exclusively local (j1 ¼ z) and, thus, the reference is
+replaced by the local name c0. The other, remote references
+to c in the first and last loop still access the data via the c
+descriptor pointer array.
+
+Element-wise remote access is expensive and, therefore,
+is an
+group access to remote data, via DMA transfer,
+effective method to reduce start-up overhead.
+In our
+scheme, remote data elements are transferred into a local
+temporary storage area. This is achieved by inserting load
+loops for all remote references as shown in Fig. 4b. As space
+is constrained, a check is made before load loop insertion to
+guarantee that SRAM space is available.
+
+The transfers are performed in such a way as to exploit
+temporal and spatial locality and map potentially distinct
+multidimensional array references, occurring throughout
+the program, into a single dimension temporary area, which
+is reused. This is shown in Fig. 4c.
+
+Thus, we have a baseline method that exposes the
+processor ID of partitioned data and generates correct code
+for multiple-address space architectures using an address
+resolution scheme. When the location of data can be
+
+statically determined, local memory bandwidth and DMA
+transfers from remote memory can be exploited.
+
+3 NOTATION
+
+Before describing the partitioning and mapping approach,
+we briefly describe the notation used. The loop iterators can
+be represented by a column vector JJ ¼ ½j1; j2; . . . ; jM (cid:1)T ,
+where M is the number of enclosing loops. Note the loops
+do not need to be perfectly nested and occur arbitrarily in
+the program. The loop ranges are described by a system of
+inequalities defining the polyhedron or iteration space BJJ (cid:2) bb.
+The data storage of an array can also be viewed as a
+polyhedron. We introduce array indices II ¼ ½i1; i2; . . . ; iN (cid:1)T
+to describe the array index space. This space is given by the
+polyhedron AII (cid:2) aa. We assume that the subscripts in a
+reference to an array can be written as UJJ þ uu, where U is
+an integer matrix and uu is a vector forming an access
+matrix/vector pair (U; uuÞ.
+
+As an example of this notation, the loop bounds of the
+
+first loop nest in Fig. 1c are represented by
+
+238
+
+IEEE TRANSACTIONS ON PARALLEL AND DISTRIBUTED SYSTEMS, VOL. 16, NO. 3, MARCH 2005
+
+Fig. 4. Example showing incremental locality optimization ((a) isolation of local and remote array accesses, (b) introduction of separate loops loading
+remote data, and (c) substitution of element-wise remote accesses with block-wise DMA transfers) applied to the code in Fig. 3c. (a) Isolate local/
+remote references, (b) introduce load loops, and (c) DMA remote access.
+
+2
+
+6
+6
+4
+
+(cid:3)1
+0
+0 (cid:3)1
+0
+1
+0
+1
+
+3
+
+7
+7
+5
+
+(cid:1)
+
+(cid:2)
+
+j1
+j2
+
+(cid:2)
+
+3
+
+;
+
+7
+7
+5
+
+2
+
+6
+6
+4
+
+0
+0
+31
+31
+
+(cid:1)
+
+(cid:3)1
+1
+
+(cid:1)
+
+(cid:2)
+½i1(cid:1) (cid:2)
+
+(cid:2)
+
+;
+
+0
+31
+
+½
+
+1 0
+
+(cid:1)
+
+þ 0½
+
+(cid:1):
+
+(cid:1)
+
+(cid:2)
+
+j1
+j2
+
+and the array declaration a[32] in Fig. 1c is represented in
+a similar manner:
+
+i.e., the index i1 ranges over 0 (cid:2) i1 (cid:2) 31. The subscript of a,
+a[i], is simply
+
+When discussing larger program structures, we introduce
+the notion of computation sets where Q ¼ ðBJJ (cid:2) bb; ðsijQiÞÞ
+is a computation set consisting of the loop bounds BJJ (cid:2) bb,
+and either enclosed statements ðs1; . . . ; snÞ or further loop
+nests ðQ1; . . . ; QnÞ.
+
+ð1Þ
+
+ð2Þ
+
+ð3Þ
+
+4 PROGRAM RECOVERY
+
+This section describes two program recovery techniques to
+aid later parallelization.
+
+4.1 Array Recovery
+Array recovery consists of two main stages. The first stage
+determines whether the program is in a form amenable to
+conversion and consists of a number of checks. The second
+stage gathers information on arrays and pointer initializa-
+tion, pointer increments, and the properties of loop nests.
+This information is used to replace pointer accesses by the
+corresponding explicit array accesses and to remove pointer
+arithmetic completely. For more details, see [10].
+
+4.1.1 Pointer Assignments and Arithmetic
+Pointer assignment and arithmetic are restricted in our
+analysis. Pointers may be initialized to an array element
+whose subscript is an affine expression of the enclosing
+iterators and whose base type is scalar. Simple pointer
+arithmetic and assignment are also allowed.
+
+FRANKE AND O’BOYLE: A COMPLETE COMPILER APPROACH TO AUTO-PARALLELIZING C PROGRAMS FOR MULTI-DSP SYSTEMS
+
+239
+
+4.1.2 Pointers to Other Pointers
+Pointers to pointers are prohibited in our scheme. An
+assignment to a dereferenced pointer may have side effects
+on the relation between other pointers and arrays that are
+difficult to identify and, fortunately, rarely found in DSP
+programs.
+
+4.1.3 Dataflow Information
+Once the program has been checked, the second stage of the
+algorithm gathers information on pointer usage before
+pointer conversion. Pointer initializations and updates are
+captured in a system of dataflow equations, which is solved
+by an efficient one-pass algorithm [10].
+
+4.1.4 Pointer Conversion
+The index expressions of
+the array accesses are now
+constructed from the dataflow information (see first loop
+in Fig. 1b).
+In a separate pass, pointer accesses and
+arithmetic are replaced and removed as shown in the first
+loop of Fig. 1c.
+
+4.2 Modulo Removal
+Modulo addressing is a frequently occurring idiom in DSP
+programs. We develop a new technique to remove modulo
+addressing by transforming the program into an equivalent
+linear form, if one exists. This is achieved by using the rank-
+modifying transformation framework [9] that manipulates
+extended linear expressions including mod s and divs. In
+[13], this was mainly used to reason about reshaped arrays,
+here we use it as a program recovery technique.
+
+We restrict our attention to simple modulo expressions
+the form ðat (cid:4) jtÞ%ct, where jt
+is an iterator, at; ct
+of
+constants, and t is the reference containing the modulo
+expression. More complex references are highly unlikely,
+but may be addressed by extending the approach below to
+include skewing.
+
+Let l be the least common multiple of ct. In the second
+loop in Fig. 1a, we have c1 ¼ 8, c2 ¼ 4 from the accesses to g
+and h and, hence, l ¼ 8.
+
+We then apply a loop strip-mining transformation S
+based on l to the loop nest. The particular formulation we
+use is based on rank-modifying transformations [9] that
+have the benefit of being well-formulated and can fit into a
+general,
+linear algebraic transformation framework. As
+l ¼ 8,
+
+S ¼
+
+(cid:1)
+
+1
+0
+0 s8
+
+(cid:2)
+
+¼
+
+2
+
+4
+
+1
+0
+0
+
+3
+5;
+
+0
+
+ð:Þ=8
+ð:Þ%8
+
+where s8 ¼ ð:Þ=8 ð:Þ%8
+JJ 0 ¼ SJJ, we have the new iteration space:
+
+½
+
+(cid:1)T . When applied to the iterator,
+
+B0JJ 0 (cid:2) bb0
+ð
+
+Þ ¼
+
+(cid:3)
+
+(cid:1)
+
+(cid:2)
+
+S 0
+0 S
+
+BSySJJ (cid:2)
+
+(cid:1)
+
+S 0
+0 S
+
+(cid:2)
+
+(cid:4)
+bb
+
+;
+
+where Sy is the pseudoinverse [9] of S, in this case:
+
+Sy ¼
+
+(cid:1)
+
+1
+0
+
+(cid:2)
+
+:
+
+0 0
+8 1
+
+When applied to the second loop nest shown in (1), we
+
+have the new iteration space:
+
+ð4Þ
+
+ð5Þ
+
+ð6Þ
+
+2
+
+6
+6
+6
+6
+6
+6
+4
+
+(cid:3)1
+0
+0 (cid:3)1
+0
+1
+0
+0
+
+0
+0
+0 (cid:3)1
+0
+0
+0
+1
+0
+1
+
+3
+
+7
+7
+7
+7
+7
+7
+5
+
+3
+
+5 (cid:2)
+
+2
+
+4
+
+j1
+j2
+j3
+
+3
+
+7
+7
+7
+7
+7
+7
+5
+
+;
+
+2
+
+6
+6
+6
+6
+6
+6
+4
+
+0
+0
+0
+31
+3
+7
+
+ð7Þ
+
+or the loop nest shown in the second loop nest of Fig. 1b. The
+new array accesses are found by U0 ¼ USy, giving the new
+access shown in the second loop of Fig. 1b. This process is
+repeated until no modulo operations remain. The one modulo
+expression in the array g subscript remaining in the second
+loop of Fig. 1b is removed by applying a further strip-mining
+transformation to give the code in Fig. 1c.
+
+5 DATA PARALLELISM
+
+This section briefly describes the baseline parallelization
+approach of our scheme.
+
+5.1 Partitioning
+We attempt
+to partition the data along those aligned
+dimensions of the array that may be evaluated in parallel
+and minimize communication. More sophisticated ap-
+proaches are available [11], [12], but are beyond the scope
+of this article. Partitioning based on alignment [4], [13], [14],
+[15] tries to maximize the rows that are equal in a subscript
+matrix.
+
+The most aligned row, MaxRow, determines the index to
+partition along. We construct a partition matrix P defined:
+
+Pi ¼
+
+(cid:5)
+
+eT
+i
+0
+
+i ¼ MaxRow
+otherwise;
+
+ð8Þ
+
+where eT
+is the ith row of the identity matrix Id. We also
+i
+construct a sequential matrix S containing those indices not
+partitioned such that P þ S ¼ Id. In the example in Fig. 3,
+there is only one index to partition along. Therefore,
+P ¼ 1½
+
+(cid:1) and S ¼ 0½
+
+(cid:1).
+
+5.2 Mapping
+Once the array indices to partition have been decided, we
+data strip-mine the indices II based on the partition matrix P
+and strip-mine matrix S to give the new array indices II0.
+The data strip-mining matrix S is defined:
+
+2
+
+4
+
+S ¼
+
+Idk(cid:3)1
+
+0
+0
+
+0
+sp
+0
+
+0
+0
+
+3
+5;
+
+IdN(cid:3)k
+
+ð9Þ
+
+½
+
+ð:Þ=p
+
+(cid:1)T and p is the number of
+where sp ¼ ð:Þ%p
+processors. Within embedded systems,
+it is realistic to
+assume that this number is constant and already known at
+compile time. In our example in Fig. 3, p ¼ 4. For further
+details of the transformation framework, see [9]. Here, the
+transformation is used to exposes the processor ID of all
+array references and is critical to our scheme. To show this,
+let T be the mapping transformation T ¼ PS þ S. Thus, the
+partitioned indices are strip-mined and the sequential
+indices left alone. In our example, T ¼ ½1(cid:1)S þ ½0(cid:1) ¼ S and
+the new array indices, II0, are given by II0 ¼ T II. The new
+array bounds, A0II0 (cid:2) aa0, are then found using
+
+240
+
+IEEE TRANSACTIONS ON PARALLEL AND DISTRIBUTED SYSTEMS, VOL. 16, NO. 3, MARCH 2005
+
+(cid:2)
+
+(cid:1)
+
+T O
+O T
+
+AT (cid:3)1II0 (cid:2)
+
+(cid:1)
+
+(cid:2)
+
+aa;
+
+T O
+O T
+
+which transforms the array bounds in (7) to:
+
+2
+
+6
+6
+4
+
+(cid:3)1
+0
+0 (cid:3)1
+0
+1
+0
+1
+
+3
+
+7
+7
+5
+
+(cid:1)
+
+(cid:2)
+
+i1
+i2
+
+(cid:2)
+
+3
+
+;
+
+7
+7
+5
+
+2
+
+6
+6
+4
+
+0
+0
+3
+7
+
+ð10Þ
+
+ð11Þ
+
+i.e., a[4][8]. The new array subscripts are also found:
+U 0 ¼ T U In general, without any further loop transforma-
+tions, this will introduce mods and divs into the array
+accesses.
+In our example in Fig. 3, we would have
+a[i%4,i/4] += b[i%4,i/4] + c[j%4,j/4].
+
+However, this framework [9] always generates a suitable
+recovery loop transformation,
+the same
+transformation T . Applying T to the enclosing loop
+iterators, we have JJ 0 ¼ T JJ and updating the access matrices
+we have, for array a:
+
+in this case,
+
+U00 ¼ T UT (cid:3)1 ¼
+
+(cid:1)
+
+1 0
+0 1
+
+(cid:1)
+(cid:2) j1
+j2
+
+(cid:2)
+
+;
+
+ð12Þ
+
+i.e., a[z][i]. The resulting code is shown in Fig. 3b where
+we have exposed the processor ID of each reference without
+any expensive subscript expressions.
+
+5.3 Address Resolution
+Once the array is partitioned across several processors, each
+local partition has to be given a new distinct name as there is
+no single address space supported. We therefore introduce a
+new name equal to the old name followed by the processor
+identity number, for each local subarray. We wish one of these
+arrays to reside and be allocated on the local processor and the
+remainder be declared extern allowing remote references,
+the address of which will be resolved by the linker.
+
+The complete algorithm is given in Fig. 5a, where the
+function insert inserts the declarations. Fig. 3d shows the
+declarations inserted for the arrays a, b, and c. The only
+further change is to the type declaration whenever the
+arrays are passed into a function. The type declaration is
+changed from int[][] to *int[] and this must be
+propagated interprocedurally. Once this has been applied,
+no further transformation or code modification is required.
+
+5.4 Synchronization
+Once the program and data have been partitioned across
+the processors, we must guarantee that
+the program
+executes correctly. Synchronization primitives must be
+inserted so that the correct data values are communicated
+and no race conditions occur. In message-passing machines,
+this can be achieved by synchronized communication.
+However, as we have an unsynchronized read/write model
+of memory access, it is the compiler’s responsibility to insert
+synchronization where appropriate.
+
+Synchronization need only be enforced when there exists
+a cross-processor data dependence [16]. If the source and
+sink of a dependence are on the same processor, there is no
+need for synchronization as normal von Neumann ordering
+of instructions ensures that such dependencies are honored.
+However, determining the location of the source and sink of
+each data dependence is generally nontrivial. Previous
+work [20] required array section analysis to determine the
+location of each source and sink and relied on the properties
+of owner-computes scheduling and data alignment
+to
+
+Fig. 5. Algorithms for address resolution and overall parallelization.
+(a) Address resolution algorithm and (b) overall parallelization algorithm.
+
+reduce the complexity of the task. However, we can take
+advantage of
+the mapping approach described above,
+which makes the location of each array access explicit. If
+two references involved in a dependence have the same
+processor ID after partitioning, then the dependence is
+removed from further consideration. All remaining depen-
+dences are considered as being cross-processor and requir-
+ing synchronization.
+
+Determining the equality of processor IDs is trivial as
+their values are either reduced to constants after macro
+expansion of #define z and constant folding or general
+functions. We restrict our attention to constant equality as
+determining function equality is, in general, undecidable.
+
+Let ðUsource; uusourceÞ and ðU sink; uusinkÞ be the access matrix/
+vector pair of the source and sink of a data dependence.
+Then, for each partitioned index x, corresponding to the
+nonzero row entries of the partitioning matrix P, if
+
+Usource
+
+x
+
+¼ U sink
+
+x ¼ 0 ^ uusource
+
+x
+
+¼ uusink
+
+;
+
+x
+
+ð13Þ
+
+then we can remove this dependence from further
+consideration.
+
+This analysis can be expanded for nearest-neighbor
+
+synchronization, i.e.,
+
+Usource
+
+x
+
+¼ U sink
+
+x ¼ 0 ^ uusource
+
+x
+
+(cid:3) uusink
+
+x ¼ c;
+
+ð14Þ
+
+where c is a constant allowing post/wait synchronization.
+However, for the purposes of this paper, we only consider
+barrier synchronization.
+
+Once these local dependences have been removed,
+synchronization must be inserted so that all the cross-
+processor dependences are satisfied. We use the algorithm
+described in [17] that has provably minimal insertion of
+
+FRANKE AND O’BOYLE: A COMPLETE COMPILER APPROACH TO AUTO-PARALLELIZING C PROGRAMS FOR MULTI-DSP SYSTEMS
+
+barrier synchronizations in basic blocks, perfect loops, and
+certain classes of imperfect loop nest.
+
+6 LOCALITY ANALYSIS
+Once partitioning and address resolution have been applied
+to the program, it will execute correctly on a multiprocessor.
+The source code generated looks very similar to that
+generated for a single-address space machine [8], with the
+addition of a local pointer array for each distributed array.
+This straightforward code, however, introduces runtime
+overhead and does not exploit locality.
+
+6.1 Exploiting Local Accesses
+Embedded processors are almost entirely statically sched-
+uled (i.e., not superscalar) and must make the conservative
+assumption that the final location of each element accessed
+is remote unless proven otherwise. Bandwidth to on-chip
+SRAM is greater than via the external bus, hence local
+bandwidth will be underutilized for local accesses.
+In
+general, determining whether an array reference is entirely
+local throughout the runtime of a program is nontrivial.
+However, as our partitioning scheme explicitly incorporates
+the processor ID in the array reference, we simply check to
+see if it equals the processor ID, z.
+
+This a simple syntactic transformation. Given an array
+access UJJ þ uu and a pointer array name X and the syntactic
+concatenation operator :, we have X½UJJ þ uu(cid:1)7!X : uu1½U2;...;N
+JJ þ uu2;...;N (cid:1).
+
+Applying this to the example in Fig. 3c, we have the code
+in Fig. 3d where all accesses to a0, b0, and c0 can be
+statically determined as local by the native compiler.
+
+6.2 Locality in Remote Accesses
+The memory hierarchy of a single processor is relatively
+straightforward as there are no caches. Exploiting locality is
+largely achieved by ensuring data fits in the on-chip SRAM
+and effective register allocation.
+
+The lack of cache structure has a significant impact on
+remote accesses in multiDSPs, however. Repeated reference
+to a remote data item will incur multiple remote accesses
+unless the compiler explicitly restructures the program to
+exploit the available temporal locality.
+
+Our approach is to determine those elements likely to be
+remote and to transfer the remote data to a local temporary,
+which is then used in the computation. The remote data
+transfer code is transformed to exploit temporal and spatial
+locality when using the underlying DMA engine.
+
+6.2.1 Index Splitting
+We first separate local and remote references by splitting
+the iteration space into regions where data is either local or
+remote. As the processor ID is explicit in our framework, we
+do not need array section analysis to perform this.
+
+For each remote reference, the original loop is partitioned
+
+into n separate loop nests using index set splitting:
+
+QðAJJ (cid:2) bb; Q1Þ7!QiðAJJ (cid:2) bb ^ Ci; Q1Þ; 8i 2 1; . . . ; n;
+
+ð15Þ
+
+where n ¼ 2d þ 1 and d is the number of dimensions
+partitioned. In the example in Fig. 3d, we partition on just
+one dimension, hence n ¼ 3, and we have the following
+constraints:
+
+C0
+C1
+C2
+
+:
+:
+:
+
+0 (cid:2) j1 (cid:2) z (cid:3) 1
+j1 ¼ z
+z þ 1 (cid:2) j1 (cid:2) 3:
+
+241
+
+ð16Þ
+ð17Þ
+ð18Þ
+
+This gives the program in Fig. 4a.
+
+6.2.2 Remote Data Buffer Size
+Before any remote access optimization can take place, there
+must be sufficient storage. Let s be the storage available for
+remote accesses. We simply check that the remote data fits,
+i.e., kUJJ þ uuk (cid:2) s.
+
+The Omega Calculator [22] can determine this value
+using enumerated Presburger formulae. If this condition is
+not met, we currently abandon further optimization. Strip-
+mining, array contraction and loop fusion can reduce the
+temporary size, but is not explored further here.
+
+6.2.3 Load Loops
+Load loops are introduced to exploit locality of remote
+accesses. A temporary, with the same subscripts as the
+remote reference, is introduced, which is then followed by
+loop distribution. This is always legal as there are no
+dependence cycles between statements.
+
+The transformation is of the form Q7!ðQ1; . . . ; QKÞ. In
+other words, a single loop nest Q is distributed so that there
+are now K loop nests, K (cid:3) 1 of which are load loops. In our
+example in Fig. 4b, there is only one remote array, hence
+K ¼ 2.
+
+6.2.4 Transform Load Loops to Exploit Locality
+Temporal
+locality in the load loops corresponds to an
+invariant access iterator or the null space of the access
+matrix, i.e., N ðUÞ. There always exists a transformation T ,
+found by reducing U to Smith normal form, that transforms
+the iteration space such that the invariant iterator(s) is
+innermost and can be removed by Fourier-Motzkin elim-
+ination. The i loops of both the load loops in Fig. 4b are
+invariant and are removed as shown in Fig. 4c.
+
+6.2.5 Stride
+In order to allow large amounts of remote data to be
+accessed in one go rather than a separate access per array
+element, it must be accessed in stride-1 order. This can be
+achieved by a simple loop transformation T which
+guarantees stride-1 access. The transformation T is found
+to be T ¼ U. In our example, Fig. 4b, T is the identity
+transformation as the accesses in the load loop are already
+in stride-1 order.
+
+6.2.6 Linearize
+Distinct remote references may be declared as having
+varying dimensions, yet the data storage area we set aside
+for remote accesses is fixed and one-dimensional. Therefore,
+the temporary array must be linearized throughout the
+program and all references updated accordingly: U0
+t ¼ LUt.
+(cid:1), and transforms the array accesses
+
+In our case, L ¼ 8 1
+
+½
+
+from temp[j1][j2] to temp[8*j1+j2] in Fig. 4b.
+
+6.2.7 Convert to DMA Form
+The format of a DMA transfer requires the start address of
+the remote data and the local memory location where it is to
+be stored plus the amount of data to be stored. This is
+achieved by effectively vectorizing the inner loop by
+removing it from the loop body, and placing it within the
+
+242
+
+IEEE TRANSACTIONS ON PARALLEL AND DISTRIBUTED SYSTEMS, VOL. 16, NO. 3, MARCH 2005
+
+DMA call. The start address of the remote element is given
+by the lower bound of the innermost loop and the size is
+equal to its range. Thus, we transform the remote array
+access as follows: UM ¼ 0; uuM ¼ minðJJ mÞ.
+
+The temporary array access is similarly transformed and
+the innermost loop JJ m is eliminated by Fourier-Motzkin
+elimination. Finally, we replace the assignment statement by
+a generic DMA transfer call get(&tempref, &remoteref,
+size) to give the final code in Fig. 4c.
+
+7 EXPERIMENTS
+Our overall parallelization algorithm is shown in Fig. 5b.
+We currently check if the loop trip count is greater than
+eight before continuing beyond step 2. We prototyped our
+algorithm in the SUIF 1.3 compiler. SUIF [19] was selected
+as it is the best publicly available, auto-parallelizing C
+compiler, though it targets shared-memory platforms.
+
+We evaluated the effectiveness of our parallelization
+scheme against two different benchmark sets: DSPstone [2]
+and UTDSP [7]. The programs were executed on a
+Transtech TS-P36N board with a cluster of four cross-
+connected 250MHz TigerSHARC TS-101 DSPs, all sharing
+the same external bus and 128MB of external SDRAM. The
+programs were compiled with the Analog Devices Vi-
+sualDSP++ 2.0 Compiler (version 6.1.18) with full optimiza-
+tion; all timings are cycle accurate.
+
+Due to its emphasis on code generation issues, DSPstone
+frequently considers artificially small data set sizes. There-
+fore, we have evaluated it using its original small data sets
+as well as a scaled version wherever appropriate. Unlike
+DSPstone, UTDSP comprises a set of applications as well as
+compute-intensive kernels, of which many are available in
+their original pointer-based form as well as in an array-
+based form.
+
+7.1 Program Recovery
+Fig. 6a shows the set of loop-based DSPstone programs.
+Initially, the compiler fails to parallelize these programs
+because they make an extensive use of pointer arithmetic for
+array traversals, as shown in the second column. However,
+after applying array recovery (column 3) most of the
+programs become parallelizable (column 4). In fact, the only
+program that cannot be parallelized after array conversion
+(biquad) contains a cross-iteration data dependence that
+does not permit parallelization. adpcm is the only program in
+this benchmark set that cannot be recovered due to its
+complexity. The fifth column of Fig. 6a shows whether or not a
+program can be profitably parallelized. Programs comprising
+only very small loops such as dot_product and ma-
+trix1x3 perform better when executed sequentially due to
+the overhead associated with parallel execution and are
+filtered out at stage 2, by our algorithm.
+
+The impact of modulo removal can be seen in Fig. 6b. Four
+of the UTDSP programs (IIR, ADPCM, FIR, and LMSFIR) can
+be converted into a modulo-free form by our scheme. Modulo
+removal has a direct impact on the parallelizer’s ability to
+successfully parallelize those programs—three out of four
+programs could be parallelized after the application of this
+transformation. ADPCM cannot be parallelized after modulo
+removal due to data dependences.
+
+Although program recovery is used largely to facilitate
+it can
+parallelization and multiprocessor performance,
+impact sequential performance as well. The first two columns
+of each set of bars in Figs. 7 and 8 show the original sequential
+time and the speedup after program recovery. Three out the
+
+Fig. 6. Exploitable parallelism in DSPstone and UTDSP. (a) DSPstone
+and (b) UTDSP.
+
+of eight DSPstone benchmarks benefit from this transforma-
+tion whereas only a single kernel (fir) experiences a
+performance degradation after program recovery. In fir2-
+dim, lms, and matrix2, array recovery has enabled better
+data dependence analysis and allowed a tighter scheduling in
+each case. fir has a very small number of operations such
+that the slight overhead of enumerating array subscripts has a
+disproportionate effect on its performance. Fig. 8 shows the
+impact of modulo removal on the performance of the UTDSP
+benchmark. Since a computation of a modulo is a compara-
+tively expensive operation, its removal positively influences
+the performance of the three programs wherever it is
+applicable.
+
+7.2 Data Parallelism, Data Distribution, and Address
+
+Resolution
+
+The third column of each set of bars in Figs. 7 and 8 shows
+the effect of blindly using a single-address space approach
+to parallelization without data distribution on a multiple-
+address space machine. Not surprisingly, performance is
+universally poor. The fourth column in each figure shows
+
+FRANKE AND O’BOYLE: A COMPLETE COMPILER APPROACH TO AUTO-PARALLELIZING C PROGRAMS FOR MULTI-DSP SYSTEMS
+
+243
+
+Fig. 7. Incremental performance development for profitably parallelizable DSPstone benchmark kernels after program recovery, parallelization,
+partitioning and address resolution, and localization.
+
+Fig. 8. Incremental performance development for profitably parallelizable UTDSP benchmark kernels after program recovery, parallelization,
+partitioning and address resolution, and localization.
+
+it appears that
+
+the performance after applying data distribution, mapping
+and address resolution. Although some programs experi-
+ence a speedup over their sequential version (convolu-
+tion and fir2dim),
+the overall performance is still
+disappointing. After a closer inspection of the generated
+assembly codes,
+the Analog Devices
+compiler cannot distinguish between local and remote data.
+It conservatively assumes all data is remote and generates
+“slow” accesses, i.e., double word (instead of quad word)
+accesses to local data are generated and an increased
+memory access latency is accounted for in the produced
+VLIW schedule. In addition, all remote memory transac-
+tions occur element-wise and do not effectively utilize the
+DMA engine.
+
+7.3 Localization
+The final columns of Figs. 7 and 8 show the performance after
+the locality optimizations are applied to the partitioned code.
+
+Accesses to local data are made explicit, so the compiler can
+identify local data and is able to generate tighter and more
+efficient schedules. In addition, remote memory accesses are
+grouped to utilize the DMA engine. In the case of DSPstone,
+linear, or superlinear speedups are achieved for all programs
+bar one (fir), where the number of operations is very small.
+Superlinear speedup occurs in precisely those cases where
+program recovery has given a sequential improvement over
+the pointer based code. The overall speedups vary between
+1.9 (fir) and 6.5 (matrix2), their average is 4.28 on four
+processors.
+
+The overall speedup for the UTDSP benchmarks is less
+dramatic, as the programs are more complex, including full
+applications, and have a greater communication overhead.
+These programs show speedups between 1.33 and 5.69, and
+an average speedup of 3.65. LMSFIR and Histogram fail to
+give significant speedup due to the lack of sufficient data
+parallelism inherent in the programs. Conversely, FIR,
+
+244
+
+IEEE TRANSACTIONS ON PARALLEL AND DISTRIBUTED SYSTEMS, VOL. 16, NO. 3, MARCH 2005
+
+Fig. 9. Scalability of the novel parallelization approach with (a) the data set size and (b) the number of processors.
+
+MULT(large), Compress, and JPEG Filter give super-
+linear speedup due to improved sequential performance of
+the programs after parallelization. As the loops are shorter
+after parallelization,
+the native loop
+unrolling algorithm performs better on the reduced trip
+count.
+
+it appears that
+
+the two-dimensional
+
+7.4 Scalability
+An important characteristic of a parallel program is its
+scalability with the data set size. Fig. 9a shows the
+performance of the DSPstone programs for small and large
+data sets. The small data set sizes are default settings, which
+do not necessarily represent real-world conditions. For
+image filter fir2dim is
+example,
+applied to a 4 (cid:4) 4 image. Obviously,
+there is little
+parallelism available in such an artificially reduced data
+set. However, our parallelization approach still achieves a
+speedup on four out of eight programs with minimal data
+sets. n_real_updates and n_complex_updates come
+close to linear speedup, whereas both matrix multiplication
+implementations matrix1 and matrix2 experience a
+super-linear speedup even for 10 (cid:4) 10 matrices. The
+remaining four programs convolution, fir, fir2dim,
+and lms do not profit from parallelization for very small
+data set sizes (approximately 16 data elements).
+
+While 19 of the 30 UTDSP programs are parallel, only 9
+of the 19 are determined profitably parallelizable by our
+technique. The others are either sequential or exhibit too
+little work to parallelize. Fig. 9b shows how our approach
+scales with the number of processors for the Compress,
+FIR 256/64, and Mult_10_10 benchmarks. Mult_10_10
+only contains a 10 (cid:4) 10 array, yet after distributing the data
+across the processors, some speedup is available. In the
+other cases, with larger data sizes, the full potential of
+parallel execution can be exploited giving linear speedup
+with the number of processors.
+
+8 RELATED WORK
+There is an extremely large body of work on compiling
+Fortran dialects for multiprocessors. A good overview can
+be found in [20]. Compiling for message-passing machines
+had largely focused on the HPF programming language [6].
+The main challenge is inserting correctly efficient message-
+passing calls into the parallelized program [4], [6] without
+requiring complex runtime bookkeeping [5], [21].
+
+Although when compiling for distributed shared mem-
+ory (DSM), compilers must incorporate data distribution
+and data locality optimizations [8], they are not faced with
+the problem of multiple, but globally-addressable address
+spaces. Compiling for DSM has moved from primarily loop-
+based parallelization [19] to approaches that combine data
+placement and loop optimization [22]
+to exploit both
+parallelism.
+
+Both message-passing and DSM platforms have bene-
+fited from the extensive work in automatic data partitioning
+[11], [12] and alignment [13], [14], [15], potentially removing
+the need for HPF directives (pragmas) for message-passing
+machines and reducing memory and coherence traffic in the
+case of DSMs.
+
+The work closest to our approach, from the parallelizing
+Fortran community, is [23]. This work successfully exam-
+ines auto-parallelizing techniques for the Cray T3D. To
+improve communication performance, it introduces private
+copies of shared data that must be kept consistent using a
+complex linear memory array access descriptor. In contrast,
+we do not keep copies of shared data, instead we use an
+access descriptor as a means of having a global name for
+data. In [23], an analysis is developed for nearest-neighbor
+communication, but not for general communication. As our
+partitioning scheme exposes the processor ID, it is eliminat-
+ing the need for any array section analysis and handles
+general global communication.
+
+In the area of auto-parallelizing C compilers, SUIF [19] is
+the most significant work, though it targets single-address
+space machines. Modulo recovery is considered in [24],
+where a large, highly specialized framework based on
+Diophantine equations is presented to solve modulo accesses.
+It, however, introduces floor, div, and ceiling functions and
+its effect on other parts of the program is not considered.
+There is a large body of work on developing loop and data
+transformations to improve memory access [22], [25]. In [8], a
+data transformation, data tiling, is used to improve spatial
+locality, but the representation does not allow easy integra-
+tion with other loop and data transformations.
+
+As far as DSP parallelization is concerned, an early paper
+[26] described how such programs may be parallelized, but
+gave no details or experimental results. Similarly, in [27], an
+interesting overall parallelization framework is described,
+but no mechanism or details of how parallelization might
+take place is provided. In [28], the impact of different
+parallelization techniques is considered, however, this was
+
+FRANKE AND O’BOYLE: A COMPLETE COMPILER APPROACH TO AUTO-PARALLELIZING C PROGRAMS FOR MULTI-DSP SYSTEMS
+
+245
+
+user-directed and no automatic approach was provided. In
+[29], a semiautomatic parallelization method to enable
+design-space exploration of different multiprocessor con-
+figurations based on the MOVE architecture is presented.
+However, no integrated data partitioning strategy was
+available and data was allocated to a single processor in the
+example codes. Furthermore, in the experiments, commu-
+nication was modeled in their simulator and, thus, the issue
+of mapping parallelism combined with distributed address
+spaces was not addressed.
+
+9 CONCLUSION
+Multiple-address space embedded systems have proven to be
+a challenge to compiler vendors and researchers due to the
+complexity of the memory model and idiomatic program-
+ming style of DSP applications. This paper has developed an
+integrated approach that gives an average of 3.78 speedup on
+four processors when applied to 17 benchmarks from the
+DSPstone and UTDSP benchmarks. This is a significant
+finding and suggests that multiprocessor DSPs can be a cost
+effective solution to high performance embedded applica-
+tions and that compilers can exploit such architectures
+automatically. Future work will consider other forms of
+parallelism found in DSP applications and integrate this with
+further uniprocessor optimizations.
+
+REFERENCES
+[1] R. Leupers, “Novel Code Optimization Techniques for DSPS,”
+
+Proc. Second European DSP Education and Research Conf., 1998.
+
+[4]
+
+[3]
+
+[2] V. Zivojnovic, J.M. Velarde, C. Schlager, and H. Meyr, “DSPstone:
+A DSP-Oriented Benchmarking Methodology,” Proc. Int’l Conf.
+Signal Processing Applications & Technology (ICSPAT ’94), pp. 715-
+720, 1994.
+S.L. Scott, “Synchronization and Communication in the T3E
+Multiprocessor,” Proc. Seventh Int’l Conf. Architectural Support for
+Programming Languages and Operating Systems (ASPLOS-VII),
+pp. 26-36, 1996.
+S. Chakrabarti, M. Gupta, and J.-D. Choi, “Global Communication
+Analysis and Optimization,” Proc. SIGPLAN Conf. Programming
+Language Design and Implementation (PLDI ’96), pp. 68-78, 1996.
+S. Hiranandani, K. Kennedy, and C.-W. Tseng, “Compiling
+Fortran D for MIMD Distributed-Memory Machines,” Comm.
+ACM, vol. 35, no. 8, pp. 66-80, 1992.
+J. Mellor-Crummey, V. Adve, B. Broom, D. Chavarria-Miranda, R.
+Fowler, G. Jin, K. Kennedy, and Q. Yi, “Advanced Optimization
+Strategies in the Rice DHPF Compiler,” Concurrency-Practice and
+Experience, vol. 14, nos. 8-9, pp. 741-767, 2002.
+
+[5]
+
+[6]
+
+[8]
+
+[7] C.G. Lee and M. Stoodley, “UTDSP Benchmark Suite,” Univ. of
+Toronto, Canada, 1992, http://www.eecg.toronto.edu/corinna/
+DSP/infrastructure/UTDSP.html.
+J.M. Anderson, S.P. Amarasinge, and M.S. Lam, “Data and
+Computation Transformations for Multiprocessors,” Proc. Fifth
+ACM SIGPLAN Symp. Principles and Practice of Parallel Program-
+ming (PPoPP ’95), pp. 166-178, 1995.
+
+[9] M.F.P. O’Boyle and P.M.W. Knijnenburg, “Integrating Loop and
+Data Transformations for Global Optimisation,” J. Parallel and
+Distributed Computing, vol. 62, no. 4, pp. 563-590, 2002.
+
+[10] B. Franke and M.F.P. O’Boyle, “Array Recovery and High-Level
+Transformations for DSP Applications,” ACM Trans. Embedded
+Computing Systems, vol. 2, no. 2, pp. 132-162, 2003.
+
+[12]
+
+[11] B. Bixby, K. Kennedy, and U. Kremer, “Automatic Data Layout
+Using 0-1 Integer Programming,” Proc. Parallel Architectures and
+Compiler Technology Conf. (PACT ’94), 1994.
+J. Garcia, E. Ayguad, and J. Labarta, “A Framework for Integrating
+Data Alignment, Distribution, and Redistribution in Distributed
+Memory Multiprocessors,” IEEE Trans. Parallel and Distributed
+Systems, vol. 12, no. 4, Apr. 2001.
+
+[13] D. Bau, I. Kodukla, V. Kotlyar, K. Pingali, and P. Stodghill,
+“Solving Alignment Using Elimentary Linear Algebra,” Proc.
+Seventh Int’l Workshop Languages and Compilers for Parallel Comput-
+ing (LCPC ’94), pp. 46-60, 1994.
+
+[14] K. Knobe, J. Lukas, and G. Steele, “Data Optimization: Allocation
+of Arrays to Reduce Communication on SIMD Machines,” J.
+Parallel and Distributed Computing, vol. 8, no. 2, pp. 102-118, 1990.
+[15] S. Chatterjee, J.R. Gilbert, L. Oliker, R. Schreiber, and T.J. Sheffler,
+“Algorithms for Automatic Alignment of Arrays,” J. Parallel and
+Distributed Computing, vol. 38, no. 2, pp. 145-157, 1996.
+
+[16] M.F.P. O’Boyle and F. Bodin, “Compiler Reduction of Synchro-
+nisation in Shared Virtual Memory Systems,” Proc. Ninth Int’l
+Conf. Supercomputing (ICS ’95), pp. 318-327, 1995.
+
+[17] M.F.P. O’Boyle and E.A. Stohr, “Compile Time Barrier Synchro-
+nization Minimization,” IEEE Trans. Parallel and Distributed
+Systems, vol. 13, no. 6, pp. 529-543, June 2002.
+
+[18] W. Pugh, “Counting Solutions to Presburger Formulas: How and
+Why,” Proc. SIGPLAN Conf. Programming Languages Design and
+Implementation (PLDI ’94), pp. 121-134, 1994.
+
+[19] M.W. Hall, J.M. Anderson, S.P. Amarasinghe, B.R. Murphy, S.-W.
+Liao, E. Bugnion, and M.S. Lam, “Maximizing Multiprocessor
+Performance with the SUIF Compiler,” Computer, vol. 29, no. 12,
+pp. 84-89, Dec. 1996.
+
+[20] R. Gupta, S. Pande, K. Psarris, and V. Sakar, “Compilation
+Techniques for Parallel Systems,” Parallel Computing, vol. 25,
+nos. 13-14, pp. 1741-1783, 1999.
+J.R. Larus, “Compiling for Shared-Memory and Message-Passing
+Computers,” ACM Letters Programming Languages and Systems,
+vol. 2, nos. 1-4, pp. 165-180, 1993.
+
+[21]
+
+[22] M. Kandemir, J. Ramanujam, and A. Choudhary, “Improving
+Cache Locality by a Combination of Loop and Data Transforma-
+tions,” IEEE Trans. Computers, vol. 48, no. 2, pp. 159-167, Feb. 1999.
+[23] Y. Paek, A.G. Navarro, E.L. Zapata, and D.A. Padua, “Paralleliza-
+tion of Benchmarks for Scalable Shared-Memory Multiproces-
+sors,” Proc. Conf. Parallel Architectures and Compiler Technology
+(PACT ’98), 1998.
+
+[24] F. Balasa, F.H.M. Franssen, F.V.M. Catthoor, and H.J. De Man,
+“Transformation of Nested Loops with Modulo Indexing to Affine
+Recurrences,” Parallel Processing Letters, vol. 4, no. 3, pp. 271-280,
+1994.
+
+[25] S. Carr, K.S. McKinley, and C.-W. Tseng, “Compiler Optimiza-
+tions for Improving Data Locality,” Proc. Sixth Int’l Conf.
+Architectural Support for Programming Languages and Operating
+Systems (ASPLOS-VI), pp. 252-262, 1994.
+J. Teich and L. Thiele, “Uniform Design of Parallel Programs for
+DSP,” Proc. IEEE Int’l Symp. Circuits and Systems (ISCAS ’91),
+pp. 344a-347a, 1991.
+
+[26]
+
+[27] A. Kalavade, J. Othmer, B. Ackland, and K.J. Singh, “Software
+Environment for a Multiprocessor DSP,” Proc. 36th ACM/IEEE
+Design Automation Conf. (DAC ’99), 1999.
+
+[28] D.M. Lorts, “Combining Parallelization Techniques to Increase
+Adaptability and Efficiency of Multiprocessing DSP Systems,”
+Proc. Ninth DSP Workshop (DSP 2000)—First Signal Processing
+Education Workshop (SPEd 2000), 2000.
+I. Karkowski and H. Corporaal, “Exploiting Fine- and Coarse-
+Grain Parallelism in Embedded Programs,” Proc.
+Int’l Conf.
+Parallel Architectures and Compilation Techniques (PACT ’98),
+pp. 60-67, 1998.
+
+[29]
+
+Bjo¨ rn Franke received the Diplom degree in computer science from the
+University of Dortmund in 1999, and the MSc and PhD degrees in
+computer science from the University of Edinburgh in 2000 and 2004,
+respectively. He is currently a lecturer in the Institute for Computing
+Systems Architecture (ICSA) at the University of Edinburgh, where he is
+a member of the compiler and architecture group. His main research
+interests are in compilers for high-performance embedded systems.
+
+Michael F.P. O’Boyle received the PhD degree in computer science from
+the University of Manchester in July 1992. He was formerly a visiting
+scholar at Stanford University, and a visiting professor at UPC, Barcelona.
+He is currently an EPSRC advanced research fellow and a reader at the
+University of Edinburgh. His main research interests are in adaptive
+compilation and automatic compilation for multicore architectures.
+
+

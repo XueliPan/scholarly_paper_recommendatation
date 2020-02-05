@@ -1,0 +1,1840 @@
+Volley: Automated Data Placement for Geo-Distributed Cloud Services
+
+Sharad Agarwal, John Dunagan, Navendu Jain, Stefan Saroiu, Alec Wolman
+
+Microsoft Research, {sagarwal, jdunagan, navendu, ssaroiu, alecw}@microsoft.com
+
+Harbinder Bhogan
+
+University of Toronto, hbhogan@cs.toronto.edu
+
+Abstract: As cloud services grow to span more and more
+globally distributed datacenters, there is an increasingly
+urgent need for automated mechanisms to place applica-
+tion data across these datacenters. This placement must
+deal with business constraints such as WAN bandwidth
+costs and datacenter capacity limits, while also mini-
+mizing user-perceived latency. The task of placement is
+further complicated by the issues of shared data, data
+inter-dependencies, application changes and user mobil-
+ity. We document these challenges by analyzing month-
+long traces from Microsoft’s Live Messenger and Live
+Mesh, two large-scale commercial cloud services.
+
+We present Volley, a system that addresses these chal-
+lenges. Cloud services make use of Volley by submitting
+logs of datacenter requests. Volley analyzes the logs us-
+ing an iterative optimization algorithm based on data ac-
+cess patterns and client locations, and outputs migration
+recommendations back to the cloud service.
+
+To scale to the data volumes of cloud service logs,
+Volley is designed to work in SCOPE [5], a scalable
+MapReduce-style platform; this allows Volley to per-
+form over 400 machine-hours worth of computation in
+less than a day. We evaluate Volley on the month-long
+Live Mesh trace, and we ﬁnd that, compared to a state-
+of-the-art heuristic that places data closest to the pri-
+mary IP address that accesses it, Volley simultaneously
+reduces datacenter capacity skew by over 2×, reduces
+inter-datacenter trafﬁc by over 1.8× and reduces 75th
+percentile user-latency by over 30%.
+
+1
+
+Introduction
+
+Cloud services continue to grow rapidly, with ever
+more functionality and ever more users around the globe.
+Because of this growth, major cloud service providers
+now use tens of geographically dispersed datacenters,
+and they continue to build more [10]. A major unmet
+challenge in leveraging these datacenters is automati-
+cally placing user data and other dynamic application
+data, so that a single cloud application can serve each
+of its users from the best datacenter for that user.
+
+At ﬁrst glance, the problem may sound simple: de-
+termine the user’s location, and migrate user data to
+this simple heuris-
+the closest datacenter. However,
+tic ignores two major sources of cost
+to datacenter
+operators: WAN bandwidth between datacenters, and
+over-provisioning datacenter capacity to tolerate highly
+skewed datacenter utilization. In this paper, we show that
+a more sophisticated approach can both dramatically re-
+duce these costs and still further reduce user latency. The
+more sophisticated approach is motivated by the follow-
+ing trends in modern cloud services:
+
+Shared Data: Communication and collaboration are
+increasingly important to modern applications. This
+trend is evident in new business productivity software,
+such as Google Docs [16] and Microsoft Ofﬁce On-
+line [32], as well as social networking applications such
+as Facebook [12], LinkedIn [26], and Twitter [43]. These
+applications have in common that many reads and writes
+are made to shared data, such as a user’s Facebook wall,
+and the user experience is degraded if updates to shared
+data are not quickly reﬂected to other clients. These
+reads and writes are made by groups of users who need
+to collaborate but who may be scattered worldwide, mak-
+ing it challenging to place and migrate the data for good
+performance.
+
+Data Inter-dependencies: The task of placing shared
+data is made signiﬁcantly harder by inter-dependencies
+between data. For example, updating the wall for a
+Facebook user may trigger updating the data items that
+hold the RSS feeds of multiple other Facebook users.
+These connections between data items form a commu-
+nication graph that represents increasingly rich applica-
+tions. However, the connections fundamentally trans-
+form the problem’s mathematics: in addition to connec-
+tions between clients and their data, there are connec-
+tions in the communication graph in-between data items.
+This motivates algorithms that can operate on these more
+general graph structures.
+
+Application Changes: Cloud service providers want
+to release new versions of their applications with ever
+greater frequency [35]. These new application features
+
+can signiﬁcantly change the patterns of data sharing and
+data inter-dependencies, as when Facebook released its
+instant messaging feature.
+
+Reaching Datacenter Capacity Limits: The rush in
+industry to build additional datacenters is motivated in
+part by reaching the capacity constraints of individual
+datacenters as new users are added [10]. This in turn
+requires automatic mechanisms to rapidly migrate appli-
+cation data to new datacenters to take advantage of their
+capacity.
+
+User Mobility: Users travel more than ever to-
+day [15]. To provide the same rapid response regard-
+less of a user’s location, cloud services should quickly
+migrate data when the migration cost is sufﬁciently inex-
+pensive.
+
+In this paper we present Volley, a system for auto-
+matic data placement across geo-distributed datacenters.
+Volley incorporates an iterative optimization algorithm
+based on weighted spherical means that handles the com-
+plexities of shared data and data inter-dependencies, and
+Volley can be re-run with sufﬁcient speed that it handles
+application changes, reaching datacenter capacity limits
+and user mobility. Datacenter applications make use of
+Volley by submitting request logs (similar to Pinpoint [7]
+or X-Trace [14]) to a distributed storage system. These
+request logs include the client IP addresses, GUIDs iden-
+tifying the data items accessed by the client requests, and
+the structure of the request “call tree”, such as a client re-
+quest updating Facebook wall 1, which triggers requests
+to data items 2 and 3 handling Facebook user RSS feeds.
+Volley continuously analyzes these request logs to
+determine how application data should be migrated be-
+tween datacenters. To scale to these data sets, Volley is
+designed to work in SCOPE [5], a system similar to Map-
+Reduce [11]. By leveraging SCOPE, Volley performs
+more than 400 machines hours worth of computation in
+less then a day. When migration is found to be worth-
+while, Volley triggers application-speciﬁc data migration
+mechanisms. While prior work has studied placing static
+content across CDNs, Volley is the ﬁrst research system
+to address placement of user data and other dynamic ap-
+plication data across geographically distributed datacen-
+ters.
+
+Datacenter service administrators make use of Volley
+by specifying three inputs. First, administrators deﬁne
+the datacenter locations and a cost and capacity model
+(e.g., the cost of bandwidth between datacenters and the
+maximum amount of data per datacenter). Second, they
+choose the desired trade-off between upfront migration
+cost and ongoing better performance, where ongoing per-
+formance includes both minimizing user-perceived la-
+tency and reducing the costs of inter-datacenter commu-
+nication. Third, they specify data replication levels and
+other constraints (e.g., three replicas in three different
+
+datacenters all located within Europe). This allows ad-
+ministrators to use Volley while respecting other external
+factors, such as contractual agreements and legislation.
+
+In the rest of this paper, we ﬁrst quantify the preva-
+lence of trends such as user mobility in modern cloud
+services by analyzing month-long traces from Live Mesh
+and Live Messenger, two large-scale commercial data-
+center services. We then present the design and imple-
+mentation of the Volley system for computing data place-
+ment across geo-distributed datacenters. Next, we evalu-
+ate Volley analytically using the month-long Live Mesh
+trace, and we evaluate Volley on a live testbed consist-
+ing of 20 VMs located in 12 commercial datacenters dis-
+tributed around the world. Previewing our results, we
+ﬁnd that compared to a state-of-the-art heuristic, Volley
+can reduce skew in datacenter load by over 2×, decrease
+inter-datacenter trafﬁc by over 1.8×, and reduce 75th
+percentile latency by over 30%. Finally, we survey re-
+lated work and conclude.
+
+2 Analysis of Commercial Cloud-Service
+
+Traces
+
+We begin by analyzing workload traces collected by
+two large datacenter applications, Live Mesh [28] and
+Live Messenger [29]. Live Mesh provides a number of
+communication and collaboration features, such as ﬁle
+sharing and synchronization, as well as remote access to
+devices running the Live Mesh client. Live Messenger
+is an instant messaging application. In our presentation,
+we also use Facebook as a source for examples due to its
+ubiquity.
+
+The Live Mesh and Live Messenger traces were col-
+lected during June 2009, and they cover all users and de-
+vices that accessed these services over this entire month.
+The Live Mesh trace contains a log entry for every mod-
+iﬁcation to hard state (such as changes to a ﬁle in the
+Live Mesh synchronization service) and user-visible soft
+state (such as device connectivity information stored on
+a pool of in-memory servers [1]). The Live Messenger
+trace contains all login and logoff events, all IM con-
+versations and the participants in each conversation, and
+the total number of messages in each conversation. The
+Live Messenger trace does not specify the sender or the
+size of individual messages, and so for simplicity, we
+model each participant in an IM conversation as hav-
+ing an equal likelihood of sending each message, and
+we divide the total message bytes in this conversation
+equally among all messages. A prior measurement study
+describes many aspects of user behavior in the Live Mes-
+senger system [24]. In both traces, clients are identiﬁed
+by application-level unique identiﬁers.
+
+To estimate client location, we use a standard com-
+mercial geo-location database [34] as in prior work [36].
+
+Figure 1. Simpliﬁed data inter-dependencies in Face-
+book (left) and Live Mesh (right). In Facebook, an “up-
+dated wall” request arrives at a Facebook wall data item,
+and this data item sends the request to an RSS feed data
+item, which then sends it to the other client.
+In Live
+Mesh, a “publish new IP” request arrives at a Device
+Connectivity data item, which forwards it to a Publish-
+subscribe data item. From there, it is sent to a Queue
+data item, which ﬁnally sends it on to the other client.
+These pieces of data may be in different datacenters, and
+if they are, communication between data items incurs ex-
+pensive inter-datacenter trafﬁc.
+
+Figure 2. Two clients, their four data items and the com-
+munication between them in the simpliﬁed Facebook ex-
+ample. Data placement requires appropriately mapping
+the four data items to datacenters so as to simultaneously
+achieve low inter-datacenter trafﬁc, low datacenter ca-
+pacity skew, and low latency.
+
+The database snapshot is from June 30th 2009, the very
+end of our trace period.
+
+We use the traces to study three of the trends moti-
+vating Volley: shared data, data inter-dependencies, and
+user mobility. The other motivating trends for Volley,
+rapid application changes and reaching datacenter capac-
+ity limits, are documented in other data sources, such as
+developers describing how they build cloud services and
+how often they have to release updates [1, 35]. To pro-
+vide some background on how data inter-dependencies
+arise in commercial cloud services, Figure 1 shows sim-
+pliﬁed examples from Facebook and Live Mesh. In the
+Facebook example, Client 1 updates its Facebook wall,
+which is then published to Client 2; in Facebook, this al-
+lows users to learn of each other’s activities. In the Live
+Mesh example, Client 1 publishes its new IP address,
+
+Figure 3. Distribution of clients in the Mesh trace.
+
+Figure 4. Distribution of clients in the Messenger trace.
+
+which is routed to Client 2, enabling Client 2 to con-
+nect directly to Client 1; in Live Mesh, this is referred to
+as a notiﬁcation session, and it enables both efﬁcient ﬁle
+sharing and remote device access. The Figure caption
+provides additional details, as do other publications [1].
+In both cases, the client operations involve multiple data-
+center items; inter-datacenter trafﬁc is minimized by co-
+locating these items, while the latency of this particular
+request is minimized by placing the data items as close
+as possible to the two clients.
+
+Figure 2 attempts to convey some intuition for why
+data sharing and inter-dependencies make data place-
+ment challenging. The ﬁgure shows the web of connec-
+tions between just two clients in the simpliﬁed Facebook
+example; these inter-connections determine whether a
+mapping of data items to datacenters achieves low inter-
+datacenter trafﬁc, low datacenter capacity skew, and low
+latency. Actual cloud services face this problem with
+hundreds of millions of clients. Each client may ac-
+cess many data items, and these data items may need to
+communicate with each other to deliver results to clients.
+Furthermore, the clients may access the data items from
+a variety of devices at different locations. This leads to a
+large, complicated graph.
+
+In order to understand the potential for this kind of
+inter-connection to occur between clients that are quite
+distant, we begin by characterizing the geographic diver-
+sity of clients in the traces.
+
+Client Geographic Diversity: We ﬁrst study the
+traces to understand the geographic diversity of these ser-
+vices’ client populations. Figures 3 and 4 show the distri-
+bution of clients in the two traces on a map of the world.
+The ﬁgures show that both traces contain a geographi-
+
+ure 5 shows a CDF for the distance over which clients ac-
+cess data placed according to its centroid; data that is not
+shared has an access distance of 0, as does data shared by
+users whose IP addresses map to the same geographic lo-
+cation. Given the amount of collaboration across nations
+both within corporations and between them, it is perhaps
+not surprising that large amounts of sharing happens be-
+tween very distant clients. This data suggests that even
+for static clients, there can be signiﬁcant beneﬁts to plac-
+ing data closest to those who use it most heavily, rather
+than just placing it close to some particular client that
+accesses the data.
+
+Data Inter-dependencies: We proceed to study
+the traces to understand the prevalence of data inter-
+dependencies. Our analysis focuses on Live Mesh be-
+cause data inter-dependencies in Live Messenger have
+been documented in detail in prior work [24]. Figure 6
+shows the number of Queue objects subscribing to re-
+ceive notiﬁcations from each Publish-subscribe object;
+each such subscription creates a data inter-dependency
+where the Publish-subscribe object sends messages to
+the Queue object. We see that some Publish-subscribe
+objects send out notiﬁcations to only a single Queue ob-
+ject, but there is a long tail of popular Publish-subscribe
+objects. The presence of such data inter-dependencies
+motivates the need to incorporate them in Volley.
+
+Client Mobility: We ﬁnally study the traces to un-
+derstand the amount of client mobility in these services’
+client populations. Figure 7 shows a CDF characterizing
+client mobility over the month of the trace. To compute
+this CDF, we ﬁrst computed the location of each client
+at each point in time that it contacted the Live Mesh
+or Live Messenger application using the previously de-
+scribed methodology, and we then compute the client’s
+centroid. Next, we compute the maximum distance be-
+tween each client and its centroid. As expected, we ob-
+serve that most clients do not move. However, a signiﬁ-
+cant fraction do move (more in the Messenger trace than
+the Mesh trace), and these movements can be quite dra-
+matic – for comparison purposes, antipodal points on the
+earth are slightly more than 12,000 miles apart.
+
+From these traces, we cannot characterize the reason
+for the movement. For example, it could be travel, or it
+could be that the clients are connecting in through a VPN
+to a remote ofﬁce, causing their connection to the public
+Internet to suddenly emerge in a dramatically different
+location. For Volley’s goal of reducing client latency,
+there is no need to distinguish between these different
+causes; even though the client did not physically move in
+the VPN case, client latency is still minimized by moving
+data closer to the location of the client’s new connection
+to the public Internet. The long tail of client mobility
+suggests that for some fraction of clients, the ideal data
+placement changes signiﬁcantly during this month.
+
+Figure 5. Sharing of data between geographically dis-
+tributed clients in the Messenger and Mesh traces. Large
+amounts of sharing occur between distant clients.
+
+Figure 6. Data inter-dependencies in Live Mesh be-
+tween Publish-subscribe objects and Queue objects. A
+user that updates a hard state data item, such as a docu-
+ment stored in Live Mesh, will cause an update message
+to be generated at the Publish-subscribe object for that
+document, and all Queue objects that subscribe to it will
+receive a copy of the message. Each user or device that is
+sharing that document will have a unique Queue. Many
+Publish-subscribe objects are subscribed to by a single
+Queue, but there is a long tail of popular objects that are
+subscribed to by many Queues.
+
+Figure 7. Mobility of clients in the Messenger and Mesh
+traces. Most clients do not travel. However, a signiﬁcant
+fraction do travel quite far.
+
+cally diverse set of clients, and thus these service’s per-
+formance may signiﬁcantly beneﬁt from intelligent data
+placement.
+
+Geographically Distant Data Sharing: We next
+study the traces to understand whether there is signiﬁcant
+data sharing among distant users. For each particular
+data item, we compute its centroid (centroid on a sphere
+is computed using the weighted spherical mean method-
+ology, which we describe in detail in Section 3). Fig-
+
+0102030405060708090100012345678910% of instancesdistance from device to sharing centroid (x1000 miles)% of Messenger conversations% of Mesh notification sessions00.10.20.30.40.50.60.70.80.910255075100125150175fraction of publish-subscribe objectsnumber of unique queue objectssubscribing020406080100012345678910% of devices or usersmax distance from centroid (x1000 miles)% of Mesh devices% of Messenger usersmercial applications (such as the Live Mesh and Live
+Messenger services analyzed in Section 2) already log
+a superset of this data. For such applications, Volley can
+incorporate simple ﬁlters to extract out the relevant sub-
+set of the logs.
+
+For the Live Mesh and Live Messenger commercial
+cloud services, the data volumes from generating Volley
+logs are much less than the data volumes from processing
+user requests. For example, recording Volley logs for all
+the requests for Live Messenger, an IM service with hun-
+dreds of millions of users, only requires hundreds of GB
+per day, which leads to an average bandwidth demand in
+the tens of Mbps [24]. Though we cannot reveal the ex-
+act bandwidth consumption of the Live Mesh and Live
+Messenger services due to conﬁdentiality concerns, we
+can state that tens of Mbps is a small fraction of the total
+bandwidth demands of the services themselves. Based
+on this calculation, we centralize all the logs in a single
+datacenter; this then allows Volley to run over the logs
+multiple times as part of computing a recommended set
+of migrations.
+
+3.2 Additional Inputs
+
+In addition to the request logs, Volley requires four
+inputs that change on slower time scales. Because they
+change on slower time scales, they do not noticeably con-
+tribute to the bandwidth required by Volley. These ad-
+ditional inputs are (1) the requirements on RAM, disk,
+and CPU per transaction for each type of data handled
+by Volley (e.g., a Facebook wall), (2) a capacity and
+cost model for all the datacenters, (3) a model of la-
+tency between datacenters and between datacenters and
+clients, and (4) optionally, additional constraints on data
+placement (e.g., legal constraints). Volley also requires
+the current location of every data item in order to know
+whether a computed placement keeps an item in place or
+requires migration. In the steady state, these locations are
+simply remembered from previous iterations of Volley.
+
+In the applications we have analyzed thus far, the ad-
+ministrator only needs to estimate the average require-
+ments on RAM, disk and CPU per data item; the ad-
+ministrator can then rely on statistical multiplexing to
+smooth out the differences between data items that con-
+sume more or fewer resources than average. Because of
+this, resource requirements can be estimated by looking
+at OS-provided performance counters and calculating the
+average resource usage for each piece of application data
+hosted on a given server.
+
+The capacity and cost models for each datacenter
+specify the RAM, disk and CPU provisioned for the ser-
+vice in that datacenter, the available network bandwidth
+for both egress and ingress, and the charging model for
+service use of network bandwidth. While energy usage
+is a signiﬁcant cost for datacenter owners, in our expe-
+
+Figure 8. Dataﬂow for an application using Volley.
+
+This data does leave open the possibility that some
+fraction of the observed clients are bots that do not cor-
+respond to an actual user (i.e., they are modiﬁed clients
+driven by a program). The current analysis does ﬁl-
+ter out the automated clients that the service itself uses
+for doing performance measurement from various loca-
+tions. Prior work has looked at identifying bots automati-
+cally [45], and Volley might beneﬁt from leveraging such
+techniques.
+
+3 System Design and Implementation
+
+The overall ﬂow of data in the system is shown in Fig-
+ure 8. Applications make use of Volley by logging data
+to the Cosmos [5] distributed storage system. The ad-
+ministrator must also supply some inputs, such as a cost
+and capacity model for the datacenters. The Volley sys-
+tem frequently runs new analysis jobs over these logs,
+and computes migration decisions. Application-speciﬁc
+jobs then feed these migration decisions into application-
+speciﬁc data migration mechanisms. We now describe
+these steps in greater detail.
+
+3.1 Logging Requests
+
+To utilize Volley, applications have to log information
+on the requests they process. These logs must enable
+correlating requests into “call trees” or “runtime paths”
+that capture the logical ﬂow of control across compo-
+nents, as in Pinpoint [7] or X-Trace [14]. If the source
+or destination of a request is movable (i.e., because it is
+a data item under the control of the cloud service), we
+log a GUID identiﬁer rather than its IP address; IP ad-
+dresses are only used for endpoints that are not movable
+by Volley, such as the location that a user request came
+from. Because Volley is responsible for placing all the
+data named by GUIDs, it already knows their current lo-
+cations in the steady state. It is sometimes possible for
+both the source and destination of a request to be referred
+to by GUIDs—this would happen, for example, in Fig-
+ure 1, where the GUIDs would refer to Client 1’s Face-
+book wall and Client 2’s Facebook RSS feed. The exact
+ﬁelds in the Volley request logs are shown in Table 1. In
+total, each record requires only 100 bytes.
+
+There has been substantial prior work modifying ap-
+plications to log this kind of information, and many com-
+
+Request Log Record Format
+
+Field
+Timestamp
+Source-Entity
+Request-Size
+Destination-Entity Like Source-Entity, either a GUID or an IP address (40B)
+Transaction-Id
+
+Meaning
+Time in seconds when request was received (4B)
+A GUID if the source is another data item, an IP address if it is a client (40B)
+Bytes in request (8B)
+
+Used to group related requests (8B)
+
+Table 1. To use Volley, the application logs a record with these ﬁelds for every request. The meaning and size in bytes
+of each ﬁeld are also shown.
+
+Migration Proposal Record Format
+
+Field
+Entity
+Datacenter
+Latency-Change
+Ongoing-Bandwidth-Change The change in egress and ingress bandwidth per day (4B)
+Migration-Bandwidth
+
+Meaning
+The GUID naming the entity (40B)
+The GUID naming the new datacenter for this entity (40B)
+The average change in latency per request to this object (4B)
+
+The one-time bandwidth required to migrate (4B)
+
+Table 2. Volley constructs a set of proposed migrations described using the records above. Volley then selects the
+ﬁnal set of migrations according to the administrator-deﬁned trade-off between performance and cost.
+
+rience this is incorporated as a ﬁxed cost per server that
+is factored in at the long timescale of server provision-
+ing. Although datacenter owners may be charged based
+on peak bandwidth usage on individual peering links, the
+unpredictability of any given service’s contribution to a
+datacenter-wide peak leads datacenter owners to charge
+services based on total bandwidth usage, as in Amazon’s
+EC2 [2]. Accordingly, Volley helps services minimize
+their total bandwidth usage. We expect the capacity and
+cost models to be stable at the timescale of migration.
+For ﬂuid provisioning models where additional datacen-
+ter capacity can be added dynamically as needed for a
+service, Volley can be trivially modiﬁed to ignore provi-
+sioned capacity limits.
+
+Volley needs a latency model to make placement de-
+cisions that reduce user perceived latency. It allows dif-
+ferent static or dynamic models to be plugged in. Vol-
+ley migrates state at large timescales (measured in days)
+and hence it should use a latency model that is stable
+at that timescale. Based on the large body of work
+demonstrating the effectiveness of network coordinate
+systems, we designed Volley to treat latencies between
+IPs as distances in some n-dimensional space speciﬁed
+by the model. For the purposes of evaluation in the pa-
+per, we rely on a static latency model because it is sta-
+ble over these large timescales. This model is based on
+a linear regression of great-circle distance between geo-
+graphic coordinates; it was developed in prior work [36],
+where it was compared to measured round trip times
+across millions of clients and shown to be reasonably ac-
+curate. This latency model requires translating client IP
+addresses to geographic coordinates, and for this purpose
+we rely on the geo-location database mentioned in Sec-
+tion 2. This geo-location database is updated every two
+
+weeks. In this work, we focus on improving latency to
+users and not bandwidth to users. Incorporating band-
+width would require both specifying a desired latency
+bandwidth tradeoff and a model for bandwidth between
+arbitrary points in the Internet.
+
+Constraints on data placement can come in many
+forms. They may reﬂect legal constraints that data be
+hosted only in a certain jurisdiction, or they may reﬂect
+operational considerations requiring two replicas to be
+physically located in distant datacenters. Volley models
+such replicas as two distinct data items that may have
+a large amount of inter-item communication, along with
+the constraint that they be located in different datacen-
+ters. Although the commercial cloud service operators
+we spoke with emphasized the need to accommodate
+such constraints, the commercial applications we study
+in this paper do not currently face constraints of this
+form, and so although Volley can incorporate them, we
+did not explore this in our evaluation.
+
+3.3 Volley Algorithm
+
+Once the data is in Cosmos, Volley periodically an-
+alyzes it for migration opportunities. To perform the
+analysis, Volley relies on the SCOPE [5] distributed ex-
+ecution infrastructure, which at a high level resembles
+MapReduce [11] with a SQL-like query language. In our
+current implementation, Volley takes approximately 14
+hours to run through one month’s worth of log ﬁles; we
+analyze the demands Volley places on SCOPE in more
+detail in Section 4.4.
+
+Volley’s SCOPE jobs are structured into three phases.
+The search for a solution happens in Phase 2. Prior
+work [36] has demonstrated that starting this search in
+a good location improves convergence time, and hence
+
+Recursive Step:
+
+wsm (cid:0){wi, (cid:126)xi}N
+
+i=1
+
+(cid:1) =
+(cid:18) wN
+(cid:80) wi
+
+interp
+
+, (cid:126)xN , wsm({wi, (cid:126)xi}N −1
+i=1
+
+(cid:19)
+
+Base Case:
+
+interp(w, (cid:126)xA, (cid:126)xB) = (φC, λC) = (cid:126)xC
+
+d = cos−1 [cos(φA) cos(φB)+
+
+γ = tan−1
+
+β = tan−1
+
+sin(φA) sin(φB) cos(λB − λA)]
+(cid:20) sin(φB) sin(φA) sin(λB − λA)
+
+(cid:21)
+
+cos(φA) − cos(d) cos(φB)
+(cid:21)
+sin(φB) sin(wd) sin(γ)
+
+(cid:20)
+
+cos(wd) − cos(φA) cos(φB)
+
+φC = cos−1 [cos(wd) cos(φB)+
+
+sin(wd) sin(φB) cos(γ)]
+
+λC = λB − β
+
+Figure 9. Weighted spherical mean calculation. The
+weighted spherical mean (wsm()) is deﬁned recursively
+as a weighted interpolation (interp()) between pairs of
+points. Here, wi is the weight assigned to (cid:126)xi, and (cid:126)xi (the
+coordinates for node i) consists of φi, the latitudinal dis-
+tance in radians between node i and the North Pole, and
+λi, the longitude in radians of node i. The new (inter-
+polated) node C consists of w parts node A and 1 − w
+parts node B; d is the current distance in radians be-
+tween A and B; γ is the angle from the North Pole to B to
+A (which stays the same as A moves); β is the angle from
+B to the North Pole to A’s new location. These are used
+to compute (cid:126)xC, the result of the interp(). For simplicity
+of presentation, we omit describing the special case for
+antipodal nodes.
+
+Phase 1 computes a reasonable initial placement of data
+items based on client IP addresses. Phase 2 iteratively
+improves the placement of data items by moving them
+freely over the surface of the earth—this phase requires
+the bulk of the computational time and the algorithm
+code. Phase 3 does the needed ﬁx up to map the data
+items to datacenters and to satisfy datacenter capacity
+constraints. The output of the jobs is a set of poten-
+tial migration actions with the format described in Ta-
+ble 2. Many adaptive systems must incorporate explicit
+elements to prevent oscillations. Volley does not incor-
+porate an explicit mechanism for oscillation damping.
+Oscillations would occur only if user behavior changed
+in response to Volley migration in such a way that Vol-
+ley needed to move that user’s state back to a previous
+location.
+
+Phase 1: Compute Initial Placement. We ﬁrst map
+each client to a set of geographic coordinates using the
+commercial geo-location database mentioned earlier.
+This IP-to-location mapping may be updated between
+Volley jobs, but it is not updated within a single Volley
+job. We then map each data item that is directly accessed
+by a client to the weighted average of the geographic
+coordinates for the client IPs that access it. This is done
+using the weighted spherical mean calculation shown
+in Figure 9. The weights are given by the amount of
+communication between the client nodes and the data
+item whose initial location we are calculating. The
+weighted spherical mean calculation can be thought
+of as drawing an arc on the earth between two points,
+and then ﬁnding the point on the arc that interpolates
+between the two initial points in proportion to their
+weight. This operation is then repeated to average in
+additional points. The recursive deﬁnition of weighted
+spherical mean in Figure 9 is conceptually similar to
+deﬁning the more familiar weighted mean recursively,
+e.g.,
+
+weighted-mean({3, xk}, {2, xj}, {1, xi}) =
+
+· xk +
+
+· weighted-mean({2, xj}, {1, xi})
+
+(cid:19)
+
+(cid:18) 3
+6
+
+3
+6
+
+Compared to weighted mean, weighted spherical mean
+has the subtlety that the rule for averaging two individual
+points has to use spherical coordinates.
+
+Figure 10 shows an example of this calculation us-
+ing data from the Live Mesh trace: ﬁve different devices
+access a single shared object from a total of eight dif-
+ferent IP addresses; device D accesses the shared object
+far more than the other devices, and this leads to the
+weighted spherical mean (labeled “centroid” in the ﬁg-
+ure) being placed very close to device D.
+
+Finally, for each data item that is never accessed di-
+rectly by clients (e.g., the Publish-subscribe data item in
+the Live Mesh example of Figure 1), we map it to the
+weighted spherical mean of the data items that commu-
+nicate with it using the positions these other items were
+already assigned.
+
+Phase 2: Iteratively Move Data to Reduce Latency.
+Volley iteratively moves data items closer to both clients
+and to the other data items that they communicate with.
+This iterative update step incorporates two earlier ideas:
+a weighted spring model as in Vivaldi [9] and spherical
+coordinates as in Htrae [36]. Spherical coordinates de-
+ﬁne the locations of clients and data items in a way that
+is more conducive to incorporating a latency model for
+geographic locations. The latency distance between two
+nodes and the amount of communication between them
+increase the spring force that is pulling them together.
+However, unlike a network coordinate system, nodes in
+
+Figure 10. An example of a shared object being placed at its weighted spherical mean (labeled “centroid” in the
+Figure). This particular object, the locations of the clients that access it, and their access ratios are drawn from
+the Live Mesh trace. Because device D is responsible for almost all of the accesses, the weighted spherical mean
+placement for the object is very close to device D’s location.
+
+w =
+
+1
+
+1 + κ · d · lAB
+
+(cid:126)xnew
+A
+
+= interp(w, (cid:126)xcurrent
+
+, (cid:126)xcurrent
+
+)
+
+B
+
+A
+
+Figure 11. Update rule applied to iteratively move
+nodes with more communication closer together. Here, w
+is a fractional weight that determines how much node A
+is moved towards node B, lAB is the amount of commu-
+nication between the two nodes, d is the distance between
+nodes A and B, (cid:126)xcurrent
+are the current lo-
+B
+cations of node A and B, (cid:126)xnew
+A is the location of A after
+the update, and κ is an algorithmic constant.
+
+and (cid:126)xcurrent
+
+A
+
+Volley only experience contracting forces; the only fac-
+tor preventing them from collapsing to a single location
+is the ﬁxed nature of client locations. This yields the
+update rule shown in Figure 11. In our current imple-
+mentation, we simply run a ﬁxed number of iterations of
+this update rule; we show in Section 4 that this sufﬁces
+for good convergence.
+
+Intuitively, Volley’s spring model attempts to bring
+data items closer to users and to other data items that
+they communicate with regularly. Thus it is plausible
+that Volley’s spring model will simultaneously reduce
+latency and reduce inter-datacenter trafﬁc; we show in
+Section 4 that this is indeed the case for the commercial
+cloud services that we study.
+
+Phase 3: Iteratively Collapse Data to Datacenters.
+After computing a nearly ideal placement of the data
+
+items on the surface of the earth, we have to modify this
+placement so that the data items are located in datacen-
+ters, and the set of items in each datacenter satisﬁes its
+capacity constraints. Like Phase 2, this is done itera-
+tively:
+initially, every data item is mapped to its clos-
+est datacenter. For datacenters that are over their capac-
+ity, Volley identiﬁes the items that experience the fewest
+accesses, and moves all of them to the next closest data-
+center. Because this may still exceed the total capacity of
+some datacenter due to new additions, Volley repeats the
+process until no datacenter is over capacity. Assuming
+that the system has enough capacity to successfully host
+all items, this algorithm always terminates in at most as
+many iterations as there are datacenters in the system.
+
+For each data item that has moved, Volley outputs
+a migration proposal containing the new datacenter lo-
+cation, the new values for latency and ongoing inter-
+datacenter bandwidth, and the one-time bandwidth re-
+quired for this migration. This is a straightforward cal-
+culation using the old data locations, the new data lo-
+cations, and the inputs supplied by the datacenter ser-
+vice administrator, such as the cost model and the latency
+model. These migration proposals are then consumed by
+application-speciﬁc migration mechanisms.
+
+3.4 Application-speciﬁc Migration
+
+Volley is designed to be usable by many different
+cloud services. For Volley to compute a recommended
+placement, the only requirement it imposes on the cloud
+
+device Ddevice Vdevice Xdevice Idevice Naccesses to shared object•96% : device D•03% : device I•01% : devices N,V,Xservice is that it logs the request data described in Ta-
+ble 1. Given these request logs as input, Volley outputs a
+set of migration proposals described in Table 2, and then
+leaves the actual migration of the data to the cloud ser-
+vice itself. If the cloud service also provides the initial
+location of data items, then each migration proposal will
+include the bandwidth required to migrate, and the ex-
+pected change in latency and inter-datacenter bandwidth
+after migration.
+
+Volley’s decision to leave migration to application-
+speciﬁc migration mechanisms allows Volley to be more
+easily applied to a diverse set of datacenter applications.
+For example, some datacenter applications use migra-
+tion mechanisms that follow the pattern of marking data
+read-only in the storage system at one location, copy-
+ing the data to a new location, updating an application-
+speciﬁc name service to point to the new copy, marking
+the new copy as writeable, and then deleting the old copy.
+Other datacenter applications maintain multiple replicas
+in different datacenters, and migration may simple re-
+quire designating a different replica as the primary. In-
+dependent of the migration mechanism, datacenter appli-
+cations might desire to employ application-speciﬁc throt-
+tling policies, such as only migrating user state when an
+application-speciﬁc predictive model suggests the user is
+unlikely to access their state in the next hour. Because
+Volley does not attempt to migrate the data itself, it does
+not interfere with these techniques or any other migration
+technique that an application may wish to employ.
+
+4 Evaluation
+
+In our evaluation, we compare Volley to three heuris-
+tics for where to place data and show that Volley sub-
+stantially outperforms all of them on the metrics of dat-
+acenter capacity skew, inter-datacenter trafﬁc, and user-
+perceived latency. We focus exclusively on the month-
+long Live Mesh trace for conciseness. For both the
+heuristics and Volley, we ﬁrst compute a data placement
+using a week of data from the Live Mesh trace, and then
+evaluate the quality of the resulting placement on the
+following three weeks of data. For all four placement
+methodologies, any data that appears in the three-week
+evaluation window but not in the one-week placement
+computation window is placed in a single datacenter lo-
+cated in the United States (in production, this new data
+will be handled the next time the placement methodol-
+ogy is run). Placing all previously unseen data in one
+datacenter penalizes the different methodologies equally
+for such data.
+
+The ﬁrst heuristic we consider is commonIP – place
+data as close as possible to the IP address that most com-
+monly accesses it. The second heuristic is oneDC – put
+all data in one datacenter, a strategy still taken by many
+companies due to its simplicity. The third heuristic is
+
+hash – hash data to datacenters so as to optimize for
+load-balancing. These three heuristics represent reason-
+able approaches to optimizing for the three different met-
+rics we consider—oneDC and hash optimize for inter-
+datacenter trafﬁc and datacenter capacity skew respec-
+tively, while commonIP is a reasonably sophisticated
+proposal for optimizing latency.
+
+Throughout our evaluation, we use 12 commercial
+datacenters as potential locations. These datacenters are
+distributed across multiple continents, but their exact lo-
+cations are conﬁdential. Conﬁdentiality concerns also
+prevent us from revealing the exact amount of bandwidth
+consumed by our services. Thus, we present the inter-
+datacenter trafﬁc from different placements using the
+metric “fraction of messages that are inter-datacenter.”
+This allows an apples-to-apples comparison between the
+different heuristics and Volley without revealing the un-
+derlying bandwidth consumption. The bandwidth con-
+sumption from centralizing Volley logs, needed for Vol-
+ley and commonIP, is so small compared to this inter-
+datacenter trafﬁc that it does not affect graphs compar-
+ing this metric among the heuristics. We conﬁgure Vol-
+ley with a datacenter capacity model such that no one of
+the 12 datacenters can host more than 10% of all data, a
+reasonably balanced use of capacity.
+
+All latencies that we compute analytically use the la-
+tency model described in Section 3. This requires using
+the client’s IP address in the trace to place them at a ge-
+ographic location. In this Live Mesh application, client
+requests require sending a message to a ﬁrst data item,
+which then sends a second message to a second data
+item; the second data item sends a reply, and then the
+ﬁrst data item sends the client its reply. If the data items
+are in the same datacenter, latency is simply the round
+trip time between the client and the datacenter.
+If the
+data items are in separate datacenters, latency is the sum
+of four one-way delays: client to datacenter 1, datacen-
+ter 1 to datacenter 2, datacenter 2 back to datacenter 1,
+and datacenter 1 back to the client. These latency calcu-
+lations leave out other potential protocol overheads, such
+as the need to initially establish a TCP connection or to
+authenticate; any such protocol overheads encountered
+in practice would magnify the importance of latency im-
+provements by incurring the latency multiple times. For
+clarity of presentation, we consistently group latencies
+into 10 millisecond bins in our graphs. The graphs only
+present latency up to 250 milliseconds because the better
+placement methodologies all achieve latency well under
+this for almost all requests.
+
+Our evaluation begins by comparing Volley and the
+three heuristics on the metrics of datacenter capacity
+skew and inter-datacenter trafﬁc (Section 4.1). Next, we
+evaluate the impact of these placements on the latency of
+client requests, including evaluating Volley in the con-
+
+Figure 12. Datacenter capacity required by three dif-
+ferent placement heuristics and Volley.
+
+Figure 14. Client request latency under three different
+placement heuristics and Volley.
+
+4.2
+
+Impact on Latency of Client Requests
+
+We now compare Volley to the three heuristics on the
+metric of user-perceived latency. Figure 14 shows the
+results: hash has high latency; oneDC has mediocre la-
+tency; and commonIP has the best latency among the
+three heuristics. Although commonIP performs better
+than oneDC and hash, Volley performs better still, par-
+ticularly on the tail of users that experience high latency
+even under the commonIP placement strategy. Com-
+pared to commonIP, Volley reduces 75th percentile la-
+tency by over 30%.
+
+4.2.1 Multiple Datacenter Testbed
+
+Previously, we evaluated the impact of placement on
+user-perceived latency analytically use the latency model
+described in Section 3. In this section, we evaluate Vol-
+ley’s latency impact on a live system using a prototype
+cloud service. We use the prototype cloud service to em-
+ulate Live Mesh for the purpose of replaying a subset of
+the Live Mesh trace. We deployed the prototype cloud
+service across 20 virtual machines spread across the 12
+geographically distributed datacenters, and we used one
+node at each of 109 Planetlab sites to act as clients of the
+system.
+
+The prototype cloud service consists of four compo-
+nents: the frontend, the document service, the publish-
+subscribe service, and the message queue service. Each
+of these components run on every VM so as to have ev-
+ery service running in every datacenter. These compo-
+nents of our prototype map directly to the actual Live
+Mesh component services that run in production. The
+ways in which the production component services co-
+operate to provide features in the Live Mesh service is
+described in detail elsewhere [1], and we provide only a
+brief overview here.
+
+The prototype cloud service exposes a simple fron-
+tend that accepts client requests and routes them to the
+appropriate component in either its own or another data-
+center. In this way, each client can connect directly to
+any datacenter, and requests that require an additional
+step (e.g., updating an item, and then sending the update
+to others) will be forwarded appropriately. This design
+
+Figure 13. Inter-datacenter trafﬁc under three different
+placement heuristics and Volley.
+
+text of a simple, hypothetical example to understand this
+impact in detail (Section 4.2). We then evaluate the in-
+cremental beneﬁt of Volley as a function of the num-
+ber of Volley iterations (Section 4.3). Next, we evaluate
+the resource demands of running Volley on the SCOPE
+distributed execution infrastructure (Section 4.4). Fi-
+nally, we evaluate the impact of running Volley more fre-
+quently or less frequently (Section 4.5).
+
+4.1 Impact on Datacenter Capacity Skew and
+
+Inter-datacenter Trafﬁc
+
+We now compare Volley to the three heuristics for
+where to place data and show that Volley substantially
+outperforms all of them on the metrics of datacenter
+capacity skew and inter-datacenter trafﬁc. Figures 12
+and 13 show the results: hash has perfectly balanced
+use of capacity, but high inter-datacenter trafﬁc; oneDC
+has zero inter-datacenter trafﬁc (the ideal), but extremely
+unbalanced use of capacity; and commonIP has a mod-
+est amount of inter-datacenter trafﬁc, and capacity skew
+where 1 datacenter has to support more than twice the
+load of the average datacenter. Volley is able to meet a
+reasonably balanced use of capacity while keeping inter-
+datacenter trafﬁc at a very small fraction of the total num-
+ber of messages. In particular, compared to commonIP,
+Volley reduces datacenter skew by over 2× and reduces
+inter-datacenter trafﬁc by over 1.8×.
+
+00.050.10.150.20.250.3oneDCcommonIPhashvolleyfraction of stateplacements in 12 datacenters10.00000.79290.20590.110900.10.20.30.40.50.60.70.80.91oneDChashcommonIPvolleyfraction of messages that are inter-DCplacement00.10.20.30.40.50.60.70.80.910255075100125150175200225250cumulative fraction of transactionslatency (ms)volleycommonIPoneDChashTimestamp
+
+T0
+T0
+T0 + 1
+T0 + 1
+T0 + 2
+T0 + 2
+T0 + 5
+T0 + 5
+
+Source-
+Entity
+P SSa
+Q1
+P SSb
+Q1
+P SSb
+Q1
+P SSb
+Q2
+
+Request-
+Size
+100 B
+100 B
+100 B
+100 B
+100 B
+100 B
+100 B
+100 B
+
+Destination-
+Entity
+Q1
+IP 1
+Q1
+IP 2
+Q1
+IP 2
+Q2
+IP 1
+
+Transaction-
+Id
+1
+1
+2
+2
+3
+3
+4
+4
+
+Table 3. Hypothetical application logs. In this example,
+IP 1 is located at geographic coordinates (10,110) and
+IP 2 at (10,10).
+
+Data
+
+commonIP
+
+P SSa
+P SSb
+Q1
+Q2
+
+(10,110)
+(10,10)
+(10,10)
+(10,110)
+
+Volley
+Phase 1
+(14.7,43.1)
+(15.3,65.6)
+(14.7,43.1)
+(10,110)
+
+Volley
+Phase 2
+(15.1,49.2)
+(15.3,63.6)
+(15.1,50.5)
+(13.6,88.4)
+
+Table 4. CommonIP and Volley placements computed
+using Table 3, assuming a datacenter at every point
+on Earth and ignoring capacity constraints and inter-
+datacenter trafﬁc.
+
+Transaction-
+Id
+1
+2
+3
+4
+
+commonIP
+
+distance
+27,070 miles
+0 miles
+0 miles
+13,535 miles
+
+latency
+396 ms
+31 ms
+31 ms
+182 ms
+
+Volley Phase 2
+distance
+8,202 miles
+7,246 miles
+7,246 miles
+6,289 miles
+
+latency
+142 ms
+129 ms
+129 ms
+116 ms
+
+Table 5. Distances traversed and latencies of user re-
+quests in Table 3 using commonIP and Volley Phase 2
+placements in Table 4. Note that our latency model [36]
+includes an empirically-determined access penalty for
+all communication involving a client.
+
+latency model relies on) and Planetlab connectivity, and
+occasional high load on the Planetlab nodes leading to
+high slice scheduling delays.
+
+Other than due to sampling of the request trace, the
+live experiment has no impact on the datacenter capac-
+ity skew and inter-datacenter trafﬁc differences between
+the two placement methodologies. Thus, Volley offers
+an improvement over commonIP on every metric simul-
+taneously, with the biggest beneﬁts coming in reduced
+inter-datacenter trafﬁc and reduced datacenter capacity
+skew.
+
+4.2.2 Detailed Examination of Latency Impact
+
+To examine in detail how placement decisions im-
+pact latencies experienced by user requests, we now con-
+sider a simple example. Table 3 lists four hypothetical
+Live Mesh transactions involving four data objects and
+clients behind two IP addresses. For the purposes of this
+simple example, we assume there is a datacenter at ev-
+ery point on Earth with inﬁnite capacity and no inter-
+datacenter trafﬁc costs. We pick the geographic coor-
+
+Figure 15. Comparing Volley to the commonIP heuristic
+on a live system spanning 12 geographically distributed
+datacenters and accessed by Planetlab clients.
+In this
+Figure, we use a random sample of the Live Mesh trace.
+We see that Volley provides moderately better latency
+than the commonIP heuristic.
+
+allows clients to cache the location of the best datacen-
+ter to connect to for any given operation, but requests still
+succeed if a client request arrives at the wrong datacenter
+due to cache staleness.
+
+We walk through an example of how two clients can
+rendezvous by using the document, publish-subscribe,
+and message queue services. The document service can
+store arbitrary data; in this case, the ﬁrst client can store
+its current IP address, and a second client can then read
+that IP address from the document service and contact
+the ﬁrst client directly. The publish-subscribe service is
+used to send out messages when data in the document
+service changes; for example, if the second client sub-
+scribes to updates for the ﬁrst client’s IP address, these
+updates will be pro-actively sent to the second client, in-
+stead of the second client having to poll the document
+service to see if there have been any changes. Finally, the
+message queue service buffers messages for clients from
+the publish-subscribe service. If the client goes ofﬂine
+and then reconnects, it can connect to the queue service
+and dequeue these messages.
+
+To evaluate both Volley and the commonIP heuristic’s
+latency on this live system, we used the same data place-
+ments computed on the ﬁrst week of the Live Mesh trace.
+Because the actual Live Mesh service requires more than
+20 VMs, we had to randomly sample requests from the
+trace before replaying it. We also mapped each client
+IP in the trace subset to the closest Planetlab node, and
+replayed the client requests from these nodes.
+
+Figure 15 shows the measured latency on the sample
+of the Live Mesh trace; recall that we are grouping laten-
+cies into 10 millisecond bins for clarity of presentation.
+We see that Volley consistently provides better latency
+than the commonIP placement. These latency beneﬁts
+are visible despite a relatively large number of external
+sources of noise, such as the difference between the ac-
+tual client locations and the Planetlab locations, differ-
+ences between typical client connectivity (that Volley’s
+
+00.10.20.30.40.50.60.70.80.910255075100125150175200225250cumulative fraction of transactionslatency (ms)volleycommonIPFigure 16. Average distance traveled by each object
+during successive Volley Phase 2 iterations. The aver-
+age incorporates some objects traveling quite far, while
+many travel very little.
+
+dinates of (10,110) and (10,10) for ease of examining
+how far each object’s placement is from the client IP
+addresses. Table 4 shows the placements calculated by
+commonIP and Volley in Phases 1 and 2.
+In Phase 1,
+Volley calculates the weighted spherical mean of the ge-
+ographic coordinates for the client IPs that access each
+“Q” object. Hence Q1 is placed roughly two-thirds along
+the great-circle segment from IP 1 to IP 2, while Q2 is
+placed at IP 1. Phase 1 similarly calculates the place-
+ment of each “PSS” object using these coordinates for
+“Q” objects. Phase 2 then iteratively reﬁnes these coor-
+dinates.
+
+We now consider the latency impact of these place-
+ments on the same set of user requests in Table 3. Ta-
+ble 5 shows for each user request, the physical distance
+traversed and the corresponding latency (round trip from
+PSS to Q and from Q to IP). CommonIP optimizes for
+client locations that are most frequently used, thereby
+driving down latency to the minimum for some user re-
+quests but at a signiﬁcant expense to others. Volley con-
+siders all client locations when calculating placements,
+and in doing so drives down the worst cases by more than
+the amount it drives up the common case, leading to an
+overall better latency distribution. Note that in practice,
+user requests change over time after placement decisions
+have been made and our trace-based evaluation does use
+later sets of user requests to evaluate placements based
+on earlier requests.
+
+4.3
+
+Impact of Volley Iteration Count
+
+We now show that Volley converges after a small
+number of iterations; this will allow us to establish in
+Section 4.5 that Volley runs quickly (i.e., less than a day),
+and thus can be re-run frequently. Figures 16, 17, 18
+and 19 show the performance of Volley as the number
+of iterations varies. Figure 16 shows that the distance
+that Volley moves data signiﬁcantly decreases with each
+Volley iteration, showing that Volley relatively quickly
+converges to its ideal placement of data items.
+
+Figures 17, 18 and 19 further break down the changes
+
+Figure 17. Inter-datacenter trafﬁc at each Volley itera-
+tion.
+
+Figure 18. Datacenter capacity at each Volley iteration.
+
+Figure 19. Client request latency at each Volley itera-
+tion.
+
+in Volley’s performance in each iteration. Figure 17
+shows that inter-datacenter trafﬁc is reasonably good af-
+ter the initial placement of Phase 1, and is quite similar to
+the commonIP heuristic. In contrast, recall that the hash
+heuristic led to almost 80% of messages crossing data-
+center boundaries. Inter-datacenter trafﬁc then decreases
+by over a factor of 2 during the ﬁrst 5 Phase 2 itera-
+tions, decreases by a small amount more during the next
+5 Phase 2 iterations, and ﬁnally goes back up slightly
+when Volley’s Phase 3 balances the items across data-
+centers. Of course, the point of re-balancing is to avoid
+the kind of capacity skew seen in the commonIP heuris-
+tic, and in this regard a small increase in inter-datacenter
+trafﬁc is acceptable.
+
+Turning now to datacenter capacity, we see that Vol-
+ley’s placement is quite skewed (and by an approxi-
+mately constant amount) until Phase 3, where it smooths
+out datacenter load according to its conﬁgured capacity
+
+0246810121412345678910avg. change in placement (miles)iteration0.20750.08180.08120.110900.10.20.3phase1phase2 iter5phase2 iter10phase3fraction of messages that are inter-DCplacement00.050.10.150.20.250.3phase1phase2 iter5phase2 iter10phase3fraction of stateplacements in 12 datacenters00.10.20.30.40.50.60.70.80.910255075100125150175200225250cumulative fraction of transactionslatency (ms)phase3phase2 iter10phase2 iter5phase1Volley
+Phase
+
+1
+2
+3
+
+Elapsed
+Time
+in Hours
+1:22
+14:15
+0:10
+
+SCOPE
+Stages
+
+SCOPE
+CPU
+Vertices Hours
+
+39
+625
+16
+
+20,668
+255,228
+200
+
+89
+386
+0:07
+
+Table 6. Volley’s demands on the SCOPE infrastructure
+to analyze 1 week’s worth of traces.
+
+model (i.e., such that no one of the 12 datacenters hosts
+more than 10% of the data). Turning ﬁnally to latency,
+Figure 19 shows that latency has reached its minimum
+after only ﬁve Phase 2 iterations. In contrast to the im-
+pact on inter-datacenter trafﬁc, there is almost no latency
+penalty from Phase 3’s data movement to satisfy data-
+center capacity.
+
+4.4 Volley Resource Demands
+
+Having established that Volley converges after a small
+number of iterations, we now analyze the resource re-
+quirements for this many iterations; this will allow us to
+conclude that Volley completes quickly and can be re-run
+frequently. The SCOPE cluster we use consists of well
+over 1,000 servers. Table 6 shows Volley’s demands on
+the SCOPE infrastructure broken down by Volley’s dif-
+ferent phases. The elapsed time, SCOPE stages, SCOPE
+vertices and CPU hours are cumulative over each phase
+– Phase 1 has only one iteration to compute the initial
+placement, while Phase 2 has ten iterations to improve
+the placement, and Phase 3 has 12 iterations to balance
+out usage over the 12 datacenters. Each SCOPE stage
+in Table 6 corresponds approximately to a single map
+or reduce step in MapReduce [11]. There are 680 such
+stages overall, leading to lots of data shufﬂing; this is
+one reason why the total elapsed time is not simply CPU
+hours divided by the degree of possible parallelism. Ev-
+ery SCOPE vertex in Table 6 corresponds to a node in
+the computation graph that can be run on a single ma-
+chine, and thus dividing the total number of vertices by
+the total number of stages yields the average degree of
+parallelism within Volley: the average stage parallelizes
+out to just over 406 machines (some run on substantially
+more). The SCOPE cluster is not dedicated for Volley but
+rather is a multi-purpose cluster used for several tasks.
+The operational cost of using the cluster for 16 hours ev-
+ery week is small compared to the operational savings
+in bandwidth consumption due to improved data place-
+ment. The data analyzed by Volley is measured in the
+terabytes. We cannot reveal the exact amount because it
+could be used to infer conﬁdential request volumes since
+every Volley log record is 100 bytes.
+
+4.5 Impact of Rapid Volley Re-Computation
+
+Having established that Volley can be re-run fre-
+quently, we now show that Volley provides substantially
+
+Figure 20. Client request latency with stale Volley
+placements.
+
+Figure 21. Inter-datacenter trafﬁc with stale Volley
+placements.
+
+Figure 22. Previously unseen objects over time.
+
+better performance by being re-run frequently. For these
+experiments, we use traces from the Live Mesh service
+extending from the beginning of June 2009 all the way
+to the beginning of September 2009. Figures 20, 21
+and 22 show the impact of rapidly re-computing place-
+ments: Volley computes a data placement using the trace
+from the ﬁrst week of June, and we evaluate the per-
+formance of this placement on a trace from the imme-
+diately following week, the week after the immediately
+following week, a week starting a month later, and a
+week starting three months after Volley computed the
+data placement. The better performance of the place-
+ment on the immediately following week demonstrates
+the signiﬁcant beneﬁts of running Volley frequently with
+respect to both latency and inter-datacenter trafﬁc. Fig-
+ure 20 shows that running Volley even every two weeks
+is noticeably worse than having just run Volley, and this
+latency penalty keeps increasing as the Volley placement
+
+00.10.20.30.40.50.60.70.80.910255075100125150175200225250cumulative fraction of transactionslatency (ms)immediateafter 1 weekafter 1 monthafter 3 months0.08190.11010.13150.145500.050.10.150.2immediateafter 1 weekafter 1 monthafter 3 monthsfraction of messages that are inter-DC1 week workload0.10220.15580.26260.507700.10.20.30.40.50.6immediateafter 1 weekafter 1 monthafter 3 monthsfraction of objects that are not in original placement1 week workloadother distributed computing environments. We then de-
+scribe prior work that focused on placing static content
+on CDNs; compared to this prior work, Volley is the ﬁrst
+research system to address placement of dynamic appli-
+cation data across geographically distributed datacenters.
+We ﬁnally describe prior work on more theoretical ap-
+proaches to determining an optimal data placement.
+
+5.1 Placement Mechanisms
+
+Systems such as Emerald [20], SOS [37], Globe [38],
+and Legion [25]
+focused on providing location-
+independent programming abstractions and migration
+mechanisms for moving data and computation between
+locations. Systems such as J-Orchestra [42] and Addis-
+tant [41] have examined distributed execution of Java ap-
+plications through rewriting of byte code, but have left
+placement policy decisions to the user or developer. In
+contrast, Volley focuses on placement policy, not mech-
+anism. Some prior work incorporated both placement
+mechanism and policy, e.g., Coign [18], and we charac-
+terize its differences with Volley’s placement policy in
+the next subsection.
+
+5.2 Placement Policies for Other Distributed
+
+Computing Environments
+
+Prior work on automatic data placement can be
+broadly grouped by the distributed computing environ-
+ment that it targeted. Placing data in a LAN was tackled
+by systems such as Coign [18], IDAP [22], ICOPS [31],
+CAGES [17], Abacus [3] and the system of Stewart et
+al [39]. Systems such as Spectra [13], Slingshot [40],
+MagnetOS [27], Pleaides [23] and Wishbone [33] ex-
+plored data placement in a wireless context, either be-
+tween mobile clients and more powerful servers, or in ad
+hoc and sensor networks. Hilda [44] and Doloto [30]
+explored splitting data between web clients and web
+servers, but neither assumed there were multiple geo-
+graphic locations that could host the web server.
+
+Volley differs from these prior systems in several
+ways. First, the scale of the data that Volley must process
+is signiﬁcantly greater. This required designing the Vol-
+ley algorithm to work in a scalable data analysis frame-
+work such as SCOPE [5] or MapReduce [11]. Second,
+Volley must place data across a large number of datacen-
+ters with widely varying latencies both between datacen-
+ters and clients, and between the datacenters themselves;
+this aspect of the problem is not addressed by the algo-
+rithms in prior work. Third, Volley must continuously
+update its measurements of the client workload, while
+some (though not all) of these prior approaches used an
+upfront proﬁling approach.
+
+Figure 23. Fraction of objects moved compared to ﬁrst
+week.
+
+becomes increasingly stale. Figure 21 shows a similar
+progressively increasing penalty to inter-datacenter traf-
+ﬁc; running Volley frequently results in signiﬁcant inter-
+datacenter trafﬁc savings.
+
+Figure 22 provides some insight into why running
+Volley frequently is so helpful; the number of previously
+unseen objects increases rapidly with time. When run
+frequently, Volley detects accesses to an object sooner.
+Note that this inability to intelligently place previously
+unseen objects is shared by the commonIP heuristic, and
+so we do not separately evaluate the rate at which it de-
+grades in performance.
+
+In addition to new objects that are created and ac-
+cessed, previously placed objects may experience sig-
+niﬁcantly different access patterns over time. Running
+Volley periodically provides the added beneﬁt of migrat-
+ing these objects to locations that can better serve new
+access patterns. Figure 23 compares a Volley placement
+calculated from the ﬁrst week of June to a placement cal-
+culated in the second week, then the ﬁrst week to the
+third week, and ﬁnally the ﬁrst week to the fourth week.
+About 10% of the objects in any week undergo migra-
+tions, either as a direct result of access pattern changes
+or due to more important objects displacing others in
+capacity-limited datacenters. The majority of objects re-
+tain their placement compared to the ﬁrst week. Run-
+ning Volley periodically has a third, but minor advan-
+tage. Some client requests come from IP addresses that
+are not present in geo-location databases. Objects that
+are accessed solely from such locations are not placed by
+Volley. If additional traces include accesses from other
+IP addresses that are present in geo-location databases,
+Volley can then place these objects based on these new
+accesses.
+
+5 Related Work
+
+The problem of automatic placement of application
+data re-surfaces with every new distributed computing
+environment, such as local area networks (LANs), mo-
+bile computing, sensor networks, and single cluster web
+sites. In characterizing related work, we ﬁrst focus on the
+mechanisms and policies that were developed for these
+
+0%20%40%60%80%100%week2week3week4old objects withdifferent placementold objects withsame placementnew objects5.3 Placement Policies for Static Data
+
+Data placement
+
+for Content Delivery Networks
+(CDNs) has been explored in many pieces of prior
+work [21, 19]. These systems have focused on static data
+– the HTTP caching header should be honored, but no
+other more elaborate synchronization between replicas is
+needed. Because of this, CDNs can easily employ decen-
+tralized algorithms e.g., each individual server or a small
+set of servers can independently make decisions about
+what data to cache.
+In contrast, Volley’s need to deal
+with dynamic data would make a decentralized approach
+challenging; Volley instead opts to collect request data in
+a single datacenter and leverage the SCOPE distributed
+execution framework to analyze the request logs within
+this single datacenter.
+
+5.4 Optimization Algorithms
+
+Abstractly, Volley seeks to maps objects to locations
+so as to minimize a cost function. Although there are no
+known approximation algorithms for this general prob-
+lem, the theory community has developed approximation
+algorithms for numerous more specialized settings, such
+as sparsest cut [4] and various ﬂavors of facility loca-
+tion [6, 8]. To the best of our knowledge, the problem
+in Volley does not map to any of these previously stud-
+ied specializations. For example, the problem in Volley
+differs from facility location in that there is a cost asso-
+ciated with placing two objects at different datacenters,
+not just costs between clients and objects. This moti-
+vates Volley’s choice to use a heuristic approach and to
+experimentally validate the quality of the resulting data
+placement.
+
+Although Volley offers a signiﬁcant
+
+improvement
+over a state-of-the-art heuristic, we do not yet know how
+close it comes to an optimal placement; determining such
+an optimal placement is challenging because standard
+commercial optimization packages simply do not scale
+to the data sizes of large cloud services. This leaves open
+the tantalizing possibility that further improvements are
+possible beyond Volley.
+
+6 Conclusion
+
+Cloud services continue to grow to span large num-
+bers of datacenters, making it increasingly urgent to de-
+velop automated techniques to place application data
+across these datacenters. Based on the analysis of month-
+long traces from two large-scale commercial cloud ser-
+vices, Microsoft’s Live Messenger and Live Mesh, we
+built the Volley system to perform automatic data place-
+ment across geographically distributed datacenters. To
+scale to the large data volumes of cloud service logs, Vol-
+ley is designed to work in the SCOPE [5] scalable data
+analysis framework.
+
+We evaluate Volley analytically and on a live system
+consisting of a prototype cloud service running on a ge-
+ographically distributed testbed of 12 datacenters. Our
+evaluation using one of the month-long traces shows that,
+compared to a state-of-the-art heuristic, Volley simulta-
+neously reduces datacenter capacity skew by over 2×, re-
+duces inter-datacenter trafﬁc by over 1.8×, and reduces
+75th percentile latency by over 30%. This shows the po-
+tential of Volley to simultaneously improve the user ex-
+perience and signiﬁcantly reduce datacenter costs.
+
+While in this paper we have focused on using Volley
+to optimize data placement in existing datacenters, ser-
+vice operators could also use Volley to explore future
+sites for datacenters that would improve performance.
+By including candidate locations for datacenters in Vol-
+ley’s input, the operator can identify which combination
+of additional sites improve latency at modest costs in
+greater inter-datacenter trafﬁc. We hope to explore this
+more in future work.
+
+Acknowledgments
+
+We greatly appreciate the support of Microsoft’s ECN
+team for donating usage of their VMs, and the support of
+the Live Mesh and Live Messenger teams in sharing their
+data with us. We thank our shepherd, Dejan Kostic, and
+the anonymous reviewers for their detailed feedback and
+help in improving this paper.
+
+References
+
+[1] A. Adya, J. Dunagan, and A. Wolman. Centrifuge: In-
+tegrating Lease Management and Partitioning for Cloud
+Services. In NSDI, 2010.
+
+[2] Amazon Web Services. http://aws.amazon.com.
+[3] K. Amiri, D. Petrou, G. Ganger, and G. Gibson. Dynamic
+Function Placement for Data-intensive Cluster Comput-
+ing. In USENIX Annual Technical Conference, 2000.
+
+[4] S. Arora, S. Rao, and U. Vazirani. Expander Flows, Ge-
+In STOC,
+
+ometric Embeddings and Graph Partitioning.
+2004.
+
+[5] R. Chaiken, B. Jenkins, P. Larson, B. Ramsey, D. Shakib,
+S. Weaver, and J. Zhou. SCOPE: Easy and efﬁcient par-
+allel processing of massive data sets. In VLDB, 2008.
+
+[6] M. Charikar and S. Guha. Improved Combinatorial Algo-
+rithms for the Facility Location and k-Median Problems.
+In FOCS, 1999.
+
+[7] M. Chen, E. Kiciman, E. Fratkin, A. Fox, and E. Brewer.
+Pinpoint: Problem Determination in Large, Dynamic Sys-
+tems. In DSN, 2002.
+
+[8] F. Chudak and D. Williamson.
+
+Improved approxima-
+tion algorithms for capacitated facility location problems.
+Mathematical Programming, 102(2):207–222, 2005.
+
+[9] F. Dabek, R. Cox, F. Kaashoek, and R. Morris. Vivaldi:
+In SIG-
+
+A Decentralized Network Coordinate System.
+COMM, 2004.
+
+[10] Data Center Global Expansion Trend.
+
+http://www.datacenterknowledge.com/
+archives/2008/03/27/google-data-center-faq/.
+
+[11] J. Dean and S. Ghemawat. MapReduce: simpliﬁed data
+
+http://www.quova.com.
+[35] Rapid Release Cycles.
+
+[34] Quova
+
+IP
+
+Geo-Location
+
+Database.
+
+processing on large clusters. OSDI, 2004.
+
+http://www.ereleases.com/pr/20070716009.html.
+
+[12] Facebook. http://www.facebook.com.
+[13] J. Flinn, S. Park, and M. Satyanarayanan. Balancing Per-
+formance, Energy, and Quality in Pervasive Computing.
+In ICDCS, 2002.
+
+[14] R. Fonseca, G. Porter, R. Katz, S. Shenker, and I. Stoica.
+X-Trace: A Pervasive Network Tracing Framework. In
+NSDI, 2007.
+
+[15] Global
+
+Air
+
+travel
+
+Trends.
+
+http://www.zinnov.com/presentation/
+Global Aviation-Markets-An Ananlysis.pdf.
+
+[16] Google Apps. http://apps.google.com.
+[17] G. Hamlin Jr and J. Foley. Conﬁgurable applications
+for graphics employing satellites (CAGES). ACM SIG-
+GRAPH Computer Graphics, 9(1):9–19, 1975.
+
+[36] S. Agarwal and J. Lorch. Matchmaking for Online
+In
+
+Games and Other Latency-Sensitive P2P Systems.
+SIGCOMM, 2009.
+
+[37] M. Shapiro, Y. Gourhant, S. Habert, L. Mosseri, and
+M. Rufﬁn. SOS: An object-oriented operating system—
+assessment and perspectives. Computing Systems, 1989.
+[38] M. Steen, P. Homburg, and A. Tanenbaum. Globe: A
+wide-area distributed system. IEEE Concurrency, pages
+70–78, 1999.
+
+[39] C. Stewart, K. Shen, S. Dwarkadas, M. Scott, and J. Yin.
+Proﬁle-driven component placement for cluster-based on-
+line services. IEEE Distributed Systems Online, 5(10):1–
+1, 2004.
+
+[40] Y. Su and J. Flinn. Slingshot: Deploying Stateful Services
+
+[18] G. Hunt and M. Scott. The Coign Automatic Distributed
+
+in Wireless Hotspots. In MobiSys, 2005.
+
+[41] M. Tatsubori, T. Sasaki, S. Chiba, and K. Itano. A byte-
+code translator for distributed execution of ”legacy” java
+In ECOOP, pages 236–255. Springer-Verlag,
+software.
+2001.
+
+[42] E. Tilevich and Y. Smaragdakis. J-orchestra: Automatic
+java application partitioning. In ECOOP, pages 178–204.
+Springer-Verlag, 2002.
+
+[43] Twitter. http://www.twitter.com.
+[44] F. Yang, J. Shanmugasundaram, M. Riedewald, and
+J. Gehrke. Hilda: A High-Level Language for Data-
+DrivenWeb Applications. ICDE, 2006.
+
+[45] Y. Zhao, Y. Xie, F. Yu, Q. Ke, Y. Yu, Y. Chen, and
+E. Gillum. Botgraph: Large Scale Spamming Botnet De-
+tection. In NSDI, 2009.
+
+Partitioning System. In OSDI, 1999.
+
+[19] S. Jamin, C. Jin, A. Kurc, D. Raz, and Y. Shavitt. Con-
+strained Mirror Placement on the Internet. In INFOCOM,
+2001.
+
+[20] E. Jul, H. Levy, N. Hutchinson, and A. Black. Fine-
+grained mobility in the Emerald system. ACM Transac-
+tions on Computer Systems, 6(1):109–133, 1966.
+
+[21] M. Karlsson and M. Mahalingam. Do We Need Replica
+Placement Algorithms in Content Delivery Networks? In
+International Workshop on Web Content Caching and
+Distribution (WCW), 2002.
+
+[22] D. Kimelman, V. Rajan, T. Roth, M. Wegman, B. Lind-
+sey, H. Lindsey, and S. Thomas. Dynamic Application
+Partitioning in VisualAge Generator Version 3.0. Lecture
+Notes In Computer Science; Vol. 1543, pages 547–548,
+1998.
+
+[23] N. Kothari, R. Gummadi, T. Millstein, and R. Govin-
+dan. Reliable and Efﬁcient Programming Abstractions
+for Wireless Sensor Networks. In PLDI, 2007.
+
+[24] J. Leskovec and E. Horvitz. Planetary-Scale Views on an
+
+Instant-Messaging Network. In WWW, 2008.
+
+[25] M. Lewis and A. Grimshaw. The core Legion object
+
+model. In HPDC, 1996.
+
+[26] LinkedIn. http://linkedin.com.
+[27] H. Liu, T. Roeder, K. Walsh, R. Barr, and E. Sirer. Design
+and Implementation of a Single System Image Operating
+System for Ad Hoc Networks. In MobiSys, 2005.
+
+[28] Live Mesh. http://www.mesh.com.
+[29] Live Messenger. http://messenger.live.com.
+[30] B. Livshits and E. Kiciman. Doloto: Code Splitting for
+Network-bound Web 2.0 Applications. In SIGSOFT FSE,
+2008.
+
+[31] J. Michel and A. van Dam. Experience with distributed
+processing on a host/satellite graphics system. ACM SIG-
+GRAPH Computer Graphics, 10(2):190–195, 1976.
+
+[32] Microsoft Ofﬁce Online. http://ofﬁce.microsoft.com/en-
+
+us/ofﬁce live/default.aspx.
+
+[33] R. Newton, S. Toledo, L. Girod, H. Balakrishnan, and
+S. Madden. Wishbone: Proﬁle-based Partitioning for
+Sensornet Applications. In NSDI, 2009.
+
+

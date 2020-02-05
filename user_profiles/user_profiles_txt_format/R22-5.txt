@@ -1,0 +1,3076 @@
+Using Continuous Statistical Machine Learning to Enable
+
+High-Speed Performance Prediction in Hybrid
+
+Instruction-/Cycle-Accurate Instruction Set Simulators
+
+Daniel Christopher Powell and Björn Franke
+
+Institute for Computing Systems Architecture
+School of Informatics, University of Edinburgh
+
+Informatics Forum, 10 Crichton Street, Edinburgh, EH8 9AB, United Kingdom
+
+D.C.Powell@sms.ed.ac.uk, bfranke@inf.ed.ac.uk
+
+ABSTRACT
+Functional instruction set simulators perform instruction-accurate
+simulation of benchmarks at high instruction rates. Unlike their
+slower, but cycle-accurate counterparts however, they are not ca-
+pable of providing cycle counts due to the higher level of hardware
+abstraction. In this paper we present a novel approach to perfor-
+mance prediction based on statistical machine learning utilizing
+a hybrid instruction- and cycle-accurate simulator. We introduce
+the concept of continuous machine learning to simulation whereby
+new training data points are acquired on demand and used for on-
+the-ﬂy updates of the performance model. Furthermore, we show
+how statistical regression can be adapted to reduce the cost of these
+updates during a performance-critical simulation. For a state-of-
+the-art simulator modeling the ARC 750D embedded processor we
+demonstrate that our approach is highly accurate, with average er-
+ror < 2.5% while achieving a speed-up of ≈ 50% over the baseline
+cycle-accurate simulation.
+
+Categories and Subject Descriptors
+C.4 [Performance of Systems]: Modeling techniques
+
+General Terms
+Experimentation, performance
+
+Keywords
+Instruction set simulator, performance prediction, continuous sta-
+tistical machine learning
+
+1.
+
+INTRODUCTION
+
+Instruction set simulation is a frequently used method by devel-
+opers of custom hardware and software. Instruction set simulators
+(ISS) allow developers to design and test their hardware prior to
+creating a prototype allowing hardware designers to be much more
+ﬂexible in their approach to designing a new device. It allows for
+
+Permission to make digital or hard copies of all or part of this work for
+personal or classroom use is granted without fee provided that copies are
+not made or distributed for proﬁt or commercial advantage and that copies
+bear this notice and the full citation on the ﬁrst page. To copy otherwise, to
+republish, to post on servers or to redistribute to lists, requires prior speciﬁc
+permission and/or a fee.
+CODES+ISSS’09, October 11-16, 2009, Grenoble, France
+Copyright 2009 ACM 978-1-60558-628-1/09/10 ...$10.00.
+
+veriﬁcation of the design before a large investment is made and al-
+lows for the performance of a device to be determined early in the
+process allowing for incremental design improvements.
+
+For software developers instruction set simulation provides a ﬂex-
+ible development platform from which to test operation and perfor-
+mance of a piece of software without access to a physical device.
+It also allows for many concurrent executions of a program without
+the need for investment in an excessive quantity of hardware.
+
+Due to these large varying uses of instruction set simulators many
+different designs exist, ranging from purely functional versions sim-
+ulating only the operational output of a program and not the under-
+lying hardware, to completely cycle-accurate simulators that take
+exact timing models of the hardware to provide a precise perfor-
+mance metric of a simulation. Understandably, these designs vary
+broadly in speed and information collected, with functional sim-
+ulators being extremely fast due to abstracting away all hardware
+details and only collecting various high-level statistics, and cycle-
+accurate simulators being much slower due to the much ﬁner level
+of detail that they simulate.
+
+This work is driven by the vast difference in speed between cycle-
+accurate and instruction-accurate instruction set simulators, and
+their relation to the underlying accuracy of performance metrics.
+For example, cycle-accurate simulators derived from synthesizable
+hardware descriptions typically operate at 20K − 100K instructions
+per second, compared to 200 − 400 million instructions per second
+by recent JIT-translating simulators [3, 9, 10] and greater than 1
+GIPS instructions per second achieved by purely functional simula-
+tors. This performance gap of several magnitudes makes functional
+and JIT-translating simulators a very attractive choice for embed-
+ded hardware and software developers, however due to their ab-
+straction away from the hardware they can only provide high-level
+statistical information and not the full performance metrics desired.
+More recently, hybrid instruction-/cycle-accurate simulators have
+emerged [11] that combine the functionality of instruction- and
+cycle-accurate ISS in a single framework. Using such a hybrid
+simulator programs can be executed in either instruction- or cycle-
+accurate mode and the user can change between modes e.g. at in-
+struction or basic block boundaries. Typically this feature is used
+to “fast forward” through the program in instruction-accurate mode
+until a performance-critical region is reached and the user decides
+to collect more detailed, local statistics using the cycle-accurate
+simulation mode.
+
+1.1 Aims and Contributions
+
+Our aim is to develop a performance estimation methodology
+suitable for integration in hybrid instruction-/cycle-accurate simu-
+lators that retains as much of the high speed of instruction-accurate
+
+315simulation as possible while providing the user with detailed and
+accurate performance statistics for the entire application. Among
+the contributions of this paper are:
+
+• The development of an adaptive, yet highly accurate per-
+formance estimation methodology enhancing existing hybrid
+instruction set simulators,
+
+• the introduction of continuous statistical machine learning
+concepts such as incremental statistical regression and on-
+line feature selection in instruction set simulation for on-line
+performance estimation, and
+
+• the evaluation against a full-system simulator modeling the
+commercial ARC 750D embedded processor and a large range
+of applications including the industry standard EEMBC bench-
+marks.
+
+1.2 Overview
+
+The remainder of this paper is structured as follows. In section 2
+we introduce the reader to the background on hybrid functional-
+/cycle-accurate ISS and regression based performance modeling.
+We introduce our novel performance estimation methodology in
+section 3 and present our results in section 4. This is followed by
+a discussion of the large existing body of related work in section 5
+before we summarize and conclude in section 6.
+
+2. BACKGROUND
+
+In this section we present background material on hybrid in-
+struction-/cycle-accurate instruction set simulation technology and
+statistical regression used for performance estimation.
+
+2.1 Hybrid Instruction-/Cycle-Accurate ISS
+
+Hybrid instruction-/cycle-accurate ISS combine the functional-
+ity of both kinds of simulators in a single framework and allow for
+seamless transitions between simulation modes. This is useful, for
+example, for users that mostly use fast instruction-accurate simu-
+lation for application software development, but require occasional
+detailed timings for speciﬁc, compute-intensive kernels.
+
+In this work we use a full-system simulator implementing the
+ARC 750D embedded processor, its memory system and periph-
+erals [6] that has been validated against a corresponding hardware
+implementation. The simulator has three main modes of opera-
+tion: interpreted/instruction-accurate, interpreted/cycle-accurate,
+and JIT-compiled.
+
+Interpreted/Instruction-Accurate. This mode takes each instruc-
+tion individually and decodes the binary code compiled for
+the hardware being simulated. The decoded instruction is
+then used to update the state of the processor and any at-
+tached devices i.e. the caches and memory. No cycle counts
+are provided.
+
+Interpreted/Cycle-Accurate. This mode is similar to the previ-
+ous interpreted/instruction-accurate mode of execution, but
+implements an additional cycle-accurate timing model tak-
+ing into consideration pipeline dependencies and memory ef-
+fects. Cycle counts are provided.
+
+JIT-compiled. The JIT-compiled mode executes blocks of code at
+a time that are just-in-time compiled to the host machine’s
+ISA and executed natively, hence, resulting in a higher sim-
+ulation rate. No cycle counts are provided.
+
+In addition to the different modes of operation the simulator sup-
+
+ports two hardware abstraction levels: behavioral and structural.
+
+Behavioral. This mode simulates the high-level behavior of each
+instruction and, if necessary, updates simulated registers and
+main memory, but it does not simulate micro-architectural
+components such as caches, branch predictors or the proces-
+sor pipeline.
+
+Structural. In addition to the exact behavioral simulation of each
+instruction the structural mode simulates the the detailed state
+and behavior of the processor pipeline, the caches and the
+branch predictor.
+
+The modes of operations and the hardware abstraction levels are
+not completely independent of each other. In fact, interpreted/cycle-
+accurate simulation requires structural information whereas inter-
+preted/instruction-accurate simulation can operate in behavioral or
+structural mode. JIT-compiled simulation currently only supports
+the behavioral mode.
+
+The simulation speed depends on the mode of operation and
+level of hardware abstraction and varies greatly. Interpreted/cycle-
+accurate simulation operates at about 5 million instructions per
+second (MIPS), whereas interpreted/instruction-accurate simula-
+tion executes at 50 MIPS in behavioral and 7-8 MIPS in structural
+mode, respectively. JIT-compiled simulation reaches the highest
+simulation rates at 200 − 400 MIPS.
+
+The simulator can change its simulation mode at any time dur-
+ing the program execution.
+In our work we only make use of
+the interpreted/cycle-accurate and interpreted/instruction-accurate
+modes of operation, both using structural information. Hence, any
+improvement of the simulation speed is limited by a factor of ≈ 1.5.
+We are currently working on a performance estimation methodol-
+ogy suitable for JIT-compiled simulation, however, this is beyond
+the scope of this paper.
+
+2.2 Statistical Regression
+
+Regression analysis is a statistical method to examine the rela-
+tionship between a dependent variable y and n independent vari-
+ables x = (x1, . . . , xN ). This relationship is modeled as a function f
+with y = f (x). The function f chosen depends considerably on the
+relationship between input vector x and output y. Many different
+forms of regression analysis exist to compute f , including many
+variants of linear and non-linear relationships.
+
+If the relationship between y and x is linear we would choose a
+
+linear regression model like this:
+
+y = β0 +
+
+βixi
+
+N
+∑
+i=1
+
+(1)
+
+where β = (β0, . . . , βN ) is the weights matrix of the calculation.
+
+Often the choice of independent input variable x are only a sub-
+set of the total factors affecting a variable, allowing equation 1 to
+only be an approximation of y, creating the predicted value ˆy. The
+difference between y and ˆy is the error of the prediction ε = y − ˆy
+is caused by an inadequate selection of input variables or poten-
+tially unrelated input variables, and should be minimized whenever
+possible. The error of a prediction is called the residual.
+
+Given m training points (y1, x1,1, . . . , x1,N ) to (ym, xm,1, . . . , xm,N )
+we can extend our original design matrix (Equation 1) to consist of
+the equation system:
+
+y1 = β0 + β1x1,1 + β2x1,2 + · · · + βN x1,N + ε1
+... =
+ym = β0 + β1xm,1 + β2xm,2 + · · · + βN xm,N + εm
+
+...
+
+316!"#$%&'##()*+%&,-.($*+-/0&
+
+3)*-0&5&'++%.6+&
+
+1/)&20%&3-.%4$-#%
+
+7)%8-#+-/0
+
+:(0#+-/0*$&,-.($*+-/0&
+
+1/)&20%&3-.%4$-#%
+
+'++%.6+&7)%8-#+-/0
+
+C/
+
+7)%8-#+-/0&'##()*+%&
+
+D%4
+
+;%0@+A
+
+5&!/01-8%0+9
+
+=0#)%*4%&3-.%4$-#%&
+
+C/
+
+;/<&!/01-8%0#%&/)
+=0>*$-8&7)%8-#+-/09
+
+D%4
+
+D%4
+
+B%#)%*4%&3-.%4$-#%&
+
+;%0@+A
+
+C/
+
+?0/(@A&!/01-8%0+&
+
+7)%8-#+-/049
+
+E/$$F*#G&,-.($*+/)
+
+Figure 1: The sequential operation of the instruction set simulator in continuous learning mode.
+
+or rewritten as y = Xβ + ε with β as the vector of regression coefﬁ-
+cients or the weights matrix and X as the model matrix.
+
+The process of choosing the parameters of the model β must be
+performed in a manner to minimize ε such that the regression func-
+tion produces predictions as close to the actual value as possible. A
+common method of choosing these parameters is the least-squares
+method. It does this through minimizing the sum of the squares of
+the prediction errors of the model on the observed data as such:
+
+SSE =
+
+yi − β0 −
+
+β jxi, j
+
+(2)
+
+m
+∑
+i=1 !
+
+N
+∑
+j=1
+
+2
+
+"
+
+where SSE is minimized. The computed values represent estimates
+of the regression coefﬁcients β, thus the calculation of a prediction
+ˆy at point x only involves the application of equation 1.
+
+From the theory of linear least squares, it is simple to calculate
+
+the weights matrix as follows:
+
+β = (X T X)
+
+−1X T y,
+
+(3)
+
+Unfortunately, this is an expensive operation (O(m3)) due to the
+calculation of the inverse of the variance matrix X T X. Dependent
+upon the size of the training data this can severely hinder perfor-
+mance, especially if the weights matrix must be updated frequently
+due to newly added training points. A more incremental method
+is preferred in this circumstance, however there exists research [7]
+that has provided incremental linear learning methods, as described
+in section 3.
+
+The calculation of the weights matrix can also be hindered eas-
+ily when the variance matrix X T X is non-invertible. This can occur
+fairly easily, for instance when training data contains a large quan-
+tity of columns with zero values among others. In this circumstance
+either new training data must be introduced, or the features selected
+for the input matrix X must be reduced.
+
+3. METHODOLOGY
+
+Our novel method alternates phases of fast instruction-accurate
+and slower, but detailed cycle-accurate simulation. During cycle-
+accurate simulation phases a performance model is constructed that
+is subsequently used for performance estimation when the simula-
+tor operates in instruction-accurate mode. We employ a continuous
+
+learning algorithm in an effort to ensure the accuracy of the pre-
+dictions being made. By allowing the training data to be updated
+when conﬁdence decreases, each prediction made will use the most
+recent and relevant training information. It also allows predictions
+to be performed over a much smaller time slice ensuring that any
+errors that do occur only affect a smaller section of the code than
+previous work that suffered from statistical outliers due to a very
+large prediction block [4]. The combined learning and prediction
+within the same simulation will also assist in customizing the train-
+ing data for the current execution, further reducing any error mar-
+gins.
+
+3.1 Overview
+
+The diagram in ﬁgure 1 displays the operation of the simulator
+in continuous learning mode. As shown in the diagram the sim-
+ulator initially begins in cycle-accurate mode, with new training
+points being added to the predictor. Once enough points have been
+collected such that the initial training matrix can be calculated, the
+simulation remains in cycle-accurate mode performing cycle count
+predictions once every time slice. At each prediction the accuracy
+and conﬁdence is checked. If the prediction is too inaccurate, or
+the conﬁdence interval of the prediction is too high then the last
+time slice is added to the training data and the prediction matrix is
+updated.
+
+Once the error and conﬁdence interval drop below a pre-pro-
+grammed threshold the simulation switches to instruction-accurate
+mode and relies purely upon the conﬁdence interval of each predic-
+tion. This is monitored at every prediction, and should it become
+too high the simulator will fall back into cycle-accurate mode in
+one of two methods described in the next section. The simulator
+continues to run in cycle-accurate mode updating the training data
+once per time slice and attempting further predictions. Again, once
+the error ratio and conﬁdence of the prediction drop below their
+thresholds the simulator returns to instruction-accurate mode and
+continues as above.
+
+Once a prespeciﬁed number of conﬁdent predictions occur, the
+time slice over which the predictions are made is increased in an
+attempt to gain a further performance gain. Once the conﬁdence
+interval widens too far the time slice is reduced again to allow train-
+ing across a ﬁner grain. This is described further in section 3.5.
+
+3173.2
+
+Incremental Linear Regression
+
+The standard linear regression algorithm is not well suited for
+situations where training data points are added incrementally. The
+calculation of the weights matrix is a computationally expensive
+operation involving the inversion of a potentially large matrix. This
+is to calculate the variance matrix for the training data. On occa-
+sions when updates to the training matrix are necessary, this cal-
+culation involves the recalculation of the weights matrix using the
+entire training data set. Alternatively, research has been performed
+into an incremental version to calculate the weights matrix [7].
+
+The alternative linear regression algorithm still requires the ini-
+tial calculation of the weights matrix as before, however, it op-
+timizes the process of adding new data points and updating the
+weights matrix once it has been initially calculated. The process
+−1 of the data
+involves initially updating the variance matrix (X T X)
+to include the new training points. The variance matrix will here-
+after be referred to as A−1. This is optimized in two ways depen-
+dent upon the number of training points added. One method for a
+single update to the matrix that does not involve the calculation of
+the inverse of a matrix, and another method for multiple training
+points added to the training set.
+
+For a single added training point, the updated variance matrix
+
+ˆA−1 is calculated as:
+
+−1 = A
+ˆA
+
+−1 − A−1 ˆX T ˆXA−1
+1 + ˆXA−1 ˆX T
+
+(4)
+
+(5)
+
+(6)
+
+(7)
+
+with ˆX corresponding to the row of the newly added training point.
+Given A−1 has already been calculated during the initial ﬁtting of
+the weights matrix, there is no requirement for recalculation, allow-
+ing for further optimization of this algorithm.
+
+In the case of multiple samples being added to the training data,
+adding each training point individually using equation 4 would re-
+sult in more computation than necessary, hence the alternative equa-
+tion shown below can be used:
+
+−1 = A
+ˆA
+
+−1 − A
+
+−1 ˆX T ( ˆXA
+
+−1 ˆX T + 1)
+
+−1 ˆXA
+
+−1
+
+This method still calculates the inverse of a matrix to update the
+variance matrix, however the size of the matrix being inverted
+
+( ˆXA
+
+−1 ˆX T + 1)
+
+−1
+
+is much smaller and less computationally expensive than if it were
+to be performed across the entire data set.
+
+Once the updated variance matrix has been calculated, the weights
+
+matrix for the regression function is updated to ˆβ, as shown:
+
+ˆβ = β − ˆA
+
+−1 ˆX T ( ˆXβ − ˆy)
+
+where ˆy represents the column vector of the output variable for the
+newly added training points.
+
+Future predictions use the updated ˆβ as the weights matrix for
+
+equation 1.
+
+3.3 On-line Feature Selection
+
+The purpose of feature selection is to determine a subset of the
+most relevant features of the training data. A number of possible
+feature selection methods are available to help choose which fea-
+tures affect the cycle count the most. For a continuous learning
+simulator it is necessary to have an on-line feature selector as the
+relevant features are likely to be different for each benchmark. This
+also helps to prevent the issue of a singular matrix during the cal-
+culation of the weights matrix in equation 3.
+
+The calculation of relevant features is performed every time the
+training data is updated, potentially requiring the recalculation of
+
+the training matrix. If the list of relevant features does not change
+then the new training point can update the matrix using the stan-
+dard incremental linear regression, however a change in relevant
+features requires a complete recalculation of the training matrix.
+For this reason the threshold for deciding which features are rele-
+vant must be set such that feature selection changes are infrequent,
+while ensuring that all of the relevant features are kept. In addition
+to the stability of chosen feature sets the feature selection algorithm
+is required to be efﬁcient as possible, because its repeated execution
+contributes to the overall time for simulation. For these reasons the
+sum of non-zero values within a feature is chosen, allowing for an
+easily determined threshold to be used. Sums can be maintained
+between training updates, removing the need for repeated passes
+through the data set.
+
+3.4 Dealing With A Less Conﬁdent Prediction
+When a less conﬁdent prediction occurs that is below the thresh-
+old the situation can be handled by two distinct methods: A fast
+patch scheme or a conservative rollback and replay scheme.
+
+Patch. The simulator accepts a less conﬁdent prediction, but falls
+back to cycle-accurate mode and updates the training matrix
+based upon the next few time slices.
+
+Rollback-Replay. The simulator does not accept a less conﬁdent
+prediction and the simulation is rolled back to a previously
+known state, i.e.
+just before the last time slice began, and
+re-runs the simulation in cycle-accurate mode, updating the
+training matrix as necessary.
+
+The ﬁrst method simply uses the result of the less conﬁdent predic-
+tions as normal followed by a patch of the training data for future
+predictions, whereby the second method does not rely upon the less
+conﬁdent prediction, and ensures accuracy for that time slice. The-
+oretically, the second method should provide more accurate results
+while degrading performance by having to roll back the simulator.
+This performance degrade may prove to be more expensive than the
+lack of accuracy of the ﬁrst method.
+
+The implementation of the rollback-replay scheme is based on
+the existing checkpointing facility of the simulator that has been
+modiﬁed to store the simulation state in memory rather than ex-
+ternal storage. In addition, we have implemented a copy-on-write
+mechanism to further reduce the runtime overhead associated with
+the regular snapshots of the simulation state.
+
+3.5 Altering the Time Slice Length
+
+To further aid the performance of the simulator, it is possible to
+make predictions across differing lengths of time slice. This allows
+the simulator to be trained at a short time slice, and then predictions
+to be made at a higher time slice.
+
+To exploit this feature, the simulator initially trains itself at a
+short time slice, and then performs a number of predictions at the
+same length of time slice. Should all of those predictions stay
+within the conﬁdence level, then the time slice can be increased by
+a factor of ten, making predictions much less frequent and allow-
+ing for a greater performance beneﬁt. Again predictions are made
+across the same number of time slices with the conﬁdence inter-
+val monitored, allowing for the time slice to be further increased
+in a regular manner up to a higher limit, provided predictions re-
+main accurate and conﬁdent enough. Should predictions exceed the
+maximum conﬁdence interval then the time slice is decreased by a
+factor of ten (down to a lower limit), and retraining commences.
+
+318Core
+Pipeline
+Execution Order
+Branch Prediction
+Memory System
+L1 Cache
+L2 Cache
+MMU
+Simulation
+Simulator
+Options
+I/O & System Calls
+SW Development Tools
+Compiler
+Compiler Options
+
+ARC 750D
+
+7-stage (interlocked)
+
+In-Order
+
+Yes
+
+8k (Instr.) / 8k (Data)
+
+None
+Yes
+
+ARC simulator
+
+Default
+Emulated
+
+GCC 4.2.1
+-O3 -m32
+
+Benchmark Suite Description
+DSPstone
+UTDSP
+SWEET WCET
+Mediabench
+EEMBC
+
+Small DSP kernels
+Small DSP applications
+WCET benchmarks
+Multimedia applications
+Automotive, Consumer, Digital
+Entertainment, Networking, Ofﬁce
+Automation & Telecoms Applications
+Pointer-intensive apps.
+
+Pointer-Intensive
+Benchmarks
+StreamIt
+
+Cryptography, SDR, Audio Processing
+
+Table 4: Overview of the benchmark suites.
+
+Table 1: Overview of the simulation target.
+
+4.1.3 Benchmarks
+
+4. EMPIRICAL EVALUATION
+
+In this section we discuss our empirical evaluation. Starting with
+an overview of our experimental setup and methodology, we then
+provide a general overview of the results. We go on to discuss the
+effects of modifying the time slice length and the number of predic-
+tions made conﬁdently at each time slice for the incremental linear
+regression prediction scheme. Next we discuss the characteristics
+of simulation using both the patch and the rollback-replay schemes.
+Beyond the statistical information collected for each individual
+simulation, we calculate several metrics to determine the approxi-
+mate accuracy of the new methodology. These are the percentage
+mean absolute error (MAE) and the maximum error of the total
+simulations at each conﬁguration.
+
+4.1 Experimental Setup and Methodology
+
+4.1.1
+
+Simulator Conﬁguration
+
+We use a state-of-the-art hybrid instruction-/cycle-accurate in-
+struction set simulator [10] for the ARC 750D embedded processor.
+Table 1 details the processor being simulated, and the conﬁguration
+options of the simulator. Table 2 lists the counters maintained by
+the simulator and provided to the predictor for training and predic-
+tion.
+
+Counters
+x1 . . . x148
+
+x149
+
+x150, x151
+x152 . . . x156
+
+x157, x158
+
+Description
+Instruction counters
+Total instructions
+Total I-Cache read hits/misses
+Total D-Cache read/write hits/misses,
+dirty misses
+Total branch prediction hits/misses
+
+Table 2: Counters maintained by the instruction set simulator.
+
+4.1.2
+
+Simulation Host System
+
+Simulations were performed distributed across approximately 80
+computers, with one benchmark per computer at a time. Table 3
+lists the system parameters of the simulation host machines.
+
+Intel Core 2 Quad Q9300 @ 2.50GHz
+
+Processor
+L1 Cache
+L2 Cache
+Main Memory
+Operating System Scientiﬁc Linux 5.2 64-bit/2.6.18 kernel
+
+8 GB Shared, 667 MHz
+
+128 KB
+6 MB
+
+Table 3: Parameters of the simulation host.
+
+Table 4 lists the benchmark suites used in the evaluation of our
+performance estimation methodology, and their descriptions. The
+suites total 318 separate benchmarks.
+
+4.1.4 Experimental Methodology
+
+In our experiments simulations were performed in sequence, with
+the initial baseline cycle-accurate simulation, followed by our new
+simulation method. Two parameters were modiﬁed inside the sim-
+ulator and each benchmark was re-simulated across all combina-
+tions of these parameters. These were the initial length of the time
+slice, and the number of predictions performed at that time slice
+prior to increasing its length. These were modiﬁed between 100 to
+100,000, and 10 to 10,000 respectively, increasing by a factor of 10.
+The simulations were performed in both patch and rollback-replay
+modes, totaling 32 separate simulations of the entire benchmark
+suites.
+
+To ensure the most accurate reading for the execution time differ-
+ence between standard cycle-accurate simulation and our new sim-
+ulation method, each simulation was performed with the baseline
+simulation immediately followed by the new method. This method
+involves rerunning the baseline simulation in its entirety, however
+in doing so minimizes any noise from differences between the soft-
+ware stack of each computer.
+
+4.2 Results
+
+In the following paragraphs we present our results for different
+lengths of the initial simulation time slice and numbers of conﬁdent
+predictions before switching to fast simulation. This is followed by
+the results for the rollback-replay and patch schemes before we
+show the results highlighting the minimal overhead of our online
+performance estimation scheme.
+
+Figure 2 illustrates accuracy that can be expected from our statis-
+tical performance estimation scheme. Estimated cycle counts (for a
+time slice length of 100) are compared to the actual, observed cycle
+counts and both sets of values are plotted in the scatter graph in ﬁg-
+ure 2(a). For programs varying by several orders of magnitude in
+total execution time our scheme is highly accurate and the estima-
+tions come close to the actual values as can be seen by proximity
+of data points near or on the ideal straight line. In ﬁgure 2(b) the
+distribution of the estimation error is shown. The vast majority of
+the estimations are centered closely around the 0% error mark and
+virtually all predictions fall into the ±2σ interval corresponding to
+an error margin of less than 11%.
+
+With our new method, the training period is the initial bottleneck
+of a simulation. In fact, for shorter benchmarks it can hinder per-
+formance, and easily render the new simulation scheme’s beneﬁts
+useless. By altering the initial time slice length, we are shorten-
+ing this training period by allowing the training matrix to be ﬁlled
+with ﬁner grained data and then predictions to be performed across
+
+319!3!!
+
+!2!!
+
+!!!
+
++!!
+
++2!!
+
++3!!
+
+!!
+
+!!
+!
+
+!!
+!!
+
+!
+
+!!! !
+!
+!!
+!
+!
+!
+!!
+!!!!
+!
+!
+!!!
+!
+!
+!
+!
+!!
+!!
+!
+!
+!
+!!
+!
+!!
+!
+!
+!
+!
+!!!
+!!!!
+!
+!
+!!
+!
+!
+!
+!
+
+!!!
+!
+!!!!
+!
+!!!
+!!!
+!
+!!!
+!
+!
+!
+!
+!
+!
+
+!
+!
+!
+!!!
+!
+!
+!
+!
+!
+!
+!
+
+!
+!
+!
+!
+!
+
+!!
+!
+!
+!
+!
+!!
+!
+!!!!
+!!!!!!
+!
+!
+!!!
+!
+
+!
+!!!
+!
+!!!!
+!!!!
+!
+!
+!!!!!!!
+!
+!!
+!
+
+!!
+!
+!!!!
+
+!!!!
+!
+!!!!
+!
+
+!
+
+!
+!!!!
+!!
+
+t
+
+n
+u
+o
+c
+ 
+
+l
+
+e
+c
+y
+c
+ 
+
+d
+e
+
+i
+
+t
+c
+d
+e
+r
+P
+
+0
+1
++
+e
+1
+
+8
+0
++
+e
+1
+
+6
+0
++
+e
+1
+
+4
+0
++
+e
+1
+
+y
+t
+i
+s
+n
+e
+D
+
+0
+0
+1
+
+0
+8
+
+0
+6
+
+0
+4
+
+0
+2
+
+0
+
+1e+04
+
+1e+06
+
+1e+08
+
+1e+10
+
+!0.3 !0.2 !0.1
+
+0.0
+
+0.1
+
+0.2
+
+0.3
+
+Observed cycle count
+
+Error Ratio
+
+(a) Estimated vs. observed cycle counts.
+
+(b) Distribution of the estimation error.
+
+Figure 2: Accuracy of the estimated cycle counts (for an initial timeslice length = 100).
+
+larger blocks. Initially, we examine the performance beneﬁt of this
+method before examining its accuracy. The percentage of useful
+predictions is displayed in ﬁgure 3 and the relative speedup shown
+in Figure 4.
+
+From the graphs displaying useful predictions, it is clear that
+shortening the original time slice has the desired effect of allowing
+predictions to begin very early in the simulation process. However,
+it is also noticeable that there is no performance beneﬁt from doing
+so with simulations below 106 cycles.
+
+With an original time slice of 10,000 instructions and above cer-
+tain simulations start performing worse than their cycle-accurate
+counterparts. Further inspection of these points implies that the
+predictions being made by the simulator are either outside the error
+margin or have too low a conﬁdence. This can be solved by altering
+the thresholds, however this would increase error ratios, while still
+causing performance degrades for simulations below 107 cycles.
+
+An original time slice of 100-1000 instructions provides the best
+performance beneﬁt. In general the higher this value, the less per-
+formance beneﬁt that is apparent. At this level it is clear that the
+performance of the simulator begins increasing beyond the base-
+line for simulations above 106 cycles, plateauing at just below a
+speedup of 1.5.
+
+Figure 5 shows the distribution of the error ratio while modi-
+fying the original time slice length. The additional lines show
+±σ, ±2σ and ±3σ intervals representing the expected percentages
+(68%, 95% and 99.7% respectively) of the quantities between these
+lines. The error distribution shows that the majority of errors lies
+below 5% in all conﬁgurations. Increasing the original time slice
+decreases the average error further, with the MAE for a starting
+time slice of 10,000 instructions of 0.66%. However, due to the
+performance issues introduced with such a high starting time slice,
+the larger MAE and maximum errors of a starting time slice of 10-
+100 instructions is preferable. At a 1,000 instruction time slice the
+MAE is still only 2.36% with a maximum error of 19.97%.
+
+Varying the number of conﬁdent predictions before a time slice
+increase is a further tweak to the performance of the simulator. By
+having too low a quantity, e.g. just 10 before increasing the time
+
+slice, the predictor is not trained accurately enough. Extra train-
+ing points that would normally be added when the predictor loses
+conﬁdence are missed causing a low number of valid predictions,
+rendering the new method useless for shorter simulations (< 107
+cycles). We have found that a value of 100 conﬁdent predictions
+before increasing the time slice is optimal.
+
+On-line feature selection greatly reduces the number of features
+to be considered in the performance model. An example showing
+the ﬁnal set of selected features for the UTDSP lpc benchmark is
+shown in table 5.
+
+4.2.1 Altering the Number of Conﬁdent Predictions.
+Varying the number of conﬁdent predictions before a timeslice
+increase is a further tweak to the performance of the simulator.
+Figure 7 displays the amount of accurate and conﬁdent predictions
+while varying the quantity before increasing the timeslice length,
+with the speedup shown in 8.
+
+Altering the number of conﬁdent predictions has a dramatic ef-
+fect on the performance of the simulator. By having too low a
+quantity, e.g.
+just 10 before increasing the timeslice, the predic-
+tor is not trained accurately enough. Extra training points that
+would normally be added when the predictor loses conﬁdence are
+missed causing a low number of valid predictions, rendering the
+new method useless for shorter simulations (< 107 cycles).
+
+By increasing this value to 100, the simulator starts receiving
+a performance increase from 106 cycles, plateauing at just below
+
+Instructions
+
+Cache
+
+BCC, BR, JCC_SRC1, SR, BTST, RCMP,
+MOV, ADD, SUB, MOV_F, OR_F,
+RSUB, BC, MIN, BSET, BXOR, MPYH,
+EX, ASLM, LW_PRE, total instr. count
+Instruction Cache Read Hits
+Data Cache Read Hits
+
+Branch Predictor Branch Prediction Unit Hits
+
+Branch Prediction Unit Misses
+
+Table 5: Selected features for UTDSP lpc.
+
+320s
+n
+o
+
+i
+
+i
+t
+c
+d
+e
+r
+P
+d
+
+ 
+
+i
+l
+
+a
+V
+
+ 
+f
+
+ 
+
+o
+e
+g
+a
+
+t
+
+n
+e
+c
+r
+e
+P
+
+p
+u
+d
+e
+e
+p
+S
+
+0
+0
+1
+
+0
+8
+
+0
+6
+
+0
+4
+
+0
+2
+
+0
+
+5
+.
+1
+
+0
+.
+1
+
+5
+.
+0
+
+0
+0
+
+.
+
+s
+n
+o
+
+i
+
+i
+t
+c
+d
+e
+r
+P
+d
+
+ 
+
+i
+l
+
+a
+V
+
+ 
+f
+
+ 
+
+o
+e
+g
+a
+
+t
+
+n
+e
+c
+r
+e
+P
+
+p
+u
+d
+e
+e
+p
+S
+
+0
+0
+1
+
+0
+8
+
+0
+6
+
+0
+4
+
+0
+2
+
+0
+
+5
+.
+1
+
+0
+.
+1
+
+5
+.
+0
+
+0
+0
+
+.
+
+!
+!!
+!!!!
+!
+!!
+!!
+!
+!!! !
+!
+!
+!
+!
+!
+!!! !!!!
+!
+!
+!! ! ! !
+!!!!
+! !
+!!!
+!
+!
+!
+!
+!!
+!
+!! !
+!
+!!
+!!!!
+!
+!!!!
+!!!
+!
+!
+!
+!
+!
+!
+!!
+
+! ! ! !
+!!! !!!! ! !
+! ! ! !!!
+!
+!!!!
+!
+!
+!
+!
+!
+! !
+!!
+!!
+!
+!
+!
+!
+!
+
+!! !!! !!!!! !!
+
+!!
+
+!
+
+!!
+!
+!!!!
+!!!!
+!
+!
+!!!!
+!
+!!
+!
+!!!
+
+!
+
+!
+
+!!
+
+!!!
+!
+!
+!! !!
+!
+!!!
+!! !
+!!!
+!
+!
+!
+!
+!
+!
+!
+!
+
+!
+!
+
+!!
+!
+
+!
+!
+!
+!
+
+!! !!
+! ! !
+!
+!!
+! !
+!
+!
+!
+! ! !
+!
+!!
+!
+!
+!
+!
+!
+
+! !!! !! !!!! !!
+
+!
+
+!!
+
+!
+
+!
+!
+!
+
+!
+
+!
+!
+!
+!
+
+!
+
+!!
+
+!
+!
+
+!
+
+!
+!
+
+!!
+
+!
+
+! !
+!
+!
+!
+!
+!!!!!!
+!!!!!!!
+!
+! !!!!!!!!!!!!!!!!!!
+!
+!
+!
+!
+!!!!
+!
+!!
+
+!!
+
+! !
+! !
+!!
+!!!!
+!!!!
+!!!!
+
+!
+
+!
+!
+
+!!! !
+!!
+!
+!!!!!!!!!!!!
+!!
+!
+!!!!
+!!!!
+!!!!
+!!!!!!!!!!!!!!!!
+!
+!
+!
+!
+!
+!!!!
+
+!
+!!
+
+!!!!
+!
+
+!!
+!!!
+!!! !
+!
+!!!!
+!
+!!!!
+!!!!
+!
+!
+!
+
+!
+!
+!
+!
+!
+!!!
+!!
+!
+!!!!
+!!!!!!
+!!!
+!
+
+!
+
+!
+
+!
+
+!
+!
+
+!
+
+!
+!
+!!
+
+!
+
+!
+
+!
+!
+!!!! !
+!!
+
+!
+
+1e+04
+
+1e+06
+
+1e+08
+
+1e+10
+
+1e+04
+
+1e+06
+
+1e+08
+
+1e+10
+
+Observed cycle count
+
+Observed cycle count
+
+(a) Length = 1000 instructions
+
+(b) Length = 10000 instructions
+
+Figure 3: Percentage of useful predictions for different time slice lengths.
+
+!
+
+!
+!
+!!
+!
+!
+!
+!
+!
+!
+!
+! !
+!
+!
+!
+!
+! !
+!
+!
+!
+!
+!
+!
+!
+!
+!
+!
+!!
+!
+!
+!
+! !
+!!
+!
+!
+
+!
+
+!
+!
+
+!
+!
+
+!
+!
+!
+
+!
+!
+
+!
+
+!
+!
+!
+!!
+!
+!
+! !
+!
+!
+!
+! ! !
+!
+!
+!
+!
+!
+!
+!
+!
+!
+!!
+!
+!!
+!
+!
+!
+!
+!
+!
+!
+
+!
+
+!
+!
+!
+!!
+!
+!!
+
+!!
+
+!!
+
+!
+!
+
+!
+
+!
+!
+
+!
+
+!
+!
+!
+!
+!
+!
+!!
+!
+!
+!
+!
+!
+
+!
+
+!
+!
+
+!
+
+!
+
+!!
+!
+
+!
+!
+!
+
+!
+!
+
+!
+!
+!
+!
+!
+!
+!
+!
+!! !
+!
+!
+!
+!
+
+!!
+!
+
+!
+
+!
+!
+
+!
+!!
+!
+
+!
+
+!
+
+!
+!!
+
+!
+
+!
+
+!
+!
+!
+!
+
+!
+
+!
+! !
+!
+!
+!!
+! !!
+!
+!
+!
+!
+!
+!
+!
+!!
+!
+!
+!
+!
+!
+
+!!
+!
+
+!
+!
+
+!
+
+!
+
+!
+!
+! !
+!!
+
+!
+! !
+!
+
+!
+
+!
+!
+!
+!
+!
+
+!
+!
+!
+!
+!
+
+!
+
+!!
+
+!
+!
+
+!
+!
+
+!
+
+!
+!
+!
+!
+
+!
+!
+!
+!
+!
+!!
+!
+!
+!
+!
+
+!
+!
+!
+!!
+
+!
+!
+!!
+!!
+!
+
+!
+
+!
+
+!
+
+!
+
+!
+
+!
+
+!
+!
+
+!
+
+!
+
+!
+
+!
+
+!
+
+!!
+
+!!
+
+1e+04
+
+1e+06
+
+1e+08
+
+1e+10
+
+1e+04
+
+1e+06
+
+1e+08
+
+1e+10
+
+Observed cycle count
+
+Observed cycle count
+
+(a) Length = 1000 instructions
+
+(b) Length = 10000 instructions
+
+Figure 4: Impact of time slice length on the relative speedup.
+
+321y
+t
+i
+s
+n
+e
+D
+
+y
+t
+i
+s
+n
+e
+D
+
+0
+0
+1
+
+0
+8
+
+0
+6
+
+0
+4
+
+0
+2
+
+0
+
+0
+0
+1
+
+0
+8
+
+0
+6
+
+0
+4
+
+0
+2
+
+0
+
+!3!!
+
+!2!!
+
+!!!
+
++!!
+
++2!!
+
++3!!
+
+!3!!
+
+!2!!
+
+!!!
+
++!!
+
++2!!
+
++3!!
+
+!0.3
+
+!0.2
+
+!0.1
+
+0.0
+
+0.1
+
+0.2
+
+0.3
+
+!0.2
+
+!0.1
+
+0.0
+
+0.1
+
+0.2
+
+Error Ratio
+
+Error Ratio
+
+(a) Length = 1000 instructions
+
+(b) Length = 10000 instructions
+
+Figure 5: Impact of time slice length on the distribution of estimation errors.
+
+!3!!
+
+!2!!
+
+!!!
+
++!!
+
++2!!
+
++3!!
+
+!3!!
+
+!2!!
+
+!!!
+
++!!
+
++2!!
+
++3!!
+
+y
+t
+i
+s
+n
+e
+D
+
+y
+t
+i
+s
+n
+e
+D
+
+0
+0
+1
+
+0
+8
+
+0
+6
+
+0
+4
+
+0
+2
+
+0
+
+0
+0
+1
+
+0
+8
+
+0
+6
+
+0
+4
+
+0
+2
+
+0
+
+!0.3
+
+!0.2
+
+!0.1
+
+0.0
+
+0.1
+
+0.2
+
+0.3
+
+!0.2
+
+0.0
+
+0.2
+
+Error Ratio
+
+(a) Patch Scheme
+
+Error Ratio
+
+(b) Rollback-Replay Scheme
+
+Figure 6: Error distributions for the patch and rollback-replay schemes.
+
+322s
+n
+o
+
+i
+
+i
+t
+c
+d
+e
+r
+P
+d
+
+ 
+
+i
+l
+
+a
+V
+
+ 
+f
+
+ 
+
+o
+e
+g
+a
+
+t
+
+n
+e
+c
+r
+e
+P
+
+0
+0
+1
+
+0
+8
+
+0
+6
+
+0
+4
+
+0
+2
+
+0
+
+! !!! !!!!!! !!! ! !
+
+!
+!
+
+! ! ! !
+!! !!
+!
+!
+!!!!!
+!
+!
+!
+!
+! ! !
+!
+!
+!
+!!!
+!!
+!
+!
+!
+!
+!!! !
+!!
+!!!!
+!
+!
+!!!! !
+!!
+!
+!!
+!
+!
+!
+!
+!
+!
+!
+!
+!!!!
+!
+!!
+!
+!
+!
+!
+!
+!
+!!!
+!
+
+!
+
+!
+
+!
+!!
+!!!!
+!
+!!
+!!
+!!! !
+!
+!
+!
+!
+!
+!
+!!! !!!!
+!
+!
+!! ! ! !
+!!!!
+! !
+!!!
+!
+!
+!
+!
+!!
+!
+!! !
+!
+!!
+!!!!
+!
+!!!!
+!!!
+!
+!
+!
+!
+!
+!
+!!
+
+! ! ! !
+!!! !!!! ! !
+! ! ! !!!
+!
+!!!!
+!
+!
+!
+!
+!
+! !
+!!
+!!
+!
+!
+!
+!
+!
+
+!! !!! !!!!! !!
+
+!!
+
+!
+
+!!
+!
+!!!!
+!!!!
+!
+!
+!!!!
+!
+!!
+!
+!!!
+
+!
+
+!
+
+!!
+
+s
+n
+o
+
+i
+
+i
+t
+c
+d
+e
+r
+P
+d
+
+ 
+
+i
+l
+
+a
+V
+
+ 
+f
+
+ 
+
+o
+e
+g
+a
+
+t
+
+n
+e
+c
+r
+e
+P
+
+0
+0
+1
+
+0
+8
+
+0
+6
+
+0
+4
+
+0
+2
+
+0
+
+!
+!
+!!!!!!!!!!!!!!!!!!!!
+!
+!
+!
+!!!!
+!!!!!!!!!
+!
+!
+!
+!
+!
+!!!!
+!
+
+!!
+
+!!!
+!!
+!!
+!!!!
+!!!!
+!!!!
+
+!!!!
+!
+
+!!
+!!!
+!!! !
+!
+!!!!
+!
+!!!!
+!!!!
+!
+!
+!
+
+! !!
+!
+!
+!
+!
+!!!!
+!!
+!!!!
+!
+!!!
+!
+!! !
+!
+!!!
+!
+
+!
+!
+!
+!
+
+!!
+
+!
+!!
+!!!
+
+!
+
+!
+
+!
+
+! !
+!
+!
+!
+!
+!!!!!!
+!!!!!!!
+!
+! !!!!!!!!!!!!!!!!!!
+!
+!
+!
+!
+!!!!
+!
+!!
+
+!!
+
+! !
+! !
+!!
+!!!!
+!!!!
+!!!!
+
+!
+
+!
+!
+
+1e+04
+
+1e+06
+
+1e+08
+
+1e+10
+
+1e+04
+
+1e+06
+
+1e+08
+
+1e+10
+
+Observed cycle count
+
+(a) 10 Predictions
+
+Observed cycle count
+
+(b) 100 Predictions
+
+!!
+
+Figure 7: Percentage of useful predictions after altering the number of conﬁdent predictions before a timeslice increase.
+
+1.5 times speedup for longer simulations. Beyond 100 predictions
+however, it is detrimental to the performance for smaller bench-
+marks with no overall performance gain for longer simulations.
+
+By re-simulating a less conﬁdently predicted block in cycle-accu-
+rate mode, accuracy of the predictor is intended to be increased.
+However, simulations proved (see ﬁgure 6) that by re-simulating
+less conﬁdent blocks had little effect on the error margins of the
+predictor, while only creating slightly worse performance for the
+majority of simulations. On the other hand, rollback-replay adds
+a signiﬁcant runtime overhead to the simulations resulting in a no-
+ticeable performance penalty.
+
+As can be seen in ﬁgure 4 an asymptotic speedup of ≈ 50% over
+the cycle-accurate baseline is reached for applications executing
+more than 108 instructions. This improvement is close to the theo-
+retical speedup that can be achieved by instruction-accurate simu-
+lation (see section 2).
+
+Small applications with less than ≈ 106 instructions do not ben-
+eﬁt from our scheme as they spend their entire execution in cycle-
+accurate training mode. However, this is not critical as applications
+of this size are simulated within less than 1sec even using the slow-
+est available mode of simulation.
+
+Sum of non-zero values feature selection and incremental linear
+regression have low computational complexity and are very suit-
+able for online or just-in-time performance modeling. In fact, pro-
+ﬁling of the extended simulator has revealed that only 2-3% of the
+overall execution time are spent for updates of the performance
+model and predictions and, hence, are making their contribution
+negligible.
+
+Further performance improvement may be achieved by using the
+faster behavioral simulation mode that does not maintain the state
+of micro-architectural components such as the caches etc. or even
+using JIT-compiled simulation for maximum performance outside
+the training regions. However, this is beyond the scope of this paper
+and is part of our future work.
+
+Our performance estimation scheme displayed improvements of
+≈ 50% speedup with an MAE of 2.36% and a maximum error of at
+best 19.97%. Simulations proved that a shorter original time slice is
+
+effective at allowing shorter benchmarks to receive the performance
+beneﬁts without adversely affecting longer benchmarks. They also
+proved that having a variable prediction time slice posed additional
+performance beneﬁts without severely affecting error margins, how-
+ever this cannot increase too quickly, as this prevents the predictor
+from receiving adequate training data and as such negates any per-
+formance beneﬁts. There is also little to no beneﬁt in rerunning
+“less conﬁdent” prediction blocks in cycle-accurate mode to ensure
+accuracy.
+
+The simulator gains adequate performance beneﬁts compared to
+the prior work in the area, with comparable MAE, and a signif-
+icantly better maximum error, 52.8% better than e.g. [4] using a
+comparable processor and the same benchmarks.
+
+5. RELATED WORK
+
+The most relevant developments in simulation based performance
+estimation are SimPoint [5] and SMARTS [11]. Both of these tools
+aim at supporting the processor architect in exploring the processor
+design space and making informed design decisions. In contrast,
+we aim at supporting software developers through fast instruction
+set simulators equipped with an accurate timing model.
+
+SimPoint [5] chooses simulation points using an ofﬂine phase
+classiﬁcation algorithm and calculates phases for a program/input
+pair. Using clustering algorithms it chooses a single representative
+from each phase and estimates the remaining intervals behaviors by
+performing a detailed program analysis or simulation only on that
+chosen representative. In contrast, our method does not rely on an
+ofﬂine phase classiﬁcation algorithm, but all work is performed on-
+line. In addition, the entire application is executed with its current
+input and the programmer-visible processor state can be inspected
+(e.g. for debugging purposes) at any point throughout the simu-
+lation. Finally, SimPoint does not offer quantiﬁable conﬁdence in
+performance estimates.
+
+SMARTS [11] is a framework that applies statistical sampling
+to accelerate micro-architecture simulation. It employs systematic
+sampling to measure only a very small portion of the entire ap-
+plication being simulated. Similar to our work SMARTS is an
+
+323p
+u
+d
+e
+e
+p
+S
+
+5
+
+.
+
+1
+
+0
+
+.
+
+1
+
+5
+0
+
+.
+
+0
+
+.
+
+0
+
+!
+
+!
+
+!
+!
+!!!
+!
+!
+!
+!!
+!
+!
+!
+!
+!
+!
+!
+!
+
+!
+!
+
+!
+
+!
+!
+!
+
+!
+!
+!
+!
+!
+!
+!
+
+!
+
+!
+!
+!!
+
+! !!!
+!
+!
+!
+!
+
+!
+!!!
+
+! !
+
+!
+!
+!
+!
+!!
+!
+!
+!
+!
+!
+!
+!
+!
+!
+!
+!!
+!
+!
+!
+!
+!!!!
+!
+
+!
+
+!
+!
+!!
+!
+!
+!
+
+!
+!
+!
+!
+!!
+!
+!
+!
+!
+
+!
+!
+
+!
+
+!
+
+!
+
+!!!
+
+p
+u
+d
+e
+e
+p
+S
+
+5
+
+.
+
+1
+
+0
+
+.
+
+1
+
+5
+0
+
+.
+
+0
+
+.
+
+0
+
+!
+
+!
+!
+!!
+!
+!
+!
+!
+!
+!
+!
+! !
+!
+!
+!
+!
+! !
+!
+!
+!
+!
+!
+!
+!
+!
+!
+!
+!!
+!
+!
+!
+! !
+!!
+!
+!
+
+!
+
+!
+!
+
+!
+!
+
+!
+!
+!
+
+!
+!
+
+!
+
+!
+!
+!
+!!
+!
+!
+! !
+!
+!
+!
+! ! !
+!
+!
+!
+!
+!
+!
+!
+!
+!
+!!
+!
+!!
+!
+!
+!
+!
+!
+!
+!
+
+!
+
+!
+!
+!
+!!
+!
+!!
+
+!!
+
+!!
+
+!
+!
+
+!
+
+!
+!
+
+!
+
+!
+!
+!
+!
+!
+!
+!!
+!
+!
+!
+!
+!
+
+!
+
+!
+!
+
+!
+
+!
+
+!!
+!
+
+!
+!
+!
+
+!
+!
+
+!
+!
+!
+!
+!
+!
+!
+!
+!! !
+!
+!
+!
+!
+
+!!
+!
+
+!
+
+!
+!
+
+!
+!!
+!
+
+!
+
+!
+
+!
+!!
+
+1e+04
+
+1e+06
+
+1e+08
+
+1e+10
+
+1e+04
+
+1e+06
+
+1e+08
+
+1e+10
+
+Observed cycle count
+
+(a) 10 Predictions
+
+Observed cycle count
+
+(b) 100 Predictions
+
+Figure 8: Relative speedup after altering the number of conﬁdent predictions before a timeslice increase.
+
+execution-driven simulator that uses two simulation modes (de-
+tailed and functional) to sample CPI systematically at a ﬁxed in-
+terval. In contrast, we employ an adaptive scheme for time slice
+variation and at the same time we eliminate the need for repeated
+detailed sampling while the conﬁdence in the predictions is high. In
+addition, our approach is more adaptive to temporal changes of the
+workload and is capable of re-adjusting its underlying performance
+model through its use of a continuous statistical machine learning
+scheme.
+
+[1, 2, 8, 4] have suggested machine learning methods for perfor-
+mance estimation, but either lack comprehensive evaluation [1, 2]
+or fail to achieve acceptable levels of accuracy [8, 4].
+
+6. CONCLUSIONS
+
+In this paper we have developed a novel simulation based per-
+formance estimation methodology using continuous statistical ma-
+chine learning. Building on top of existing hybrid instruction-/cycle-
+accurate simulator technology we enable accurate predictions of
+the cycle count while a program is executed mostly in fast, non-
+detailed instruction-accurate simulation mode. Hence, we achieve
+a signiﬁcant speedup of ≈ 50% over the baseline cycle-accurate
+simulation at the cost of a modest average estimation error of 2.36%.
+Future work will include storing the prediction model between
+simulations. This would allow the simulator to start making pre-
+dictions from the start of execution and, hence, removing the initial
+training period. Furthermore, we are currently extending our per-
+formance estimation methodology to work with the faster, but even
+more high-level JIT-compiled simulation mode offered by the sim-
+ulator used in this paper.
+
+7. REFERENCES
+
+[1] J. R. Bammi, E. Harcourt, W. Kruijtzer, L. Lavagno, and
+
+M. T. Lazarescu. Software performance estimation strategies
+in a system-level design tool. In Proceedings of CODES’00,
+2000.
+
+[2] G. Bontempi and W. Kruijtzer. A data analysis method for
+
+software performance prediction. In Proceedings of
+DATE’02, 2002.
+
+[3] J. D’Errico and W. Qin. Constructing portable compiled
+instruction-set simulators: an ADL-driven approach. In
+Proceedings of DATE’06, 2006.
+
+[4] B. Franke. Fast cycle-approximate instruction set simulation.
+In Proceedings of the Workshop on Software and Compilers
+for Embedded Systems (SCOPES’08), 2008.
+
+[5] G. Hamerly, E. Perelman, J. Lau, and B. Calder. SimPoint
+
+3.0: Faster and more ﬂexible program analysis. In
+Proceedings of Workshop on Modeling, Benchmarking and
+Simulation, 2005.
+
+[6] D. Jones and N. Topham. High speed CPU simulation using
+
+LTU dynamic binary translation. In Proceedings of the
+Conference on High Performance Embedded Architectures
+and Compilers (HiPEAC), Paphos, Cyprus, 2009.
+
+[7] M. J. Orr. Introduction to radial basis function networks.
+
+Technical report, Centre for Cognitive Science, University of
+Edinburgh, 1996.
+
+[8] M. S. Oyamada, F. Zschornack, and F. R. Wagner. Accurate
+software performance estimation using domain classiﬁcation
+and neural networks. In Proceedings of SBCCI’04, 2004.
+
+[9] M. Reshadi, P. Mishra, and N. Dutt. Hybrid compiled
+simulation: An efﬁcient technique for instruction-set
+architecture simulation. ACM Transactions on Embedded
+Computing Systems (TECS), 8(3), April 2009.
+
+[10] N. Topham and D. Jones. High speed CPU simulation using
+
+JIT binary translation. In Proceedings of the 3rd Annual
+Workshop on Modeling, Benchmarking and Simulation (held
+in conjunction with ISCA-34), San Diego, 2007.
+
+[11] R. E. Wunderlich, T. F. Wenisch, B. Falsaﬁ, and J. C. Hoe.
+
+SMARTS: accelerating microarchitecture simulation via
+rigorous statistical sampling. In Proceedings of the 30th
+Annual International Symposium on Computer Architecture
+(ISCA), 2003.
+
+324

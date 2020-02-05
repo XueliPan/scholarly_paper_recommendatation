@@ -1,0 +1,1506 @@
+Marking algorithms for service differentiation of TCP trafﬁc ?
+
+Nicolas Christin ∗,1, J¨org Liebeherr
+
+University of Virginia, Department of Computer Science, Charlottesville, VA 22904, USA
+
+Abstract
+
+Class-based service architectures for quality-of-service (QoS) differentiation typically provide loss, throughput, and delay
+differentiation. However, proposals for class-based service differentiation generally do not account for the needs of TCP
+trafﬁc, which are characterized by a coupling of packet losses and achievable throughput. Ignoring this coupling may result
+in poor service differentiation at the microﬂow level. This paper shows how Explicit Congestion Notiﬁcation (ECN) can be
+used to achieve service differentiation for TCP trafﬁc classes at the microﬂow level. We present a trafﬁc marking algorithm
+for routers, which, if used in conjunction with ECN, regulates the transmission rate of TCP sources in such a way that packet
+drops due to buffer overﬂows are avoided. We demonstrate how the algorithm can be integrated in a service architecture
+with absolute and proportional QoS guarantees. Simulation results illustrate the effectiveness of the presented algorithms at
+avoiding packet losses and regulating trafﬁc for meeting service guarantees, and provide a comparison with other algorithms
+proposed in the literature.
+
+Key words: TCP, ECN, QoS, Packet Losses, Congestion Control
+
+1. Introduction
+
+Since the late 1990s, a signiﬁcant amount of re-
+search, e.g., [1–4], has been devoted to devising simple
+and scalable architectures for quality-of-service (QoS)
+differentiation between classes of trafﬁc. These pro-
+posals, mainly formulated in the context of the Differ-
+entiated Services (DiffServ, [1]) framework, generally
+provide loss, delay and throughput differentiation be-
+tween classes of trafﬁc.
+
+However, the scheduling and/or buffer management
+algorithms involved usually do not take into account
+the sensitivity of TCP trafﬁc to losses. TCP trafﬁc,
+which accounts for more than 90% of the total traf-
+ﬁc on the Internet [5], is a feedback-driven protocol
+that uses losses as an indicator for congestion avoid-
+ance and control [6]. Hence, TCP packet losses lead
+to signiﬁcant performance degradation of the through-
+
+? This work is supported in part by the National Science Foun-
+dation through grants ANI-9730103 and ANI-0085955.
+∗ Corresponding author
+
+Email address: christin@sims.berkeley.edu (Nicolas
+
+Christin).
+1 Present address: University of California Berkeley, School of
+Information Management and Systems, Berkeley, CA 94709 USA
+
+put of TCP sources. Furthermore, due to the relatively
+complex relationship between packet losses and TCP
+throughput [7] and the lack of discriminating mech-
+anisms between ﬂows belonging to the same service
+class, quantitative loss differentiation on trafﬁc aggre-
+gates can result in unpredictable throughput differen-
+tiation between individual TCP ﬂows.
+
+In an effort to reduce losses in TCP/IP networks,
+Explicit Congestion Notiﬁcation (ECN, [8]) has been
+proposed as an additional congestion signal for TCP
+ﬂows. ECN allows to mark packets with a Congestion
+Experienced (CE) codepoint. When a packet marked
+with the CE codepoint is received by its destination,
+the data is acknowledged with a packet containing the
+CE-ECHO codepoint. When the CE-ECHO marked
+acknowledgment reaches the sender, the sender re-
+duces its throughput, as if a loss had happened in the
+network.
+
+The emergence of ECN has stimulated research on
+appropriate marking algorithms that indicate conges-
+tion to TCP sources to avoid packet losses resulting
+from buffer overﬂows, e.g., [9–14]. The key idea be-
+hind these algorithms is to mark packets proactively,
+that is, before congestion occurs, to limit the amount of
+lost trafﬁc in the network. For instance, RED [11] and
+
+Preprint submitted to Elsevier Science
+
+20 October 2003
+
+its extensions, e.g. [13], use a smoothed average of the
+buffer occupancy, Q, to infer impending congestion.
+If Q is between two thresholds minT H and maxT H ,
+packets are marked with a probability increasing in
+Q. Packets are only dropped if Q > maxT H . Other
+algorithms, e.g., Stochastic Fair Blue [10] use differ-
+ent factors such as link utilization to infer conges-
+tion, or, in the case of Random Exponential Marking
+(REM, [9]), a price, depending on the queue occu-
+pancy and the difference between aggregate input and
+output rates. The PI algorithm [12] uses a feedback-
+based model for TCP arrival rates [15] to let the buffer
+occupancy converge to a target value, but assumes a
+priori knowledge of the round-trip times and of the
+number of ﬂows traversing the router.
+
+While all of the proactive marking algorithms dis-
+cussed above can, to some extent, reduce the amount
+of losses in the network, this paper tries to address
+a broader question. Since ECN provides congestion
+signals that can be conveyed before any trafﬁc is
+dropped, we are exploring if ECN can be integrated
+with scheduling and buffer management into a service
+differentiation scheme for TCP trafﬁc.
+
+We ﬁrst explore if it is feasible to devise a marking
+algorithm which can ensure that the trafﬁc load at a
+router remains at a level that entirely avoids losses due
+to buffer overﬂows at routers without wasting avail-
+able network bandwidth. The basic idea is to anticipate
+the behavior of TCP sources at the routers, by track-
+ing the window size and the round-trip time of ﬂows
+at the router, and to use ECN marking to have the
+senders adjust the window size of the ﬂows. More pre-
+cisely, when a router predicts future losses, the router
+sends congestion signals to the sources via ECN with
+the goal of reducing the sources’ sending rates before
+a loss occurs. To that effect, we present a reference
+marking algorithm that tracks and controls all TCP
+ﬂows at a router to prevent impending buffer over-
+ﬂows. This reference algorithm can probably not be
+implemented in routers with the hardware currently
+available, due to the computational overhead of main-
+taining per-ﬂow information for all ﬂows, but is useful
+to assess the viability of our design. To address scal-
+ability issues, we note that in practice, only a small
+number of ﬂows contribute to the majority of trafﬁc
+[16,17]. We conjecture that tracking and marking only
+these “heavy-hitters” is sufﬁcient for avoiding packet
+drops. Based on this idea of ﬁltering ﬂows, we present
+a heuristic approximation of the reference algorithm
+that we expect to be computationally efﬁcient enough
+to be deployed in edge routers, where congestion is
+most likely to occur [18]. Then, we examine if ECN
+can be used to concurrently pursue both objectives of
+avoiding losses and regulating trafﬁc to meet per-class
+service guarantees.
+
+This paper is organized as follows. In Section 2,
+
+Fig. 1. Overview of the algorithm. At time t of a packet arrival,
+the router projects future arrivals, by inferring how the TCP source
+will send trafﬁc. When an impending buffer overﬂow is predicted,
+at time t0 here, a packet is marked to reduce future arrivals.
+
+we present the reference algorithm for avoiding buffer
+overﬂows. In Section 3, we describe the heuristic algo-
+rithm. In Section 4, we show how the proposed mark-
+ing algorithms can be used for trafﬁc regulation in
+the context of class-based service differentiation. We
+compare the performance of the reference and heuris-
+tic algorithms to other algorithms in Section 5, and
+draw brief conclusions in Section 6.
+
+2. A reference marking algorithm for avoiding
+losses
+
+In this section, we describe a reference algorithm
+for marking TCP trafﬁc at network routers. The ob-
+jective of the algorithm is to determine when to mark
+TCP trafﬁc and which ﬂows to mark in order to com-
+pletely avoid packet losses due to router buffer over-
+ﬂows, while maximizing the utilization of the network
+capacity.
+
+Throughout this section, we assume that all traf-
+ﬁc uses TCP. While in practice one can expect a mix
+of ﬂows using different protocols (e.g., TCP, UDP,
+SCTP), we can make this assumption without loss
+of generality, since one can always reserve ﬁxed re-
+sources at each router for TCP trafﬁc such as a ded-
+icated buffer and a ﬁxed portion of the output link
+capacity. Furthermore, we assume that ECN is avail-
+able in the network. This assumption is realistic for
+future networks, as ECN is being rapidly deployed on
+the Internet: relatively recent operating systems such
+as FreeBSD 4.5 or Linux 2.4 already support ECN.
+For the description of the reference algorithm in the
+remainder of this section, we assume that enough re-
+sources are available to perform the needed computa-
+tions.
+
+We next describe the algorithm at a single router,
+for a single greedy TCP ﬂow, i.e., a TCP ﬂow that al-
+
+2
+
+Projected arrivals(after packet marking)Projected Arrivalstt’timetrafficTransmissionsBuffer SizeArrivalsways has data to transmit. For the time being, we as-
+sume that there is no other trafﬁc in the network, and
+that the only cause of packet losses at the router is a
+buffer overﬂow. The router estimates the congestion
+window size and the round-trip time of the TCP ﬂow.
+With these estimates, future trafﬁc arrivals are pro-
+jected, and impending buffer overﬂows are inferred,
+as illustrated in Fig. 1. In the case of Fig. 1, at time t,
+a buffer overﬂow is projected for time t0. If a packet
+loss is projected, the algorithm reduces the congestion
+window size of the TCP source by marking packets
+with ECN. By reducing the congestion window size,
+the sending rate of the TCP source is reduced, and im-
+pending packet losses can be avoided. Note that the
+proposed algorithm does not require any changes to
+TCP, and only relies on ECN to reduce the trafﬁc load.
+The remainder of this section describes the calcu-
+lations at the router to project future packet losses.
+We explain how to use the projections to mark trafﬁc
+and avoid packet losses using the simpliﬁed model of
+a single TCP ﬂow. We then generalize the proposed
+technique to multiple TCP ﬂows with different sources
+and destinations crossing paths at a same router.
+
+2.1. Projecting Trafﬁc Arrivals to Prevent Losses
+
+Let us assume for now that packet losses can only be
+caused by a buffer overﬂow at the considered router,
+and let Blim denote the size of the router’s buffer. We
+refer to the input curve, Rin(t), as the total amount
+of trafﬁc that has entered the router until time t, ex-
+cluding dropped trafﬁc. We refer to the output curve,
+Rout(t), as the total amount of trafﬁc that has left the
+router until time t. At any time t, the backlog at the
+router is equal to Rin(t) − Rout(t). Hence, we have
+the following constraint:
+
+∀t : Rin(t) − Rout(t) ≤ Blim .
+
+(1)
+
+Assume that the output link capacity of the router has
+a constant rate C, and that the router uses a work-
+conserving scheduler. Thus, for any t and τ > 0 such
+that trafﬁc is always backlogged over [t, t + τ ],
+
+Rout(t + τ ) = Rout(t) + C · τ .
+
+(2)
+Since Eqn. (2) characterizes Rout whenever there is a
+backlog, the algorithm only needs to infer Rin(t + τ )
+for τ > 0, to ensure Eqn. (1) holds at t + τ , thereby
+avoiding impending buffer overﬂows. To clearly dis-
+tinguish between known, measured values and future,
+projected values of the arrivals and of the departures,
+we deﬁne eRin
+t (t + τ ) as the value projected at time t
+for the input curve at time t + τ .
+To project future arrivals eRin
+
+t (t + τ ) for τ > 0, we
+need to examine how trafﬁc is sent at the source, so
+that we can infer how much trafﬁc is received by the
+router. For this discussion, we consider “segments”
+
+3
+
+and “packets” as synonymous. Furthermore, we ig-
+nore the slow-start phase of TCP, since the ﬂow is
+unlikely to send enough trafﬁc to create a buffer over-
+ﬂow during slow-start, and only focus on the conges-
+tion avoidance phase. Every time an acknowledgment
+is received at the source, the source sends a number of
+packets equal to the minimum of the receiver’s adver-
+tised window size, adv(t), and the source’s congestion
+window size, cwnd(t), minus the number of pack-
+ets sent and not yet acknowledged. 2 cwnd(t) is in-
+creased by 1/cwnd(t) every time an acknowledgment
+is received, unless the acknowledgment is marked with
+the CE-ECHO codepoint or a packet drop is inferred
+by reception of a triple-duplicate acknowledgment, in
+which case cwnd(t) is decreased to cwnd(t)/2. Last,
+if the retransmission timer of the TCP source expires,
+cwnd(t) is reset to one and the ﬂow is back to slow-
+start.
+
+Since cwnd(t) is conditioned by receiving acknowl-
+edgments at the source, the round-trip time (RTT), that
+is, the time difference between a packet is sent and
+its acknowledgment is received at the source, is cen-
+tral to the evolution of cwnd(t). The RTT depends on
+time, due to variable queueing delays, and/or chang-
+ing routes. We denote by RT T (t) the value of the
+RTT at time t, and deﬁne a series of “rounds” as fol-
+lows. The ﬁrst round starts when the ﬁrst packet is
+sent by the source, and ends when the acknowledg-
+ment to the ﬁrst packet sent in the ﬁrst round is re-
+ceived. The (k + 1)-th round starts immediately after
+the k-th round ends. Therefore, denoting by sk the
+start time of the k-th round at the source, the si are
+linked by the recursive equation si+1 = si+RT T (si).
+Now, within the i-th round, i.e., between times si
+and si+1, a TCP source sends at most W (si) pack-
+ets with W (si) = min{adv(si), cwnd(si)}. Further-
+more, it can be shown (see [7], or the example in
+[19], Chap. 21) that, in absence of retransmission timer
+timeouts, and if the TCP source is not in slow-start
+mode, W (si+1), the number of packets sent in the
+(i + 1)-th round is bounded by
+
+1
+2
+
+W (si) ≤ W (si+1) ≤ W (si) + 1 .
+
+(3)
+
+The lower bound is given by the fact that at most
+one ECN congestion signal is taken into account per
+round [8], while the upper bound is reached only if
+all packets sent in the i-th round are successfully ac-
+knowledged by the destination. Note that Eqn. (3) is
+general enough to capture the behavior of Delayed-
+ACKs implementations, which issue on average only
+one acknowledgment for each two data packets.
+
+Since W (t) and RT T (t) are not known by a router,
+Eqn. (3) tells us that a router that wants to estimate
+
+2 At the end hosts, cwnd(t) is internally expressed in bytes,
+which does not affect our present discussion.
+
+future trafﬁc arrivals must be able to estimate, at any
+time t, RT T (t), W (t), and si for the current round.
+We denote by cW (t), [RT T (t), and bs(t) the estimates
+at the considered router of W (t), RT T (t), and of si,
+respectively.
+
+These estimates are computed as follows. The ﬁrst
+time a packet is received at the router, the current time,
+T1, is recorded. When the second packet arrives at the
+router, at time T2, the value of [RT T (t) is initialized
+to T2 − T1, 3 and cW (t) is initialized to 1. At time T2,
+bs(t) is initialized to T2.
+
+After time T2, the key idea to update the RTT es-
+timates is to discriminate the rounds. Measurement
+studies [21,22] show that the RTT of a ﬂow is gen-
+erally signiﬁcantly larger than the time needed to re-
+ceive all packets from a given round for that ﬂow. 4
+Thus, monitoring the packets’ interarrival times at the
+router can determine alone if a new round has started.
+More speciﬁcally, if, for a constant K > 1, Ti−1 and
+Ti satisfy
+
+Ti − Ti−1 >
+
+[RT T (Ti−1)
+
+,
+
+K
+
+(4)
+
+the router considers that Ti marks the start of a new
+round.
+
+If Eqn. (4) does not hold, Ti−1 and Ti are part of the
+same round, and [RT T (t) is set equal to [RT T (Ti−1),
+cW (t) is set to cW (Ti−1) + 1, and bs(t) is set equal
+to bs(Ti−1). Conversely, if Eqn. (4) holds, the router
+updates the estimates as follows:
+
+= Ti ,
+
+bs(t)
+cW (t) = 1 ,
+[RT T (t) = α · [RT T (bs(Ti−1))
+
++(1 − α) · (bs(t) − bs(Ti−1)) ,
+where 0 ≤ α ≤ 1 is a constant. The round-trip time
+estimator used at the TCP sources uses α = 0.9, which
+has shown to provide reasonably accurate results [23].
+We point out that except in rare cases of persistent link
+failure, where packets end up being re-routed, the RTT
+does not vary signiﬁcantly over time, and thus, the
+algorithm should be rather insensitive to the selection
+of α.
+
+With the estimates of the RTT and the window size,
+the router can project future window sizes. Speciﬁ-
+cally, for any time t and any time τ > 0, denoting by
+fWt(t + τ ) the projection of the window size at time
+t + τ , the router computes fWt(t + τ ) as
+
+3 This method is equivalent to the SYN-ACK algorithm of [20].
+4 The same assumption is used in [7] for modeling the sending
+rate of a TCP source, and has been conﬁrmed in experimental
+measurements.
+
+4
+
+fWt(t+τ ) =
+
+1
+2 cW (t)
+
+
+
+
+
+
+if t + τ < bs(t) + [RT T (t),
+cW (t)
+cW (t) + 1 if t + τ ≥ bs(t) + [RT T (t)
+
+and no packet has been
+marked (or dropped)
+in [bs(t), t],
+if t + τ ≥ bs(t) + [RT T (t)
+and at least one packet
+has been marked (or
+dropped) in [bs(t), t].
+
+(5)
+
+The router can discover if a packet has been marked
+(or dropped upstream) in [bs(t), t] by checking the ECN
+bits and the TCP sequence numbers. From Eqn. (5), the
+router projects that the window size does not change
+until the end of the current round, and that its value at
+the beginning of the next round depends on whether
+or not a packet has been dropped or marked during the
+current round. Thus, Eqn. (5) captures the fact that,
+at the earliest, ECN signals have an effect only at the
+beginning of the next round.
+
+We shall note that this projection is correct only
+when all packets in a round have been received by
+the router. This may seem a restriction, but since the
+RTT is generally much larger than the time needed
+to receive all packets in a given round [7,21,22], the
+projection is generally accurate. With fWt(t + τ ) given
+by Eqn. (5), a router can project the input curve with
+the following expression:
+
+eRin
+
+t (t+τ ) = Rin(t)+M SS ·γt(τ )· fWt(t+τ ) , (6)
+where M SS is the maximum segment size of the TCP
+ﬂow, and
+
+γt(τ ) =
+
+(cid:26) 1 if t + τ ≥ bs(t) + [RT T (t),
+0 otherwise.
+
+That is, a router can assume that all trafﬁc sent in the
+next round arrives in a batch right at the start of the
+next round. This projection thus assumes a “worst-
+case scenario.” In practice, such bursts of trafﬁc are
+rarely observed.
+
+Next, we discuss the marking algorithm. To deter-
+mine if an arrival at time t must be marked, a router
+checks that the ﬂow has not already been marked (or
+has experienced some losses) during the current round.
+This test is necessary since at most one ECN-marked
+packet per round has an impact on the arrivals. If the
+ﬂow has not experienced any losses or packet mark-
+ing during [bs(t), t], the router veriﬁes if the following
+condition holds:
+
+eRin
+
+t (t + τ ) − Rout(t) − C · τ ≤ Blim .
+
+(7)
+
+This condition tests if a buffer overﬂow is going to
+occur at he beginning of the next round. Since ECN
+feedback does not have any impact until the beginning
+of the next round, the condition in Eqn. (7) is checked
+
+for τ = bs(t)+ [RT T (t)−t. If the condition of Eqn. (7)
+is violated, then the router marks the packet at the
+head of the transmission queue with the CE codepoint.
+Marking the packet at the head of the queue minimizes
+the delay needed for the ECN feedback to reach the
+source.
+
+We conclude with a discussion on the robustness
+of the above estimators. If the constant K in Eqn. (4)
+is too small (e.g., K ≈ 1), or if W (t) is extremely
+large and data transmission appears continuous, the
+test described in Eqn. (4) may not be able to discrimi-
+nate between rounds. In the worst-case, the router may
+never infer the start of a new round, and cW grows un-
+bounded. To address this problem, we use a safeguard,
+based on Eqn. (3) as follows. If, at time Ti, we have 5
+
+cW (Ti) > cW (bs(Ti)−) + 1 ,
+
+the router infers that Ti marks the start of a new round,
+even if Eqn. (4) does not hold. Now, if K is too large
+(e.g., K > 1000), the router incorrectly infers that
+each packet arrival marks the start of a new round, and
+thus, cW and [RT T underestimate W and RT T . In the
+worst-case, when cW → 0 and [RT T → 0, no projec-
+tion is performed, thus no trafﬁc is marked, and the
+algorithm degenerates to Drop-Tail. Our experiments
+show that the algorithm is quite robust to changes of
+the parameters. In fact, the experimental results gath-
+ered in Section 5 with K = 10, α = 0.9 are almost
+identical to those obtained with any value 10 ≤ K <
+100, and 0.7 < α < 1.
+
+2.2. Generalization to Multiple TCP Flows
+
+We next consider a more general situation with
+N greedy TCP ﬂows. We use [RT T i(t), cWi(t), M SSi,
+and bsi(t) to denote the estimated round-trip time, con-
+gestion window size, maximum segment size and start
+time of the current round for TCP ﬂow i, respectively.
+Let us assume, for the moment, that the router is able
+to monitor all N TCP ﬂows and can keep track of all
+the [RT T i(t), cWi(t), M SSi and bsi(t).
+
+Now, by deﬁning for each ﬂow i, at any time t,
+
+τi = bsi(t) + [RT T i(t) − t ,
+
+(8)
+
+i.e., τi is the (estimated) remaining time before the start
+of the next round for TCP ﬂow i, and by iterating the
+projection technique of Section 2.1 for all ﬂows, the
+router ﬁrst computes the projected congestion window
+in the next round, fWi,t(t + τi) for each ﬂow i, using
+Eqn. (5). Then, for any τ > 0, the projected arrivals
+are
+
+t (t+τ ) = Rin(t)+
+eRin
+
+M SSi ·γi,t(τ )· eWi,t(t+τ ) , (9)
+
+X
+
+i
+
+5 For any time t, we deﬁne t− as limε→0{t − ε}, with ε > 0.
+
+5
+
+where
+
+γi,t(τ ) =
+
+(cid:26) 1 if τ ≥ τi,
+0 otherwise.
+
+If the condition given in Eqn. (7) is violated for any of
+the τi’s of Eqn. (8), the algorithm proactively marks
+the oldest backlogged packet from ﬂow j with
+
+j = argmax{i | fWi,t(t + τi) = cWi(t) + 1} , (10)
+
+that is, the algorithm marks the ﬂow with the largest
+congestion window that has not yet been marked (or
+experienced a packet drop) in its current round. As
+soon as the oldest backlogged ﬂow-j packet is marked,
+fWj,t(t + τj) is set to cWj(t)/2, and the condition of
+Eqn. (7) is reevaluated. The marking process is re-
+peated until Eqn. (7) does not hold for any of the τi’s,
+or all ﬂows have one packet marked in the current
+round.
+
+3. Emulating the reference algorithm with a
+scalable heuristic
+
+The per-ﬂow information required by the algorithm
+presented in Section 2 involves a signiﬁcant amount of
+overhead. We now present a heuristic approximation
+of the reference algorithm, which uses ﬂow ﬁltering
+to reduce the number of tracked TCP ﬂows, and em-
+ploys linear interpolation to reduce the computational
+complexity of the projection algorithm. Our goal is to
+design a heuristic algorithm that is deployable in an
+edge or an access router.
+
+3.1. Flow Filtering
+
+As observed in measurement studies [16,17], only
+a small percentage of ﬂows (“heavy-hitters”) accounts
+for a large percentage of trafﬁc. These heavy-hitters
+transmit at a high data rate due to (1) a large con-
+gestion window, and (2) a relatively small round-trip
+time. From the description of the reference algorithm
+in Section 2, these are generally the only ﬂows that
+marked by the reference algorithm. Thus, by limiting
+the tracking algorithm to the heavy-hitters we expect
+that the reference algorithm can be closely approxi-
+mated.
+
+To identify the heavy-hitters, we use the serial mul-
+tistage ﬁlter proposed in [24]. The objective of the
+multistage ﬁlter is to identify, at any time t, the ﬂows
+that have sent more than M bytes during the time in-
+terval (bt/∆c · ∆, t), where M is a given threshold,
+∆ > 0 is a ﬁxed time constant denoting the sampling
+interval used for measurement. The serial multistage
+ﬁlter proposed in [24] works as follows. Every time a
+packet arrives at the router, a hash function is applied
+
+to the source and destination IP addresses and port
+numbers. Flows are then grouped into buckets depend-
+ing on the value returned by the hash function. Then,
+ﬂows in the largest buckets are hashed by a second,
+independent, hash function and grouped into second-
+level buckets. The same type of hashing operation is
+repeated a third time. Flows belonging to the largest
+buckets after the third hash are recorded into memory.
+The authors of [24] showed that the serial multistage
+ﬁlter minimizes false positives (i.e., only a few ﬂows
+with a small sending rate are assumed to be heavy-
+hitters) and avoids false negatives (i.e., all ﬂows with
+a large sending rate are tracked).
+
+We implement ﬂow ﬁltering as follows. We use two
+linked lists in the router’s memory, L1 for current sam-
+pling, and L2 for ﬂows previously recorded. Initially,
+both L1 and L2 are empty. In the ﬁrst sampling inter-
+val, ﬂows are added to L1 only if they pass the multi-
+stage ﬁlter, while L2 remains empty. At time t = ∆,
+L1 is copied into L2 before being reset. 6 The process
+is iterated every ∆ seconds. At any time t, the router
+updates the estimates [RT T , cW , and bs for all ﬂows in
+L1 and L2.
+
+Only the ﬂows in L2 are used for the projections,
+and therefore, the projection of Eqn. (9) always under-
+estimates the input curve. To alleviate this problem,
+at any time t, we introduce a correction factor, ρ(t),
+whose value is updated at t = k∆, where k is a posi-
+tive integer, with
+
+Rin(t) − Rin((k − 1) · ∆)
+
+P
+
+i∈L2
+
+ρ(t) =
+
+(cid:0)Rin
+
+i (t) − Rin
+
+i ((k − 1) · ∆)(cid:1) ,
+where Rin
+i (t) denotes the amount of ﬂow-i trafﬁc re-
+ceived by the router by time t. That is, at any time t,
+ρ(t) denotes the ratio of the total amount of trafﬁc re-
+ceived by the router in the previous sampling interval
+over the amount of trafﬁc that was identiﬁed in the
+previous sampling interval. Note that we always have
+ρ(t) ≥ 1. The case ρ(t) = 1 is the limit case where
+all ﬂows pass the ﬁlter during the previous sampling
+interval. As an example, for t = 5.5 seconds, and
+∆ = 1 second, if ρ(t) = 1.1, we know that 90.9 %
+of all trafﬁc received by the router in the time inter-
+val (4 s, 5 s) has been identiﬁed. At any time t, the
+projection of the input curve for the Class-n trafﬁc ag-
+gregate, eRin
+i,t is set equal to the sum of the projection
+of the input curves of the ﬂows in L2, multiplied by
+the correction factor ρ(t), that is
+
+eRin
+
+t (t + τ ) = ρ(t) ·
+
+eRin
+
+i,t(t + τ ) .
+
+X
+
+i∈L2
+
+Remark: We note that the selection of the parameters
+∆ and M presents a trade-off between computational
+
+6 This operation can be implemented efﬁciently by swapping the
+two pointers on L1 and L2, and resetting the pointer on L1.
+
+Fig. 2. Linear interpolation. In the heuristic, only the value
+eRin
+t (t + maxi{τi}) is computed, and is used to determine the
+excess trafﬁc that will arrive at the router.
+
+overhead and accuracy of the algorithm. With a larger
+sampling interval ∆, the updates to main memory, L2,
+are performed less frequently, at the expense of using
+possibly obsolete data. With a larger value for M , the
+number of recorded ﬂows, X, remains small, but the
+accuracy of the projections may be poor. Thus, we
+infer that both M and ∆ should be tuned according
+to the computational power available. In particular,
+routers at high-speed access points, and a large number
+of ﬂows, should be conﬁgured with relatively large
+values for M and ∆.
+
+3.2. Linear Interpolation
+
+Flow ﬁltering limits the amount of state informa-
+tion recorded at the router, but does not alleviate the
+computational overhead for constructing the projected
+input curve. We next describe a technique that reduces
+the complexity of the projection of Eqn. (9).
+
+First, instead of using individual values of the con-
+gestion windows of all recorded ﬂows in the construc-
+tion of the projected input curve, we consider that
+all recorded ﬂows have a congestion window size (in
+bytes) equal to the mean congestion window size (in
+bytes), ¯Ω, given by ¯Ω(t) = 1
+M SSi · cWi(t).
+X
+Since we perform ﬂow ﬁltering and ignore ﬂows with
+small congestion windows, this approximation is rea-
+sonably accurate.
+
+i∈L2
+
+P
+
+Second, we use linear interpolation to reduce the
+complexity of the construction of the projected input
+curve and illustrate our method in Figure 2. Rather
+than constructing the whole projected input curve,
+only the value eRin
+t (t + maxi{τi}) is computed. Inter-
+mediary values eRin
+t (t + τ ) for 0 < τ < maxi{τi} are
+approximated using a linear interpolation, based on
+the value obtained for eRin
+t (t + maxi{τi}). The reason
+for selecting maxi{τi} as the basis for the linear inter-
+polation, instead of, for instance, mini{τi}, is that the
+
+6
+
+l (t+   )t1ExcessTrafficBlimProjected Arrivals(reference algorithm)Linear Interpolation(heuristic)Transmissionsttraffictimetiit+max (   )projection can take into account all recorded ﬂows.
+
+Next, Eqn. (7) tells us that
+
+rn(t) ≥ rmin
+
+n (t) = max
+
+µn,
+
+(
+
+Rin
+
+n,∗(t) − Rout
+dn − Dn(t)
+
+n,∗(t)
+
+)
+
+.
+
+l1(t) = eRin
+
+t (t + max
+
+i
+
+{τi}) − Rout(t) − C · max
+
+{τi} − Blim
+
+i
+
+Thus, at any time t, we need to have
+
+is the amount by which the trafﬁc must be reduced
+to prevent buffer overﬂows. From l1(t) and ¯Ω(t), the
+algorithm can infer the number of ﬂows that have to
+be marked, and only update the projected input curve
+once, which reduces the worst-case complexity of the
+entire projection algorithm to O(1). If l1(t) > 0, the
+marking process performs at most O(Q) operations
+where Q is the number of backlogged packets. The
+worst-case occurs when all packets backlogged have
+to be marked at the same time. In practice however,
+we only expect at most a couple of ﬂows to be marked
+upon each packet arrival, since projections are per-
+formed over short time intervals, which makes this
+heuristic efﬁcient in practice.
+
+4. Trafﬁc regulation with ECN marking in
+class-based service architectures
+
+In this section, we build on the algorithms we de-
+scribed in Sections 2 and 3 to describe how ECN
+marking can be used to support class-based service
+guarantees for TCP trafﬁc. We consider a service ar-
+chitecture that supports class-based service guarantees
+at each router (on a hop-by-hop basis). Trafﬁc in the
+same class has the same service requirements. We as-
+sume that there is no admission control and no sig-
+naling, and the only method to control the trafﬁc into
+a router is by dropping or by notifying TCP sources
+using ECN. Our goal is to design a novel approach,
+solely relying on ECN, for trafﬁc regulation in QoS
+networks.
+
+We consider a router in the network with output link
+capacity C, and assume that each class n is transmitted
+at time t with a service rate rn(t), such that for any t,
+P
+n rn(t) = C, where rn(t) > 0 only if there is a
+
+positive backlog of Class-n packets.
+
+Let us introduce the “Class-n delay”, Dn(t), as the
+queueing delay experienced by the last Class-n packet
+that has been transmitted before time t. Consider that
+a given class n is offered a bound dn on the queueing
+delay of all packets in Class n, i.e., for all t, Dn(t) ≤
+dn, and a guaranteed throughput µn such that at all
+times Class n trafﬁc is backlogged, rn(t) ≥ µn. De-
+noting by Rin
+n,∗(t) the Class-n input curve (i.e., the to-
+tal amount of Class-n trafﬁc to have arrived by time t)
+and by Rout
+n,∗(t) the Class-n output curve, following
+[2], a sufﬁcient condition for all Class-n trafﬁc to meet
+its delay and throughput guarantees at any time t when
+Class n is backlogged is
+
+7
+
+(
+
+max
+
+µn,
+
+Rin
+
+n,∗(t) − Rout
+dn − Dn(t)
+
+n,∗(t)
+
+)
+
+X
+
+n
+
+≤ C . (11)
+
+If the condition of Eqn. (11) is violated, one can re-
+duce Rin
+n,∗(t) by dropping trafﬁc. Since our objective
+is to avoid any trafﬁc drops, we use the projections
+described earlier to ensure that the Rin
+n,∗(t)’s always
+satisfy Eqn. (11).
+
+Assuming the throughput guarantees are appropri-
+ately chosen, that is, P
+n µn < C, we propose the
+following approach. At time t, in addition to the pro-
+jections on the input curve of all ﬂows i in Class n,
+eRin
+n,i,t(t+τ ), which is given by Eqn. (6), and the class-
+n projected input curve, given by
+
+eRin
+
+n,∗,t(t + τ ) =
+
+eRin
+
+n,i,t(t + τ ) .
+
+X
+
+i
+
+We also project the Class-n output curve, eRout
+
+n,∗,t(τ ) by
+
+eRout
+
+n,∗,t(t + τ ) = Rout
+
+n,∗(t) + τ · rn(t) ,
+
+where τ > 0. If the rate allocation rn remains un-
+changed between t and t + τ ,
+this projection of
+eRout
+n,∗,t(t + τ ) is exact. Since we only use the projec-
+tion for small values of τ (in the order of a round-trip
+time) we can assume that the projection is reasonably
+accurate, even if rn changes between t and t + τ .
+Furthermore, let us assume that the delay of Class n
+remains roughly constant during [t, t + τ ]. With these
+projections deﬁned, we can project the minimum ser-
+vice rates ermin
+n,t (t + τ ) needed at time t + τ , so that all
+service guarantees on throughputs and delays are met:
+)
+
+(
+µn, eRin
+
+n,∗,t(t + τ ) − eRout
+dn − Dn(t)
+
+n,∗,t(t + τ )
+
+.
+
+ermin
+n,t (t+τ ) = max
+
+To ensure that the set of service rates required for
+meeting service guarantees is always feasible, we must
+enforce
+
+X
+
+n
+
+ermin
+n,t (t + τi) ≤ C ,
+
+(12)
+
+for all τi’s deﬁned by Eqn. (8). If Eqn. (12) does not
+hold, the incoming trafﬁc needs to be reduced. To that
+effect, we propose to ﬁrst identify the set of classes
+where ermin
+n,t (t + τ ) > µn, which are the classes where
+decreasing the trafﬁc arrivals has an effect on the min-
+imum service rate required. Since P
+n µn < C, we
+know that there is at least one class in that set.
+
+Once the classes whose trafﬁc need to be throttled
+have been identiﬁed, the marking process is carried
+out in the same manner as in the case of an impend-
+ing buffer overﬂow, by merely replacing the condition
+given in Eqn. (7) by the condition given in Eqn. (12).
+
+(a) Drop-Tail
+
+(b) RED
+
+(c) PI w/ approximate tuning
+
+(d) PI w/ exact tuning
+
+(e) Reference algorithm
+
+(f) Heuristic algorithm
+
+Fig. 3. Loss rates. The ﬁgures compare the loss rates obtained with all six algorithms. The reference algorithm does not discard any trafﬁc.
+
+5. Evaluation
+
+In this section, we evaluate our proposed algorithms
+via simulation, using the ns-2 network simulator [25].
+The evaluation has three objectives. First, we compare
+the performance of the reference and heuristic algo-
+rithms. Second, we compare the performance of our
+proposed algorithms to state-of-the-art active queue
+management algorithms. Third, we illustrate the po-
+tential of the proposed approach for trafﬁc regulation
+in class-based service architectures. To that effect, we
+propose two simulation experiments. The ﬁrst experi-
+ment evaluates the efﬁciency of the proposed approach
+with respect to buffer management, while the second
+experiment evaluates the performance of the heuristic
+algorithm for trafﬁc regulation when providing service
+guarantees.
+
+5.1. Experiment 1: Active Queue Management
+
+In the ﬁrst simulation experiment, we consider a
+bottleneck link with capacity C = 10 Mbps, and buffer
+size of B = 150,000 bytes. All trafﬁc at this single
+bottleneck link is TCP (NewReno), and is generated
+by 60 greedy FTP ﬂows, and 180 on-off ﬂows, aiming
+at emulating HTTP connections. The sources of the
+on-off ﬂows send on average 300 packets during an
+“on” period, and pause on average for one second be-
+tween two “on” periods. The actual number of packets
+sent and the wait time between two transmissions are
+exponentially distributed. All packets have a size of
+500 bytes. In the absence of queueing and transmis-
+sion delays in the network, the RTTs of all ﬂows are
+independent identically distributed random variables
+uniformly distributed between 24 ms and 180 ms, and
+to avoid synchronization effects, sources start trans-
+mitting at different times, uniformly distributed be-
+
+8
+
+tween 0 s and 5 s. The experiment lasts for 70 seconds
+of simulated time, and ECN is available in the entire
+network. We compare the performance of six different
+algorithms at the router governing the bottleneck link:
+Drop-Tail. We use Drop-Tail to have an estimate of
+the loss rates encountered without active queue man-
+agement. With Drop-Tail, incoming packets are dis-
+carded only when the buffer is full.
+RED [11]. We use RED with the gentle variant
+[26], with a minimum threshold minT H = 37,500
+bytes, and a maximum threshold maxT H = 75,000
+bytes. The parameter maxP is set to 0.1, and the
+weight used in the computation of the average queue
+size is set to wq = 0.002. While minT H and maxT H
+are chosen so that trafﬁc is dropped with a probability
+of one only if the buffer is full, other parameters are
+the default RED parameters in ns-2, and are therefore
+expected to cover a large range of operating condi-
+tions. RED is instructed to use ECN when needed.
+PI [12] with approximate parameter tuning. To ac-
+count for the uncertainty on estimates of the RTTs and
+of the number of ﬂows at router conﬁguration time,
+we conﬁgure here the PI algorithm with crude esti-
+mates of the RTTs and of the number of ﬂows. That
+is, we use a lower bound on the number of ﬂows of
+N = 50, and a maximum RTT R+ = 300 ms, with
+a sampling frequency of 160 Hz, yielding parameter
+values of a = 0.2395e − 4 and b = 0.2388e − 4. The
+target queue length is set to Qref =100,000 bytes.
+PI with exact parameter tuning. We conﬁgure the PI
+algorithm with the exact RTTs and number of ﬂows
+we use in our simulation. In other words, we use a
+lower bound of N = 60 on the number of ﬂows, and
+a tight upper bound on the round-trip times R+ =
+180 ms, with a sampling frequency of 160 Hz, and get
+a = 1.643e − 4 and b = 1.628e − 4. The target queue
+length Qref is set to 100,000 bytes. Note that such
+
+ 0 5 10 15 20 10 20 30 40 50 60 70Loss Rate (%)Simulation Time (s) 0 5 10 15 20 10 20 30 40 50 60 70Loss Rate (%)Simulation Time (s) 0 5 10 15 20 10 20 30 40 50 60 70Loss Rate (%)Simulation Time (s) 0 5 10 15 20 10 20 30 40 50 60 70Loss Rate (%)Simulation Time (s) 0 5 10 15 20 10 20 30 40 50 60 70Loss Rate (%)Simulation Time (s) 0 5 10 15 20 10 20 30 40 50 60 70Loss Rate (%)Simulation Time (s)(a) Drop-Tail
+
+(b) RED
+
+(c) PI w/ approximate tuning
+
+(d) PI w/ exact tuning
+
+(e) Reference algorithm
+
+(f) Heuristic algorithm
+
+Fig. 4. Measured throughput and goodput at the receivers. The ﬁgures compare the aggregate throughput and goodput seen at the
+receivers with all six algorithms. All schemes are efﬁcient at maximizing the utilization of the bottleneck link (10 Mbps). A perfectly tuned
+PI, and both the reference and heuristic algorithm have a goodput (amount of trafﬁc passed to the application layer at the destinations)
+almost equal to the throughput (total amount of trafﬁc received at the destinations) by avoiding packet drops.
+
+an exact parameter tuning is unrealistic in practice,
+since it imposes a priori knowledge of the number of
+ﬂows and of the round-trip times of the ﬂows that will
+traverse the router at router conﬁguration time.
+Reference algorithm. This is the reference algorithm
+described in Section 2. Results are obtained for K =
+10, α = 0.9. We achieved similar results with parame-
+ter settings in the range 10 ≤ K < 100 and 0.7 < α <
+1, which tends to show that our proposed algorithm is
+relatively insensitive to the parameter selection.
+Heuristic algorithm. This is the heuristic algorithm
+described in Section 3. The multistage ﬁlter consists
+of 3 stages of 8 buckets. The admission threshold is set
+to M =200,000 bits and ∆ = 1 s. For each algorithm,
+we monitor the loss rates over a sliding window of size
+0.25 s, and present our results in Fig. 3. We start moni-
+toring at time t = 10 s to ignore transient effects linked
+to the fact the network is initially empty. Fig. 3(a) tells
+us that, without active queue management, one can ex-
+pect loss rates in the order of 12 %. Fig. 3(b) and (c)
+show that RED with the default parameters, which turn
+out to be unsuitable for the trafﬁc mix at hand, and a
+crudely conﬁgured PI algorithm, drop almost as much
+trafﬁc as Drop-Tail. Conversely, a perfectly tuned PI
+algorithm manages to avoid most packet drops. The
+reference algorithm completely avoids packet losses,
+and the heuristic rarely drops any packets. Thus, the
+heuristic algorithm delivers results close to the refer-
+ence algorithm.
+
+Next, we monitor the aggregate throughput and
+goodput observed at the receivers, averaged over a
+moving window of size 0.25 s and present our re-
+sults in Fig. 4. The throughput characterizes the total
+amount of trafﬁc received by the transport layer at
+the destination, while the goodput characterizes the
+
+9
+
+amount of trafﬁc that is passed by the transport layer
+to the application layer. The main observation is that
+all schemes manage to achieve an aggregate through-
+put roughly equal to the capacity of the bottleneck
+link. Furthermore, we note that, by avoiding packet
+losses, an exactly tuned PI, and both the reference
+and heuristic algorithms manage to achieve a goodput
+close to the throughput.
+
+Last, we monitor the queue size, averaged over a
+moving window of size 0.25 s, and we present our re-
+sults in Fig. 5. Not surprisingly, the Drop-Tail queue is
+almost always full, which explains the relatively high
+loss rates. RED manages to stabilize the queue length
+around maxT H = 75,000 bytes. (This observation
+coupled with the result presented in Fig. 3 indicates
+that RED drops some packets proactively even when
+ECN is available.) With an approximate tuning of the
+conﬁguration parameters, PI does not manage to track
+the desired queue length Qref = 100,000 bytes, and
+instead, the queue is almost always full. Conversely,
+a properly tuned PI algorithm manages to achieve the
+target Qref , albeit with some oscillations around the
+target value. While stabilizing the queue length is not
+the primary objective of our algorithms, the reference
+algorithm manages to keep the queue length almost
+constant around 120,000 bytes. The heuristic algo-
+rithm keeps the queue length in the vicinity of 50,000
+bytes, with oscillations of a magnitude comparable to
+those of a well-conﬁgured PI controller. These oscil-
+lations are mostly due to the fact that the sampling in-
+terval is set to 1 s, and are reduced for higher sampling
+frequencies, at the expense of a higher computational
+overhead.
+
+ 0 2 4 6 8 10 12 10 20 30 40 50 60 70Aggregate (Mbps)Simulation Time (s)ThroughputGoodput 0 2 4 6 8 10 12 10 20 30 40 50 60 70Aggregate (Mbps)Simulation Time (s)ThroughputGoodput 0 2 4 6 8 10 12 10 20 30 40 50 60 70Aggregate (Mbps)Simulation Time (s)ThroughputGoodput 0 2 4 6 8 10 12 10 20 30 40 50 60 70Aggregate (Mbps)Simulation Time (s)ThroughputGoodput 0 2 4 6 8 10 12 10 20 30 40 50 60 70Aggregate (Mbps)Simulation Time (s)ThroughputGoodput 0 2 4 6 8 10 12 10 20 30 40 50 60 70Aggregate (Mbps)Simulation Time (s)ThroughputGoodput(a) Drop-Tail
+
+(b) RED
+
+(c) PI w/ approximate tuning
+
+(d) PI w/ exact tuning
+
+(e) Reference algorithm
+
+(f) Heuristic algorithm
+
+Fig. 5. Queue lengths. The ﬁgures compare the queue lengths at the router for all six algorithms.
+
+Number of
+
+Service Guarantees
+
+Class
+
+on-off
+
+Delay
+
+Loss Throughput
+
+ﬂows
+
+Rate
+
+1
+
+2
+
+3
+
+4
+
+5
+
+10
+
+15
+
+20
+
+≤ 10 ms ≤ 1 % ≥ 5 Mbps
+≈ 1
+4 D3 ≈ 1
+2 p3
+≈ 1
+4 D4 ≈ 1
+2 p4
+–
+–
+
+–
+
+–
+
+–
+
+Table 1
+Trafﬁc mix and service guarantees. The second column indicates
+the number of on-off ﬂows, and in the third and fourth rows, pn
+denotes the loss rate of Class n over a busy period, Dn denotes
+the delay of Class n.
+
+5.2. Experiment 2: Providing Service Guarantees
+
+Next, we assess the effectiveness of our algorithms
+at regulating trafﬁc for providing service guarantees.
+To that effect, we run a second experiment, with a
+bottleneck link with capacity C = 45 Mbps, and a
+buffer size of B = 250, 000 bytes. All trafﬁc at the
+bottleneck link is TCP (NewReno), and consists of 12
+greedy TCP ﬂows, and 50 on-off TCP ﬂows, following
+the same on-off pattern as in the ﬁrst experiment. The
+RTTs of all greedy TCP ﬂows are equal to 44 ms,
+and the RTTs of the on-off ﬂows, in the absence of
+propagation and transmission delays, are uniformly
+distributed between 44 ms and 80 ms. All sources start
+transmitting at time t = 0 for 70 seconds of simulated
+time, and ECN is available.
+
+We consider four classes of trafﬁc, with the service
+guarantees and trafﬁc mix described in Table 1. In ad-
+dition to the on-off ﬂows, each class contains three
+greedy TCP ﬂows. We compare the performance of
+two algorithms in this experiment. The ﬁrst algorithm
+is the algorithm described in [2], which can provide de-
+lay and loss guarantees to trafﬁc classes, but does not
+regulate trafﬁc. The second algorithm combines the al-
+gorithm of [2] with the trafﬁc regulation algorithm de-
+
+10
+
+scribed in Section 4 and the heuristic approximations
+described in Section 3, using a multistage ﬁlter of 3
+stages of 8 buckets, ∆ = 0.1 s, M = 200, 000 bits.
+
+We plot the delays encountered by each Class-1
+packet at the bottleneck link in Fig. 6. Fig. 6(a) shows
+that, given the trafﬁc mix considered, about 11 % of
+all Class-1 packets exceed the delay bound of 10 ms,
+with queueing delays going as high as 100 ms. This is
+due to the fact that, when a loss guarantee and a delay
+bound conﬂict due to the absence of admission con-
+trol, the algorithm of [2] gives precedence to the loss
+guarantee and relaxes the delay bound. Conversely,
+Fig. 6(b) shows that when the trafﬁc regulation algo-
+rithm we described in this paper is used, violations
+rarely happen (< 2 %), and the delay does not exceed
+20 ms.
+
+Next, in Fig. 7, we plot the loss rates averaged over
+the length of the current busy period. Fig. 7(a) show
+that all loss guarantees are respected, notably the 1 %
+bound on Class-1 losses. However, as we have seen
+in Fig. 6(a), the loss rate bound is respected at the
+expense of the delay bound. Fig. 7(b) shows that, with
+the addition of the algorithm of Section 4, no packets
+are lost, and therefore, the objective of completely
+avoiding packet drops to meet service guarantees is
+met.
+
+Finally, in Fig. 8 we present the throughput obtained
+by each class at the bottleneck link. Fig. 8(a) shows
+that in the absence of trafﬁc regulation, severe oscil-
+lations of the throughput can be observed. Worse, the
+throughput bound on Class-1 is sometimes violated,
+due to the fact that there is not enough Class-1 trafﬁc
+present in the router. Fig. 8(b) shows that trafﬁc reg-
+ulation stabilizes these oscillations in throughput, and
+that the throughput guarantee on Class 1 is always re-
+spected. We also note that both algorithms manage to
+achieve an aggregate throughput equal to the capac-
+
+Max. buffer size 0 50 100 150 200 10 20 30 40 50 60 70Queue Length (KB)Simulation Time (s)Max. buffer sizemin th = 37.5 KBmax th = 75 KB 0 50 100 150 200 10 20 30 40 50 60 70Queue Length (KB)Simulation Time (s)Max. buffer sizeQref 0 50 100 150 200 10 20 30 40 50 60 70Queue Length (KB)Simulation Time (s)Max. buffer sizeQref 0 50 100 150 200 10 20 30 40 50 60 70Queue Length (KB)Simulation Time (s)Max. buffer size 0 50 100 150 200 10 20 30 40 50 60 70Queue Length (KB)Simulation Time (s)Max. buffer size 0 50 100 150 200 10 20 30 40 50 60 70Queue Length (KB)Simulation Time (s)(a) without trafﬁc regulation
+
+(b) with trafﬁc regulation
+
+Fig. 6. Class-1 packet delays. The number of violations is lower with trafﬁc regulation, and the violations are much smaller in magnitude.
+
+(a) without trafﬁc regulation
+
+(b) with trafﬁc regulation
+
+Fig. 7. Loss rates. The trafﬁc regulation algorithm prevents any trafﬁc from being dropped.
+
+(a) without trafﬁc regulation
+
+(b) with trafﬁc regulation
+
+Fig. 8. Per-class throughputs. Without trafﬁc regulation, we observe oscillations and sporadic violations of the Class-1 throughput
+guarantee. The trafﬁc regulation algorithm stabilizes these oscillations and ensures the throughput guarantees are respected.
+
+ity of the bottleneck link, meaning that the stabiliza-
+tion in the throughputs provided by the trafﬁc regula-
+tion algorithm does not come at the expense of under-
+utilization.
+
+6. Conclusions and discussion
+
+We investigated whether marking algorithms for
+ECN can be used for regulating trafﬁc in the context
+of class-based service architectures, while avoiding
+packet losses due to buffer overﬂows. To that effect,
+we ﬁrst described two packet marking algorithms for
+IP routers, which attempt to eliminate packet losses in
+TCP ﬂows. The proposed approach infers how trafﬁc
+
+is sent by TCP sources, by tracking the window size
+and RTT of large ﬂows, and accordingly makes the
+marking decisions. We then showed how the proposed
+algorithms can be used for trafﬁc regulation in the con-
+text of QoS architectures, in lieu of trafﬁc policing or
+admission control. Experimental results illustrated the
+potential of the approach.
+
+We note that the techniques used in the algorithms
+can be further improved by more accurate and robust
+estimators of the RTT values, e.g., [20], and of the
+congestion window sizes. Another area for improve-
+ment resides in the type of ﬁlter used in the heuristic
+algorithm. While the serial multistage ﬁlter [24] we
+use in this paper appears to exhibit good performance,
+a follow-up work described in [27], indicates that par-
+
+11
+
+0Delay Bound1020304050607020406080100Class−1 Delays (ms)Simulation Time (s)0Delay Bound1020304050607020406080100Class−1 Delays (ms)Simulation Time (s)1020304050607000.511.52Simulation Time (s)Loss Rate (%)Class 4Class 3Class 2Class 11020304050607000.511.52Simulation Time (s)Loss Rate (%)Class 4Class 3Class 2Class 11020304050607001020304050607080Throughput (Mbps)AggregateClass 4Class 3Class 2Class 1Simulation Time (s)1020304050607001020304050607080Throughput (Mbps)AggregateClass 4Class 3Class 2Class 1Simulation Time (s)allel multistage ﬁlters typically perform better than se-
+rial multistage ﬁlters, and are more amenable to math-
+ematical analysis of their properties, such as proba-
+bilities of false negatives. Using a parallel multistage
+ﬁlter could therefore open the door for an analytical
+evaluation of our proposed algorithms, and help quan-
+tify the trade-offs in parameter selection. Furthermore,
+our current approach assumes TCP Reno or NewReno;
+extending it to other ﬂavors of TCP such as SACK
+or Vegas is left for future research. Last, the heuris-
+tic algorithm proposed is probably efﬁcient enough to
+be deployed at relatively low-speed links, such as the
+links at the edges of the network, where the speed is
+in the order of a few hundred megabits per second, but
+it is our belief that the proposed heuristic might still
+have a computational overhead too important to con-
+sider deployment in core routers operating at speeds
+in the order of tens of gigabits per second. Hence,
+further work is probably needed to propose heuristics
+that can also be deployed in the core of the network.
+
+Acknowledgments
+
+We wish to thank Cristian Estan for providing us
+with his implementation of the multistage ﬁlters used
+in the heuristic algorithm.
+
+References
+
+[1] S. Blake, D. Black, M. Carlson, E. Davies, Z. Wang, W. Weiss,
+An architecture for differentiated services, IETF RFC 2475,
+December 1998.
+
+[2] N. Christin, J. Liebeherr, T. F. Abdelzaher, A quantitative
+assured forwarding service,
+IEEE
+INFOCOM 2002, Vol. 2, New York, NY, 2002, pp. 864–873.
+
+in: Proceedings of
+
+[3] C. Dovrolis, P. Ramanathan, A Case
+
+for Relative
+Differentiated Services and the Proportional Differentiation
+Model, IEEE Networks 13 (5) (1999) 26–34, special issue
+on Integrated and Differentiated Services on the Internet.
+
+[4] P. Hurley, J.-Y. Le Boudec, P. Thiran, M. Kara, ABE:
+providing low delay service within best effort,
+IEEE
+Networks 15 (3) (2001) 60–69, see also http://www.
+abeservice.org.
+
+[5] K. Claffy, G. Miller, K. Thompson, The nature of the beast:
+recent trafﬁc measurement from an Internet backbone, in:
+Proceedings of INET ’98, Geneva, Switzerland, 1998.
+
+[6] M. Allman, V. Paxson, W. Stevens, TCP congestion control,
+
+IETF RFC 2581, April 1999.
+
+[7]
+
+J. Padhye, V. Firoiu, D. Towsley, J. Kurose, Modeling TCP
+throughput: A simple model and its empirical validation,
+Proceedings of ACM SIGCOMM ’98 (1998) 303–314.
+
+[10] W.-C. Feng, D. Kandlur, D. Saha, K. Shin, Stochastic fair
+blue: a queue management algorithm for enforcing fairness,
+in: Proceedings of IEEE INFOCOM 2001, Vol. 3, Anchorage,
+AK, 2001, pp. 1520–1529.
+
+[11] S. Floyd, V. Jacobson, Random early detection for congestion
+avoidance, IEEE/ACM Transactions on Networking 1 (4)
+(1993) 397–413.
+
+[12] C. V. Hollot, V. Misra, D. Towsley, W. Gong, On designing
+improved controllers for AQM routers supporting TCP ﬂows,
+in: Proceedings of IEEE INFOCOM 2001, Vol. 3, Anchorage,
+AK, 2001, pp. 1726–1734.
+
+[13] D. Lin, R. Morris, Dynamics of random early detection, in:
+Proceedings of ACM SIGCOMM ’97, Cannes, France, 1997,
+pp. 127–137.
+
+[14] S. Kunniyur, R. Srikant, Analysis and design of an adaptive
+virtual queue (AVQ) algorithm for active queue management,
+in: Proceedings of ACM SIGCOMM 2001, San Diego, CA,
+2001, pp. 123–134.
+
+[15] V. Misra, W. Gong, D. Towsley, A ﬂuid-based analysis of
+a network of AQM routers supporting TCP ﬂows with an
+application to RED, in: Proceedings of ACM SIGCOMM
+2000, Stockholm, Sweden, 2000, pp. 151–162.
+
+[16] W. Fang, L. Peterson, Inter-AS trafﬁc patterns and their
+in: Proceedings of IEEE GLOBECOM ’99,
+
+implications,
+Vol. 3, Rio de Janeiro, Brazil, 1999, pp. 1859–1868.
+
+[17] A. Feldmann, A. Greenberg, C. Lund, N. Reingold,
+J. Rexford, F. True, Deriving trafﬁc demands for operational
+IP networks: methodology and experience, in: Proceedings
+of ACM SIGCOMM 2000, Stockholm, Sweden, 2000, pp.
+257–270.
+
+[18] C. Fraleigh, S. Moon, C. Diot, B. Lyles, F. Tobagi, Packet-
+level trafﬁc measurements from a tier-1 IP backbone, Tech.
+Rep. TR-01-ATL-110101, Sprint ATL (Nov. 2001).
+
+[19] W. R. Stevens, TCP/IP Illustrated, Volume 1: The Protocols,
+
+Addison-Wesley, Reading, MA, 1998.
+
+[20] H. Jiang, C. Dovrolis, Passive estimation of TCP round-trip
+times, ACM Computer Communication Review (2002) 75–
+88.
+
+[21] K. Fall, S. Floyd, Simulation-based comparisons of Tahoe,
+Reno, and SACK TCP, ACM Computer Communications
+Review 26 (3) (1996) 5–21.
+
+[22] V. Paxson, Automated packet
+
+trace analysis of TCP
+implementations, in: Proceedings of ACM SIGCOMM ’97,
+Cannes, France, 1997, pp. 167–179.
+
+[23] V.
+
+Jacobson, Congestion
+
+in:
+Proceedings of ACM SIGCOMM ’88, Stanford, CA, 1988,
+pp. 314–329.
+
+avoidance
+
+control,
+
+and
+
+[24] C. Estan, G. Varghese, New directions in trafﬁc measurement
+and accounting, in: Proceedings of the 2001 ACM SIGCOMM
+Internet Measurement Workshop, San Francisco, CA, 2001,
+pp. 75–80.
+
+[25] ns-2 network simulator, http://www.isi.edu/nsnam/
+
+ns/.
+
+[8] K. Ramakrishnan, S. Floyd, D. Black, The addition of
+explicit congestion notiﬁcation (ECN) to IP, IETF RFC 3168,
+September 2001.
+
+[26] S. Floyd, Recommendation on using the gentle variant
+see http://www.icir.org/floyd/red/
+
+of RED,
+gentle.html (Mar. 2000).
+
+[9] S. Athuraliya, D. Lapsley, S. Low, An enhanced random early
+marking algorithm for internet ﬂow control, in: Proceedings
+of IEEE INFOCOM 2000, Tel-Aviv, Israel, 2000, pp. 1425–
+1434.
+
+[27] C. Estan, G. Varghese, New directions in trafﬁc measurement
+and accounting, in: Proceedings of ACM SIGCOMM 2002,
+Pittsburgh, PA, 2002, pp. 323–336.
+
+12
+
+

@@ -1,0 +1,3153 @@
+Iteratively Constructing Preconditioners
+
+via the Conjugate Gradient Method
+
+John Dunagan
+Microsoft Research
+
+Redmond, WA
+
+jdunagan@microsoft.com
+
+Nicholas J.A. Harvey
+
+MIT
+
+Cambridge, MA
+nickh@mit.edu
+
+ABSTRACT
+We consider the problem of solving a symmetric, positive def-
+inite system of linear equations. The most well-known and
+widely-used method for solving such systems is the precondi-
+tioned Conjugate Gradient method. The performance of this
+method depends crucially on knowing a good preconditioner
+matrix. We show that the Conjugate Gradient method itself
+can produce good preconditioners as a by-product. These
+preconditioners allow us to derive new asymptotic bounds on
+the time to solve multiple related linear systems.
+
+Categories and Subject Descriptors
+G.1.3 [Numerical Analysis]: Numerical Linear Algebra—
+Linear systems (direct and iterative methods)
+
+General Terms
+Algorithms, Theory
+
+Keywords
+Conjugate Gradient Method, Preconditioning
+
+1.
+
+INTRODUCTION
+
+One of the most basic and useful computational problems
+is to solve a system of linear equations Ax = b, where A
+is a given matrix, b is a given vector, and x is a vector
+of unknowns.
+In this paper, we consider solvers for linear
+systems over the reals, in which the matrix A is symmet-
+ric and positive deﬁnite. Such systems have applications in
+a wide range of areas, including computer graphics [9], ma-
+chine learning [16], scientiﬁc computing, and many branches
+of engineering.
+
+A comprehensive introduction to linear system solvers can
+be found in standard references [7, 11, 17, 19]. Roughly
+speaking, solvers can be divided into two categories.
+
+Permission to make digital or hard copies of all or part of this work for
+personal or classroom use is granted without fee provided that copies are
+not made or distributed for proﬁt or commercial advantage and that copies
+bear this notice and the full citation on the ﬁrst page. To copy otherwise, to
+republish, to post on servers or to redistribute to lists, requires prior speciﬁc
+permission and/or a fee.
+STOC’07, June 11–13, 2007, San Diego, California, USA.
+Copyright 2007 ACM 978-1-59593-631-8/07/0006 ...$5.00.
+
+Direct solvers. These typically work by factoring the matrix
+A into a canonical form such that the system becomes
+easy to solve. The prototypical examples are Gaussian
+elimination (LU factorization), Cholesky factorization,
+etc.
+
+Iterative solvers. These produce a sequence of “guesses” for
+the solution. Each iteration of the algorithm adjusts the
+previous guess, obtaining a new guess which is closer to
+the ﬁnal solution. This process is similar to function
+minimization by gradient descent. The prototypical it-
+erative solvers are Steepest Descent and CG (Conjugate
+Gradient).
+
+Iterative solvers are of interest for a number of reasons.
+First, there are numerous circumstances in which it is prefer-
+able to rapidly compute an approximate solution to a prob-
+lem instead of waiting the amount of time needed to compute
+an exact solution. Next, iterative solvers often have superior
+performance when the system being solved is sparse. For ex-
+ample, if A has size n × n and only m non-zero entries, then
+the CG solver requires only O(mn) operations to produce an
+exact solution. In contrast, the best theoretical running time
+known for any direct solver is O(n2+ω), where 0.37 < ω ≤ 1.
+Iterative solvers are so widely used that specialized ver-
+sions have been developed for various problem families, e.g.,
+the Multigrid method [20] and the algorithm of Spielman-
+Teng [18]. For a lengthier discussion of iterative solvers, we
+refer the interested reader to the literature [2, 11, 12, 19].
+
+A qualitative diﬀerence between direct and iterative solvers
+is that the eﬃciency of iterative solvers usually depends more
+crucially on the spectrum of the matrix A. This is usually
+formalized by deﬁning a condition number, a quantity derived
+from A which captures the attractiveness of its spectrum,
+then analyzing the convergence of the iterative solver as a
+function of the condition number.
+
+This motivates the study of preconditioning.
+
+Instead of
+solving the system Ax = b, one introduces a matrix P (called
+a preconditioner ), then solves the related system P Ax = P b.
+The intention is that P A should have a smaller condition
+number than A, so the problem has become easier to solve,
+and that introducing P does not impose signiﬁcant additional
+costs. The importance of preconditioning techniques is em-
+phasized by Trefethen and Bau [19]:
+
+Nothing will be more central to computational sci-
+ence in the next century than the art of transform-
+ing a problem that appears intractable into an-
+other whose solution can be approximated rapidly.
+For [iterative solvers], this is preconditioning.
+
+While provably good pre-conditioners have been derived
+for many problems with special structure [12, 13, 18], pre-
+conditioners for the general symmetric positive deﬁnite case
+are typically based on heuristics [2, 3].
+
+This paper investigates a new approach for constructing
+preconditioners. We present an algorithm that iteratively
+constructs a good preconditioner for A by observing the ex-
+ecution of the Conjugate Gradient method (or Steepest De-
+scent) on the system Ax = b.
+
+1.1 Overview
+
+,
+
+We begin with an informal overview of our algorithm. The
+problem Ax = b amounts to ﬁnding the minimum of (cid:3)Ax − b(cid:3)2
+which is a convex, quadratic function (its level sets are el-
+lipsoids). Steepest Descent and CG work roughly as follows:
+given a guess x, they compute an improved guess by comput-
+ing the gradient at x, then moving x in the direction of that
+gradient. This works since the gradient at x points roughly
+towards the minimum. If the level sets are nearly spherical
+then this procedure works very well because the gradients will
+point closely towards the minimum. However, if the level sets
+are far from spherical, then more iterations will be required.
+Having nearly spherical level sets amounts to A having small
+condition number.
+
+Our algorithm repeatedly performs iterations of CG, at
+each step measuring how much progress was made towards
+the minimum. If an iteration fails to make much progress,
+this yields a certiﬁcate that the level sets are not spherical
+in the direction of x. This certiﬁcate can then be used to
+ﬁnd a new preconditioner for A which improves the condition
+number. The new preconditioner acts on A by squashing the
+level sets to make them more spherical.
+
+Stated more generally, our algorithm’s approach is to mon-
+itor the progress of a basic algorithm (CG). When the basic
+algorithm is slow, this indicates that the given instance has
+some undesirable properties (bad condition number). One
+then takes some alternative action to improve the instance
+(update the preconditioner), thereby accelerating the perfor-
+mance of the basic algorithm. A similar approach under-
+lies the linear program solvers of Dunagan-Vempala [8] and
+Kelner-Spielman [14]. In [8], the basic algorithm is the per-
+ceptron method, which has running time that is exponential
+in the input size, and the improvement process accelerates the
+runtime to polynomial. In [14], an analogous improvement is
+obtained when the basic algorithm is a certain variant of the
+simplex method.
+
+For the case of linear systems, our iterative preconditioner
+updates do not provably accelerate the performance of the al-
+ready “diabolically fast” [19] CG algorithm. Instead, the it-
+erative preconditioner construction makes the following three
+contributions. First, it gives an entirely diﬀerent approach to
+deriving asymptotic bounds comparable to some of the known
+asymptotic bounds for Conjugate Gradient. Second, these
+bounds hold even if the basic algorithm used to construct the
+preconditioners is Steepest Descent (see Section 6); this is in
+marked contrast to Steepest Descent’s inferior performance
+relative to CG in the absence of iterative preconditioner up-
+dates. Finally, regardless of whether CG or Steepest Descent
+is used, the preconditioner serves an additional purpose:
+it
+can be used to accelerate the solution of related linear sys-
+tems (same matrix A, new vector b), analogous to how direct
+solvers can reuse a matrix factorization after computing it
+once.
+
+1.2 Designing Preconditioners
+
+As mentioned above, an ideal preconditioner should im-
+prove the condition number of the given system without in-
+troducing much additional computational cost. Naturally
+there is a tradeoﬀ between these two objectives, and it is not
+well understood what tradeoﬀs can be achieved for general
+linear systems. Our algorithm gives a framework for making
+precise tradeoﬀs between these objectives.
+
+As outlined above, our algorithm produces a sequence of
+suggested improvements to the preconditioner P . Each im-
+provement amounts to a “rank-1 update” of P , which in-
+creases the cost of a computing matrix-vector products with
+P (see Section 6.1). On the other hand, the algorithm can
+precisely determine the extent to which each suggested up-
+date decreases a condition number of the system. Thus our
+algorithm allows an implementer to design an arbitrary pol-
+icy for deciding which suggested improvements to accept and
+which to reject. To the best of our knowledge, no such frame-
+work was previously known.
+
+There do exist other solvers similar to CG which, in some
+sense, iteratively compute a new “preconditioner” at each
+step of the algorithm. These are the so-called quasi-Newton
+or variable metric methods from non-linear optimization, such
+as the BFGS and DFP algorithms [4, 5, 6, 10, 15]. The pre-
+conditioners computed by these algorithms do successively
+improve in quality in the sense that they converge towards
+A−1. However, unlike our framework, these algorithms do
+not show how the condition number improves at each step.
+
+2. OVERVIEW OF THE ALGORITHM
+
+We denote the system of linear equations we are trying to
+solve by M x = d, where M is symmetric positive deﬁnite, and
+has size n × n. If x∗ is the actual solution to the system, and
+x is a guess for the solution, then the error is deﬁned to be
+e = x − x∗. The residual is deﬁned to be r = M x − d = M e.
+We will solve the system by incorporating a preconditioner
+P . Consider the new system
+
+P TM P ˜x = P Td.
+
+The new system is equivalent to the original one because,
+given any solution ˜x to the new system, we obtain a solution
+x to the original one by setting x = P ˜x. Furthermore, the
+matrix P TM P is symmetric positive deﬁnite, assuming that
+P is non-singular.
+
+Pseudocode for our algorithm is shown in Algorithm 1. It
+generates a sequence of guesses for the solution x1, x2, . . . and
+a sequence of preconditioners P1, P2, . . .. At iteration i of the
+algorithm, deﬁne
+
+Ai = P T
+
+i M Pi
+
+and
+
+bi = P T
+
+i d.
+
+At step i, the error and residual (after preconditioning) are
+respectively deﬁned to be ei = xi − x∗ and ri = Aixi − bi.
+
+2.1 Potential Functions
+
+Our algorithm and its analysis are based on two potential
+functions, which we now deﬁne. Let X be a positive deﬁnite
+matrix. We deﬁne a new condition number for X, called its
+eccentricity, as follows.
+
+E (X) = det
+
+(cid:2) X 1/2 + X −1/2
+
+(cid:3)
+
+2
+
+The two potential functions are φ(i) = (cid:3)ri(cid:3)2
+
+and ψ(i) =
+
+rT
+i+1 A ri+1
+
+rT
+i Ari
+
+by Eq. (C.4)]
+
+(cid:5)
+
+(cid:4)
+/
+
+(cid:5)
+
+Change in Potential: How do the potential functions change
+after performing a CG iteration? Clearly ψ is unchanged.
+The decrease in φ is given by
+
+Algorithm 1: An overview of our main algorithm.
+
+Let x0 = an arbitrary initial guess, and let P0 = I.
+Repeat
+
+Initialize the Conjugate Gradient Algorithm.
+Repeat
+
+Increment i.
+Step 1: Perform one iteration of the Conjugate
+Gradient algorithm to compute a better guess xi+1,
+so that (cid:3)ri+1(cid:3) < (cid:3)ri(cid:3).
+If (cid:3)ri+1(cid:3) is suﬃciently small then Halt.
+Until (cid:3)ri+1(cid:3) is not much smaller than (cid:3)ri(cid:3).
+Now ri is a certiﬁcate that Ai is “eccentric”.
+Step 2: Compute a better preconditioner Pi+1 from
+Pi, so that Ai+1 is less “eccentric” than Ai.
+Modify xi+1 to match the new preconditioner.
+
+Forever
+
+Algorithm 2: A single iteration of our variant of the Con-
+jugate Gradient algorithm (which is Step 1 in Algorithm 1).
+Initially xi is the current guess for the solution, ri is the cur-
+rent residual, and di is the current search direction. The new
+vectors are xi+1, ri+1, and di+1 respectively.
+
+(cid:4)
+
+αi = −
+
+dT
+i Ari
+
+(cid:5)
+
+(cid:4)
+
+/
+
+(cid:5)
+
+i A2di
+dT
+(cid:4)
+
+(cid:5)
+
+(cid:4)
+
+(cid:5)
+
+[Equivalently, αi = −
+
+rT
+i Ari
+
+/
+
+dT
+i A2di
+
+by Eq. (C.3)]
+
+xi+1 = xi + αidi
+ri+1 = ri + αiAdi
+(cid:5)
+βi =
+/
+
+rT
+i+1 A2 di
+
+(cid:4)
+
+dT
+i A2di
+(cid:4)
+[Equivalently, βi =
+
+(cid:4)
+
+(cid:5)
+
+di+1 = ri+1 + βidi
+
+E (Ai). The function φ(i) measures the magnitude of the
+residual in the transformed space, i.e., after preconditioning.
+The purpose of ψ(i) is to measure the quality of the cur-
+rent preconditioner, i.e., the extent to which the level sets of
+(cid:3)Aixi − bi(cid:3) = (cid:3)ri(cid:3) are not spherical. The following lemma
+makes this precise. To illustrate this lemma, consider the
+examples shown in Figure 1.
+
+Lemma 2.1. E (X) is uniquely minimized when X is the iden-
+tity matrix, which has E (I) = 1.
+
+This lemma shows that ψ(i) measures the extent to which
+the level sets of (cid:3)ri(cid:3) are not the unit sphere. That is, our
+eccentricity function has the property that it is not invariant
+under scaling, i.e., E (X) (cid:4)= E (cX) for most scalars c (cid:4)= 1. We
+discuss this issue further in Section 7.
+
+3. THE CONJUGATE GRADIENT
+
+ALGORITHM
+
+Step 1 of Algorithm 1 is based on a variant of the Conjugate
+Gradient (CG) algorithm. Algorithm 2 presents pseudocode
+for a single iteration of our variant of CG. Readers familiar
+with CG will notice several diﬀerences between our variant
+and the usual formulation; we discuss these diﬀerences in
+Section 3.1. Readers unfamiliar with CG may learn more
+from the highly readable exposition of Shewchuk [17].
+
+An Iteration: For convenience, let us drop the subscripts
+on Ai and bi. Also, deﬁne the inner product (cid:5) x, y (cid:6) = xTA2y.
+The CG algorithm maintains three vectors: x, r and d. Each
+
+iteration updates x according to the formula
+
+xi+1 = xi + αidi,
+
+where
+
+αi = −
+
+(cid:5) di, ei (cid:6)
+(cid:5) di, di (cid:6) = −
+
+dT
+i Ari
+dT
+i A2di
+
+.
+
+(The value of αi is chosen to minimize φ(i+1), as can be seen
+by Eq. (3.10), although this fact is not used in the proofs.)
+The vectors d0, d1, . . . are called search directions, and they
+are deﬁned by the formula
+
+d0 = r0,
+
+and
+
+di+1 = ri+1 + βidi ∀i ≥ 0,
+
+where
+
+βi = −
+
+(cid:5) ri+1, di (cid:6)
+(cid:5) di, di (cid:6)
+
+.
+
+Eq. (3.1) implies similar equations for the error and residual:
+
+ei+1 = ei + αidi
+ri+1 = ri + αiAdi.
+
+A standard proof of our variant of CG is in Appendix B.
+
+Lemma 3.1. In Algorithm 2, we have
+i Ari = rT
+dT
+i Ari
+rT
+i Ari
+(cid:5) di, di (cid:6)
+
+αi = −
+
+(cid:5) di, di (cid:6) ≤ (cid:5) ri, ri (cid:6).
+
+(3.1)
+
+(3.2)
+
+(3.3)
+
+(3.4)
+
+(3.5)
+
+(3.6)
+
+(3.7)
+
+(3.8)
+
+(3.9)
+
+φ(ri+1)
+φ(ri)
+
+(ri + αiAdi)T(ri + αiAdi)
+
+=
+
+rT
+i+1ri+1
+rT
+i ri
+
+=
+
+= 1 + 2αi
+
+dT
+i Ari
+rT
+i ri
+
++ α2
+
+i
+
+rT
+i ri
+i A2di
+dT
+rT
+i ri
+
+.
+
+(3.10)
+
+By Lemma 3.1, we obtain
+
+= 1 − 2
+
+= 1 −
+
+(cid:4)
+
+rT
+i Ari
+
+(cid:5)2
+
+(cid:5) di, di (cid:6) · rT
+
+i ri
+
+(cid:4)
+
+rT
+i Ari
+
+(cid:5)2
+
+.
+
+(cid:5) di, di (cid:6) · rT
+
+i ri
+
+(cid:4)
+
+rT
+i Ari
+
+(cid:5)2
+
++
+
+(cid:5) di, di (cid:6) · rT
+
+i ri
+
+By Lemma 3.1 again, this is
+(cid:5)2
+
+(cid:4)
+
+≤ 1 −
+
+rT
+i Ari
+
+(cid:5) ri, ri (cid:6) · rT
+
+i ri
+
+= 1 −
+
+(cid:4)
+
+rT
+i Ari
+
+(cid:5)2
+
+rT
+i A2ri · rT
+
+i ri
+
+.
+
+To summarize this computation, Fact 2 in Appendix A
+
+implies that φ indeed decreases, unless ri = 0. That is,
+
+0 ≤
+
+φ(ri+1)
+φ(ri)
+
+< 1.
+
+φ(ri+1)
+
+φ(ri)
+
+(cid:9) 1, then the residual has decreased substantially,
+If
+and we have made progress towards solving the linear sys-
+tem. If φ does not decrease substantially then the following
+inequality holds:
+
+(rT
+i Ari)2
+i A2ri)(rT
+
+(rT
+
+i ri)
+
+(cid:9) 1.
+
+(3.11)
+
+Figure 1: Two examples illustrating the deﬁnition of eccentricity. Any positive deﬁnite matrix A corresponds to an ellipsoid
+for which the principal axes point in the directions of the eigenvectors of A. The ellipsoid for A−1 has its axes in the same
+directions. The length of each axis in the ellipsoid for A−1 equals the corresponding eigenvalue of A, whereas the length of
+that axis in the ellipsoid for A equals the reciprocal of that eigenvalue. The ellipsoid for (A + A−1)/2 is obtained by averaging
+the axis lengths of the ellipsoids for A and A−1; the resulting ellipsoid always contains the unit sphere, and it converges to
+the unit sphere as the eigenvalues of A approach 1. The determinant of (A + A−1)/2 is proportional to the volume of the
+corresponding ellipsoid, which is minimized when the eigenvalues equal 1.
+
+A
+
+A-1
+
+A+A-1
+
+2
+
+Unit Sphere
+
+A
+
+A-1
+
+A+A-1
+
+2
+
+Unit Sphere
+
+(rT
+
+(rT
+i Ari)2
+i A2ri)(rT
+
+In this case, the vector ri is a certiﬁcate of eccentricity. This
+i ri) = 1 if and only if ri is an eigenvector
+is because
+of A. Thus the certiﬁcate of eccentricity proves that A has
+at least two distinct eigenvalues, and hence the level sets of f
+are eccentric (elliptical rather than spherical). When Step 1
+of the algorithm fails to decrease the norm of the residual by
+more than a prescribed amount, we are guaranteed to have
+such a certiﬁcate of eccentricity for use in Step 2.
+
+Informally, the certiﬁcate of eccentricity is a proof of “non-
+sphereness” of the ellipsoid corresponding to Ai, which means
+that it is also a certiﬁcate of “non-unit-sphereness”, the prop-
+erty captured by ψ(i).
+
+3.1 Comparison to Usual CG
+
+There are three main diﬀerences between the our formula-
+
+tion of CG and the usual one.
+
+(1) We use a non-standard potential function for analyzing
+= xTA2x − 2bTAx + bTb.
+
+progress, namely φ(i) = (cid:3)ri(cid:3)2
+
+(2) We use a diﬀerent deﬁnition of conjugacy, namely or-
+
+thogonality relative to A2 rather than A.
+
+(3) Our initial search direction is the residual vector, which
+is not the gradient of our potential function φ(i), but
+is the gradient of the usual CG potential function.
+
+Our choice of this CG variant was not by accident. We
+found that the usual formulation of CG did not produce the
+guarantees needed for our later analysis, namely, the certiﬁ-
+cates of eccentricity in Eq. (3.11). Interestingly, we are not
+aware of previous work ﬁnding such a need to depart from
+the usual formulation of CG.
+
+As mentioned in point (3) above, our search directions are
+not based on the gradient of our potential function φ, but
+instead on the gradient of the usual CG potential function.
+Rather remarkably, we obtain stronger certiﬁcates of eccen-
+tricity by using a mismatched gradient and potential func-
+tion.
+
+4.
+
+IMPROVING THE PRECONDITIONER
+
+Step 2 of our algorithm updates the preconditioner by ap-
+
+plying a rank-1 update. Speciﬁcally, we set
+vvT(cid:5)
+
+Pi+1 = Pi
+
+I + σ
+vTv
+
+(cid:4)
+
+,
+
+where σ > −1 is a scalar and v is a non-zero vector, both to
+be speciﬁed later. The algorithm also sets xi+1 appropriately
+for the new preconditioner. We discuss these changes in detail
+below.
+Choosing v and σ: Note that Ai+1 becomes
+(cid:5)
+.
+
+vvT
+
+vvT
+
+(cid:5)
+
+(cid:4)
+
+(cid:4)
+
+Ai
+
+I + σ
+vTv
+
+I + σ
+vTv
+
+We now analyze how this change aﬀects ψ.
+
+Lemma 4.1. The change in ψ is given by
+
+ψ(i + 1)
+
+ψ(i)
+
+=
+
+E (Ai+1)
+E (Ai)
+
+= (1 + σ)
+
+−1 ·
+
+1 +
+
+vTAi(Ai + I)
+
+−1v
+
+.
+
+(cid:2)
+
+2σ + σ2
+
+vTv
+
+(cid:3)
+
+The change in ψ could be less than or greater than 1, de-
+pending on the choice of σ and v. Ideally the change would
+be less than 1, because this means that the eccentricity de-
+creased. How can we ensure that this happens? Suppose
+that the previous Step 1 produced a certiﬁcate of eccentric-
+ity. Then by Fact 2, we have
+i Airi)2
+i ri) · (rT
+
+i A2
+i ri)2
+i ri) · (rT
+
+1 (cid:10) (cid:8) :=
+
+(rT
+i A2
+
+(rT
+i A4
+
+i ri)
+
+i ri)
+
+(4.1)
+
+(rT
+
+(rT
+
+≥
+
+.
+
+This certiﬁcate will allow us to choose σ and v such that ψ
+decreases signiﬁcantly.
+
+First, deﬁne the scalars
+
+ζ =
+
+vTA(A + I)−1v
+
+vTv
+
+and
+
+σ = −1 +
+
+(4.2)
+
+√
+
+1 − ζ
+√
+
+.
+
+ζ
+
+The eigenvalues of A(A + I)−1 are obviously { λi/(1 + λi) },
+where { λi } are the eigenvalues of A. Since A is positive
+
+deﬁnite, we obtain 0 < ζ < 1, so σ is indeed well-deﬁned.
+For any choice of v, the deﬁnition of σ in Eq. (4.2) is actually
+the value that minimizes
+
+ψ(i+1)
+
+.
+
+ψ(i)
+
+We choose v by considering two cases that result from the
+
+last inequality of Eq. (4.1).
+
+Case 2a:
+
+i ri
+
+i A2
+rT
+rT
+i ri
+
+√
+
+(cid:8).
+
+<
+
+Case 2b:
+
+rT
+i A2
+rT
+i A4
+
+i ri
+i ri
+
+√
+
+(cid:8).
+
+<
+
+In this case, pick v = (Ai + I)ri = Airi + ri.
+
+In this case, pick v = (Ai + I)Airi = A2
+
+i ri + Airi.
+
+Using these deﬁnitions, together with the formula given in
+Lemma 4.1, one may design a variety of policies for deciding
+when Algorithm 1 should perform a Step 2. One possible
+policy is to perform a Step 2 whenever (cid:8) is suﬃciently small,
+say (cid:8) ≤ 2−16. This policy will be assumed for the remainder
+of the paper. As shown in the following lemma, this policy
+ensures that each Step 2 provably decreases ψ by a factor of at
+least (cid:8)1/16. Though this policy is suﬃcient for our asymptotic
+analysis, an actual implementation might beneﬁt from using
+a diﬀerent policy.
+Lemma 4.2. If Step 2 is performed with (cid:8) ≤ 2−16 then the
+following claims hold.
+
+• In Case 2a, ζ < (cid:8)1/4 and 0 < σ <
+
+1/ζ − 1.
+
+(cid:6)
+
+• In Case 2b, 1 − ζ < (cid:8)1/4 and −1 < σ < 0.
+
+• In both cases,
+
+ψ(i+1)
+
+ψ(i)
+
+< 2
+
+1 − ζ < (cid:8)1/16.
+
+√
+
+√
+
+ζ
+
+Choosing xi+1: Modifying the preconditioner changes the
+linear system that is being solved. It might be the case that xi
+is a good guess for Aix = bi but a bad guess for Ai+1x = bi+1.
+Therefore, we specify a new value for xi+1 as follows:
+vvT(cid:5)
+
+vvT(cid:5)−1 · xi =
+
+I − σ/(1+σ)
+
+xi+1 =
+
+· xi.
+
+(cid:4)
+
+(cid:4)
+
+I + σ
+vTv
+
+vTv
+
+Lemma 4.3. The choice of xi+1 aﬀects φ as follows:
+
+φ(i + 1)
+
+φ(i)
+
+≤
+
+(cid:7)(cid:6)
+
+1/ζ
+
+1
+
+(in Case 2a)
+(in Case 2b).
+
+5. RUNTIME ANALYSIS
+
+In this section, we analyze the number of iterations needed
+to reduce the residual to a fraction ν of its original magnitude.
+Recall that there are two residuals under consideration.
+i M Pixi − P T
+i d
+
+Transformed residual:
+Untransformed residual:
+
+ri = P T
+r = M (Pixi) − d
+
+i
+
+As is clear from these expressions, the relationship between
+the transformed and untransformed residuals is r = P −T
+ri.
+Our algorithm seeks to minimize (cid:3)r(cid:3) by performing steps that
+decrease (cid:3)ri(cid:3). Of course, both norms are uniquely minimized
+when r = ri = 0, but when ri is non-zero, a step which
+decreases its norm might actually increase (cid:3)r(cid:3). So to analyze
+the progress in decreasing (cid:3)r(cid:3), one must consider P −T
+, the
+matrix which relates r and ri. Speciﬁcally, we have (cid:3)r(cid:3) ≤
+(cid:8)
+(cid:8)P −T
+
+i
+Recall that the preconditioner matrix Pi is modiﬁed only
+during Step 2. When Step 2 modiﬁes the preconditioner,
+this impedes the eﬀort to reduce the untransformed residual
+in two ways.
+
+(cid:8)
+(cid:8) · (cid:3)ri(cid:3).
+
+i
+
+Issue 1: The norm of the transformed residual might in-
+
+crease, as Lemma 4.3 suggests.
+
+Issue 2: The norm of P −T
+
+i might increase. In other words,
+Step 2 might increase the upper bound on the gap be-
+tween the transformed residual and the untransformed
+residual.
+
+To analyze these issues, let (cid:8)i, σi and ζi denote their re-
+spective values during the ith iteration of Step 2. First we
+deal with Issue 1. Lemma 4.3 implies that the total amount
+by which the norm of the transformed residual increases is
+1/ζ. This quantity is bounded in the
+at most
+following lemma.
+
+i in Case 2a
+
+(cid:6)
+
+(cid:9)
+
+Lemma 5.1.
+
+i in Case 2a
+
+1/ζ < E (M )2.
+
+(cid:9)
+
+(cid:6)
+
+The second issue is dealt with by the following lemma.
+
+Lemma 5.2. For any k, we have
+
+(cid:8)
+(cid:8)P −T
+
+k
+
+(cid:8)
+(cid:8) < E (M )2.
+
+From our analysis of issues 1 and 2, we ﬁnd that Step 1
+must decrease the norm of the residual by an additional factor
+of at most E (M )4. This discussion yields the following result.
+
+Theorem 5.3. The number of iterations required by Algo-
+rithm 1 to decrease the untransformed residual by a factor of
+ν is at most O
+
+log(1/ν) + log E (M )
+
+(cid:4)
+
+(cid:5)
+
+.
+
+Proof. Since each Step 1 decreases (cid:3)ri(cid:3) by a constant fac-
+tor, we obtain the following upper bound on the number of
+times that our algorithm needs to perform Step 1:
+
+(cid:4)
+
+O
+
+log(1/ν) + log E (M )
+
+(cid:4)
+
+(cid:5)
+
+.
+
+(cid:5)
+
+Step 2 is performed at most O
+
+log E (M )
+
+times.
+
+(cid:2)
+
+6. COMPARISON OF ASYMPTOTICS
+
+As mentioned in Section 1, the best known asymptotic
+analysis for a direct solver is O(n2+ω) where ω > 0.37. The
+asymptotic analysis of CG does not admit such a simple
+closed form, and instead requires ﬁnding low-degree poly-
+nomials f such that f (λi) is small for all the eigenvalues
+λi of M . In particular, most analyses rely on properties of
+the Chebyshev polynomials. One interesting aspect of our
+present work is that it provides a self-contained analysis for
+a variant of CG, without resorting to arguments based on
+polynomials.
+
+Several useful bounds on CG are given in the article of
+Axelsson and Lindskog [1]. For example, the number of iter-
+ations required to decrease the error by a factor of ν can be
+bounded by the following expressions.
+
+(cid:4) (cid:6)
+
+O
+
+(cid:5)
+
+λn/λ1 · log(1/ν)
+
+(cid:3)
+
+λn−b
+
+λ1
+
+· log(1/ν) + b
+
+, for any b
+(cid:5)
+
+(cid:3)
+
+(cid:9)a
+
+λn
+λi
+
+i=1
+
+(cid:2)(cid:10)
+
+O
+(cid:4)
+
+·
+
+log(1/ν) + log
+
++ a
+
+, for any a (6.3)
+
+(6.1)
+
+(6.2)
+
+(cid:2)(cid:10)
+
+O
+
+λn
+
+λa+1
+
+The classical bound that is used in most contexts is Eq. (6.1).
+Other extensions and combinations of these bounds are pos-
+sible. Additionally, it is known that CG ﬁnds an exact so-
+lution in at most n iterations, as mentioned in Appendix B,
+although this bound frequently fails to hold in practice be-
+cause of the use of inexact arithmetic.
+
+The bound of Algorithm 1 stated in Theorem 5.3 is similar
+to the bound on CG given by Eq. (6.3), in the special case
+a = n − 1. To see this, suppose for example that the matrix
+λn
+is normalized so that λn = 1. Then we have log
+λi =
+Θ(log E (M )).
+
+(cid:9)a
+
+i=1
+
+We remark that Theorem 5.3 remains valid even if Algo-
+rithm 1 is simpliﬁed to use ordinary Steepest Descent iter-
+ations instead of CG in Step 1. The standard bound [17]
+(cid:5)
+on Steepest Descent is that it requires O
+(λn/λ1) · log(1/ν)
+iterations to decrease the error by ν. The iterative precon-
+ditioner updates accelerate the Steepest Descent algorithm
+such that its performance is comparable to CG, i.e., the
+bound of Eq. (6.3) with a = n − 1.
+
+(cid:4)
+
+6.1 Iteration Cost
+
+The preceding discussion considers only iteration counts
+and neglects the computational cost of each iteration. Each
+iteration of CG involves only O(1) matrix-vector products,
+and hence requires O(m) time, where m is the number of
+non-zero entries of M . If one also uses a preconditioner, the
+added overhead is the cost of multiplying a vector by the
+preconditioner.
+
+The cost of using the preconditioners produced by our al-
+gorithm depends on how they are represented. The simplest
+option is to store P explicitly; it will typically have Θ(n2)
+non-zero entries after the ﬁrst rank-1 update. This option
+only seems attractive if the given matrix M is dense, i.e.,
+m = Θ(n2).
+In this case, our preconditioner P does not
+substantially increase the cost of matrix-vector products.
+
+The alternative option is to store the accumulated rank-1
+updates that constitute P as separate vectors. A matrix-
+vector product P · w is then computed by considering the
+individual updates: each product (I + γvvT)w can clearly
+be computed in O(n) time. A reﬁnement of this approach,
+which has identical asymptotics but better performance in
+practice, is the WY factored form. This reﬁnement stores
+the updates in two rectangular matrices, and is frequently
+used in the Householder QR algorithm [11].
+
+When P is represented by separate rank-1 updates or in
+WY form, the cost of multiplying a vector by Ai becomes
+O(m + pn), where p is the number of preconditioner updates
+that occurred by the ith iteration. Because p is never more
+than log(E (M )O(1)), we obtain the following runtime bounds
+on Algorithm 1.
+
+(cid:2)
+
+m + n log(E (M )
+)
+(cid:11)
+(cid:14)
+matrix-vector product cost
+
+(cid:12)(cid:13)
+
+O(1)
+
+(cid:2)
+
+·
+
+(cid:4)
+
+log
+(cid:11)
+
+(cid:2)(cid:4)
+
+(1/ν)E (M )
+
+O(1)
+
+(cid:12)(cid:13)
+
++ log
+
+(cid:11)
+
+E (M )
+
+(cid:12)(cid:13)
+
+O(1)
+
+# of Step 1’s
+
+# of Step 2’s
+
+(cid:4)
+
+(cid:3)
+
+(cid:5)
+
+(cid:14)
+
+(cid:5)(cid:3)
+
+= O
+
+m + n log E (M )
+
+·
+
+log(1/ν) + log E (M )
+
+(cid:3)
+
+(cid:5)
+
+(cid:14)
+
+(cid:5)
+
+(cid:4)
+
+6.2 Multiple Related Systems
+
+Let us now consider the performance of Algorithm 1 in
+a scenario where one must solve k instances of the problem
+M x = d for diﬀerent d but the same M . Direct solvers are
+well suited for such problems because a factorization of M
+can easily be used to solve all k systems rapidly. In contrast,
+CG is not able to reuse work performed when solving with a
+prior d vector. Algorithm 1 is able to reuse all the work done
+in Step 2, giving it some of the advantages of a direct solver
+in this setting. We now present a concrete example where
+
+this leads to an asymptotic improvement in running time.
+
+Let M be a dense matrix such that its ith eigenvalue is
+, where α > 0 is a ﬁxed parameter. The eccentricity
+
+2−2α−i
+of M is asymptotically
+
+2α−i
+
+2
+
+= 2
+
+2α (cid:16) n
+
+i=1 2−i
+
+Θ(2α ).
+
+= 2
+
+n(cid:15)
+
+i=1
+
+The bounds on the number of iterations required by CG with
+this matrix are all large.
+
+(cid:6)
+
+Eq. (6.1):
+
+λn/λ1 is at least 22α−3
+
+.
+
+(cid:6)
+
+(cid:9)a
+
+Eq. (6.2): If b < n − 1, then
+
+λn−b/λ1 is at least 22α−3
+
+. If
+
+b = n − 1, then the bound is O(log(1/ν) + n).
+
+Eq. (6.3): If a > 0 then log
+
+i=1
+
+λn
+λi
+
+> log λn
+λ1
+
+> 2α−2.
+
+Take α = (ω/2) log n, where 2 + ω is the exponent in the
+asymptotic analysis of direct solvers mentioned in Section 1.
+We obtain that log E (M ) = Θ(nω/2), and all stated bounds
+on CG are also Ω(nω/2). Let k = nω/2 and ν = n−Θ(1). Then
+the running times for the solvers are:
+
+Direct Solvers: O
+CG: O
+Algorithm 1: O
+
+(cid:4)
+(cid:4)
+(cid:4)
+
+(cid:5)
+
+n2+ω + k · n2
+= O
+k · (n2+ω/2 + log 1/ν)
+= O
+(cid:5)
+n2 · (log E (M ) + k · log 1/ν)
+
+(cid:4)
+
+(cid:5)
+
+(cid:4)
+n2+ω
+(cid:5)
+
+(cid:4)
+
+(cid:5)
+
+= O
+
+n2+ω/2
+
+(cid:5)
+
+n2+ω
+
+This analysis illustrates a class of problems where Algo-
+rithm 1’s bound is an improvement on the bounds for CG
+and direct solvers.
+
+7. DISCUSSION
+
+There are many interesting questions left open by our work.
+
+• Our deﬁnition of eccentricity is not scale-invariant, as
+noted in Section 2.1. This is undesirable for several
+reasons. Intuitively, this causes the algorithm to favor
+wasteful updates which push the eigenvalues towards 1,
+rather than useful updates which push the eigenvalues
+closer together. A natural way to resolve this problem
+would be to run the algorithm on the rescaled matrix
+M/
+rather than M . Is there a way to esti-
+mate
+(the geometric mean of the eigenvalues)
+more rapidly than computing det M ? Alternatively, is
+there an alternative approach to updating the precondi-
+tioner which does not aﬀect the scaling (i.e., det Pi = 1
+for all i)?
+
+i=1 λ1/n
+(cid:9)n
+i=1 λ1/n
+
+(cid:9)n
+
+i
+
+i
+
+• Suppose one needs to solve two systems Ax = a and
+By = b, where A ≈ B.
+Intuitively, a good precon-
+ditioner for A should be a good preconditioner for B.
+That is, if E (P TAP ) is small then E (P TBP ) should
+be also. Can this be made rigorous? Does this lead
+to interesting analyses of interior point LP solvers or
+quasi-Newton algorithms?
+
+• Can Step 1 of Algorithm 1 be modiﬁed to use the stan-
+dard conjugate gradient algorithm, rather than our vari-
+ant? For example, can the inner product (cid:5)x, y(cid:6) = xTAy
+be used instead of xTA2y?
+
+• Can the preconditioner updates be modiﬁed so that
+they maintain conjugacy? In other words, is it nec-
+essary to reinitialize CG after each Step 2?
+
+• Do the iteratively updated preconditioners have attrac-
+
+tive numerical stability properties?
+
+• Can Algorithm 1 be extended to handle rank-deﬁcient
+
+matrices?
+
+We are cautiously optimistic that progress on these ques-
+tions could positively impact solving linear systems in prac-
+tice.
+
+Acknowledgements
+The authors thank Alan Edelman, Steven G. Johnson, Daniel
+Spielman, Gilbert Strang and Shang-Hua Teng for helpful
+discussions. The second author was supported by a Natural
+Sciences and Engineering Research Council of Canada PGS
+Scholarship, by NSF contract CCF-0515221 and by ONR
+grant N00014-05-1-0148.
+
+8. REFERENCES
+[1] O. Axelsson and G. Lindskog. On the rate of
+
+convergence of the preconditioned conjugate gradient
+method. Numerische Mathematik, 48:499–523, 1986.
+
+[2] R. Barrett, M. W. Berry, T. F. Chan, J. Demmel,
+
+J. Donato, J. Dongarra, V. Eijkhout, R. Pozo,
+C. Romine, and H. van der Vorst. Templates for the
+Solution of Linear Systems: Building Blocks for
+Iterative Methods. SIAM, 1987.
+
+[3] M. Benzi. Preconditioning Techniques for Large Linear
+Systems: A Survey. Journal of Computational Physics,
+182:418–477, 2002.
+
+[4] C. G. Broyden. The convergence of a class of
+
+double-rank minimization algorithms. J. Inst. Math.
+Appl., 6:222–231, 1970.
+
+[5] R. H. Byrd, P. Lu, J. Nocedal, and C. Zhu. A limited
+
+memory algorithm for bound constrained optimization.
+SIAM Journal on Scientiﬁc Computing, 16(5), 1995.
+
+[6] W. C. Davidon. Variable metric method for
+
+minimization. SIAM J. Optimization, 1:1–17, 1991.
+
+[7] T. A. Davis. Direct Methods for Sparse Linear Systems.
+
+SIAM, 2006.
+
+[8] J. Dunagan and S. Vempala. A simple polynomial-time
+
+rescaling algorithm for solving linear programs. In
+Proceedings of the 36th Annual ACM Symposium on
+Theory of Computing (STOC), pages 315–320, June
+2004.
+
+[9] R. Fedkiw, J. Stam, and H. W. Jensen. Visual
+
+simulation of smoke. In E. Fiume, editor, SIGGRAPH
+2001, Computer Graphics Proceedings, pages 15–22.
+ACM Press / ACM SIGGRAPH, 2001.
+
+[10] R. Fletcher and M. J. D. Powell. A rapidly convergent
+
+descent method for minimization. Computer Journal,
+6:163–168, 1963.
+
+[11] G. H. Golub and C. F. Van Loan. Matrix
+
+Computations. SIAM, 1997.
+
+[12] K. D. Gremban. Combinatorial Preconditioners for
+
+Sparse, Symmetric, Diagonally Dominant Linear
+Systems. PhD thesis, Carnegie Mellon University, 1996.
+
+[13] A. Joshi. Topics in Optimization and Sparse Linear
+
+Systems. PhD thesis, University of Illinois at
+Urbana-Champaign, 1997.
+
+[14] J. Kelner and D. Spielman. A randomized
+
+polynomial-time simplex algorithm for linear
+
+programming. In Proceedings of the 38th Annual ACM
+Symposium on Theory of Computing (STOC), pages
+51–60, May 2006.
+
+[15] J. Nocedal and S. Wright. Numerical Optimization.
+
+Springer, second edition, 2006.
+
+[16] R. Rifkin, G. Yeo, and T. Poggio. Regularized least
+
+squares classiﬁcation. In Suykens, Horvath, Basu,
+Micchelli, and Vandewalle, editors, Advances in
+Learning Theory: Methods, Model and Applications,
+NATO Science Series III: Computer and Systems
+Sciences, volume 190, pages 131–153. IOS Press, 2003.
+
+[17] J. R. Shewchuk. An introduction to the conjugate
+gradient method without the agonizing pain, Aug.
+1994. Manuscript.
+
+[18] D. A. Spielman and S.-H. Teng. Nearly-linear time
+
+algorithms for graph partitioning, graph sparsiﬁcation,
+and solving linear systems. In Proceedings of the 36th
+Annual ACM Symposium on Theory of Computing
+(STOC), pages 81–90, June 2004.
+
+[19] L. N. Trefethen and D. Bau, III. Numerical Linear
+
+Algebra. SIAM, 1997.
+
+[20] P. Wesseling. An Introduction to Multigrid Methods.
+
+John Wiley and Sons Ltd., 1992.
+
+APPENDIX
+
+A. GENERAL FACTS
+
+Fact 1. Let M be a matrix. The matrix M
+(cid:4)
+called a rank-1 update of M . The matrix
+several useful properties.
+
+(cid:4)
+
+(cid:5)
+
+I + σ
+vTv
+
+vvT
+(cid:5)
+
+I + σ
+vTv
+
+vvT
+
+is
+has
+
+(cid:4)
+
+• It is symmetric, positive deﬁnite (assuming σ > −1).
+I − σ/(1+σ)
+• Its inverse is
+vTv
+• Its determinant is 1 + σ.
+(cid:8)
+(cid:8) =
+
+• Its norm is
+
+(cid:8)
+(cid:8)I + σ
+vTv
+
+1 + σ (if σ > 0)
+1
+
+(if −1 < σ ≤ 0)
+
+vvT
+
+vvT
+
+(cid:7)
+
+(cid:5)
+
+.
+
+(cid:4)
+
+Proof. The ﬁrst property is trivial. The second property is
+the Sherman-Morrison formula [11]. Let us now consider the
+eigenvalues of
+. The eigenvalue in the direction
+of v is 1 + σ, and the eigenvalues are all 1 in the subspace
+orthogonal to v. This implies the third and fourth properties.
+(cid:2)
+
+I + σ
+vTv
+
+vvT
+
+(cid:5)
+
+Fact 2. Let X be positive deﬁnite and let w be a non-zero
+vector.
+
+0 <
+
+(wTXw)2
+
+(wTw)(wTX 2w)
+
+≤ 1.
+
+(A.1)
+
+Furthermore,
+
+(wTX 2w)2
+
+≤
+
+(wTXw)2
+
+(wTw)(wTX 4w)
+
+(wTw)(wTX 2w)
+
+.
+
+(A.2)
+
+Proof. Recall H¨older’s inequality, which states that, for any
+p, q ∈ R+ with 1
+p + 1
+(cid:17)
+(cid:17)
+(cid:17) ≤
+
+q = 1,
+(cid:2) (cid:18)
+
+(cid:3)1/p (cid:2) (cid:18)
+
+(cid:3)1/q
+
+(cid:18)
+
+|xi|p
+
+|yi|q
+
+xiyi
+
+(cid:17)
+(cid:17)
+(cid:17)
+
+.
+
+(A.3)
+
+i
+
+i
+
+i
+
+Let {v1, . . . , vn} be orthonormal eigenvectors of X and
+let λi be the eigenvalue associated with vi. We may write
+
+(cid:16)
+
+i civi. Then, for any j, we have wTX j w =
+
+i λj
+w =
+i .
+This quantity is positive for all j, proving the lower bound in
+Eq. (A.1). Apply H¨older’s inequality with xi = ci, yi = ciλi,
+and p = q = 2 (i.e., Cauchy-Schwarz). Squaring Eq. (A.3)
+(cid:5)2 ≤ (wTw)(wTX 2w), establishing the upper
+yields
+bound of Eq. (A.1).
+
+wTXw
+
+i c2
+
+(cid:4)
+
+To prove Eq. (A.2), we show the following upper bound.
+
+(cid:16)
+
+Claim B.3.
+
+1 ≥
+
+=
+
+(wTX 2w)2
+
+(wTw)(wTX 4w)
+(wTX 2w)3
+
+(wTX 4w)(wTXw)2
+
+.
+
+· (wTw)(wTX 2w)
+
+(wTXw)2
+
+Apply H¨older’s inequality with p = 3, q = 3/2, xi = c2/3
+and yi = c4/3
+. Taking the cube of Eq. (A.3) yields
+(cid:3)2
+
+i λ2/3
+(cid:2) (cid:18)
+
+(cid:3) (cid:2) (cid:18)
+
+(cid:2) (cid:18)
+
+(cid:3)3
+
+i
+
+i λ4/3
+
+i
+
+,
+
+c2
+i λ2
+i
+
+≤
+
+c2
+i λ4
+i
+
+c2
+i λi
+
+i
+
+i
+
+i
+
+=⇒ (wTX 2w)
+
+3 ≤ (wTX 4w) (wTXw)
+
+2,
+
+which is our desired upper bound.
+
+(cid:2)
+
+B. PROOF OF CG VARIANT
+
+In this appendix we show that the inner loop of Algorithm 2
+is indeed a variant of CG. The deﬁning criteria of a CG algo-
+rithm are: (1) the search directions are conjugate (orthogo-
+nal relative to the speciﬁed inner product), and (2) the error
+at the ith step is conjugate to the subspace spanned by the
+previous search directions. (Note that these criteria imply
+convergence of the CG algorithm in at most n iterations.)
+We formalize these criteria with the following predicates.
+
+D(i) :
+E(i) :
+
+(cid:5) dj, di (cid:6) = 0 ∀ j < i
+(cid:5) dj, ei (cid:6) = 0 ∀ j < i
+
+Both are trivial for i = 0. Assuming both are true for i, we
+will inductively prove them for i + 1.
+
+Claim B.1. E(i + 1) is true.
+
+Proof. For j = i, we have
+
+(cid:5) di, ei+1 (cid:6) = (cid:5) di, ei (cid:6) −
+
+(cid:5) di, di (cid:6) = 0
+
+(cid:5) di, ei (cid:6)
+(cid:5) di, di (cid:6)
+
+directly from Eq. (3.5) and Eq. (3.2). For j < i, we have
+
+(cid:5) dj, ei+1 (cid:6) = (cid:5) dj, ei (cid:6)
+(cid:11)
+(cid:14)
+=0 by E(i)
+
+(cid:12)(cid:13)
+
++ αi (cid:5) dj , di (cid:6)
+(cid:11)
+(cid:14)
+=0 by D(i)
+
+(cid:12)(cid:13)
+
+= 0.
+
+Claim B.2. rT
+
+j Ark = 0 for all j < k ≤ i + 1.
+
+Proof. By Eq. (3.3), if 0 < j ≤ k, we have
+
+(cid:5) dj, ek (cid:6) = (cid:5) rj , ek (cid:6) + βj−1 (cid:5) dj−1, ek (cid:6)
+(cid:11)
+(cid:14)
+=0 by E(k)
+
+(cid:12)(cid:13)
+
+= (cid:5) rj , ek (cid:6),
+
+(B.1)
+
+and similarly if j = 0. By our assumption that j < k, E(k)
+implies that 0 = (cid:5) dj , ek (cid:6) = (cid:5) rj, ek (cid:6). Expanding (cid:5) rj, ek (cid:6) as
+rT
+j A2ek and using rk = Aek yields the desired result, rT
+j Ark =
+(cid:2)
+0.
+
+(cid:5) ri+1, dj (cid:6) =
+
+⎧
+⎪⎨
+
+⎪⎩
+
+0
+rT
+i+1Ari+1/αi
+−rT
+
+i+1Ari+1/αi+1
+
+if i > j
+if i = j
+if i = j − 1
+
+Proof. For arbitrary i and j we have
+
+(cid:5) ri+1, dj (cid:6) =
+
+rT
+i+1Arj+1 − rT
+
+i+1Arj
+
+/αj ;
+
+(cid:4)
+
+(cid:5)
+
+this follows from Eq. (3.6) by multiplying by rT
+i+1A and rear-
+ranging. Claim B.2 shows that the terms on the right-hand
+side are zero in accordance with the statement of the claim.
+(cid:2)
+
+Claim B.4. D(i + 1) is true.
+
+Proof. For j = i, we have
+
+(cid:5) di, di+1 (cid:6) = (cid:5) di, ri+1 (cid:6) −
+
+(cid:5) di, di (cid:6) = 0
+
+(cid:5) ri+1, di (cid:6)
+(cid:5) di, di (cid:6)
+
+directly from Eq. (3.3) and Eq. (3.4). Now for j < i, we have
+
+(cid:5) dj, di+1 (cid:6) = (cid:5) dj , ri+1 (cid:6)
+(cid:14)
+
+(cid:12)(cid:13)
+
+(cid:11)
+
+=0 by Claim B.3
+
++ βi (cid:5) dj, di (cid:6)
+(cid:11)
+(cid:14)
+=0 by D(i)
+
+(cid:12)(cid:13)
+
+= 0.
+
+(cid:2)
+
+C. PROOFS OF LEMMAS
+Proof (of Lemma 2.1). For any matrix X, let λj(X) denote
+the jth eigenvalue of X. If X is positive semi-deﬁnite, then
+λj(X 1/2+X −1/2) =
+λj(X). Clearly x+1/x ≥
+2 whenever x > 0, and equality holds iﬀ x = 1; this follows
+from 0 ≤ (x − 1)2 = x2 − 2x + 1. Thus we obtain
+
+λj(X) + 1/
+
+(cid:6)
+
+(cid:6)
+
+det
+
+(A1/2
+
+i + A−1/2
+
+i
+
+(cid:3)
+)/2
+
+=
+
+n(cid:15)
+
+(cid:2)
+
+λj
+
+A1/2
+
+i + A−1/2
+
+i
+
+/2
+
+(cid:3)
+
+j=1
+
+(cid:6)
+
+(cid:24)
+
+(cid:3)
+
+λj (Ai) + 1/
+
+λj(Ai)
+
+/2
+
+≥ 1.
+
+(cid:23)
+
+n(cid:15)
+
+(cid:2)(cid:6)
+
+j=1
+
+(cid:2)
+
+=
+
+Furthermore, equality holds iﬀ λj(Ai) = 1. But the unique
+matrix with all eigenvalues equal to 1 is the identity matrix,
+(cid:2)
+so the lemma is proven.
+
+Lemma C.1. (cid:5) di, ri+1 (cid:6) + βi(cid:5) di, di (cid:6) = 0.
+
+Proof. The following calculations prove the lemma.
+
+(cid:2)
+
+βi = −
+
+(cid:5) ri+1, di (cid:6)
+(cid:5) di, di (cid:6) = −
+
+rT
+i+1Ari+1
+αi(cid:5) di, di (cid:6)
+
+(C.1)
+
+where the second equality follows from Claim B.3.
+
+(cid:5) di, ri+1 (cid:6) + βi(cid:5) di, di (cid:6)
+rT
+i+1Ari+1
+
+= (cid:5) di, ri+1 (cid:6) −
+
+,
+
+αi
+
+by the second expression for βi in Eq. (C.1),
+
+(cid:2)
+
+=
+
+(cid:5) di, ri (cid:6) + αi(cid:5) di, Adi (cid:6)
+(cid:2)
+
+(cid:3)
+
+−
+
+rT
+i Ari + 2αi(cid:5) di, ri (cid:6) + α2
+
+i dT
+
+i A3di
+
+/ αi,
+
+(cid:3)
+
+by Eq. (3.6),
+
+Thus,
+
+(cid:2)
+
+(cid:2)
+
+= −
+
+rT
+i Ari/αi + (cid:5) di, ri (cid:6)
+
+= −
+
+rT
+i Ari/αi − rT
+
+i Ari/αi
+
+= 0,
+
+(cid:3)
+
+(cid:3)
+
+by Claim B.3.
+
+(cid:2)
+
+det
+
+B1/2
+
+(cid:3)
+
++ B−1/2
+(cid:3)
+(cid:2)
+
+= det
+
+B + I
+
+(cid:2)
+
+· det
+(cid:2)
+
+(cid:3)
+
+A1/2
+
+(I + γvvT
+
+)
+
+(cid:3)−1
+
+(cid:3)
+
+(cid:2)
+
+= det
+
+B + I
+
+· det
+
+(I + γvvT
+
+)
+
+−1A−1/2
+
+(cid:2)
+
+(cid:2)
+
+Proof (of Lemma 3.1). From Eq. (B.1), we have
+
+= det
+
+(I + γvvT
+
+)A1/2
+
++ (I + γvvT
+
+)
+
+−1A−1/2
+
+.
+
+(cid:3)
+
+(cid:2)
+
+dT
+i Ari = dT
+
+i A2ei = (cid:5) di, ei (cid:6) = (cid:5) ri, ei (cid:6) = rT
+
+i Ari.
+
+(C.2)
+
+This leads to the desired expression for αi.
+
+αi = −
+
+rT
+i Ari
+(cid:5) di, di (cid:6)
+
+(C.3)
+
+For βi, we obtain
+
+βi = −
+
+(cid:5) ri+1, di (cid:6)
+(cid:5) di, di (cid:6) = −
+
+rT
+i+1Ari+1
+αi(cid:5) di, di (cid:6) =
+
+rT
+i+1Ari+1
+rT
+i Ari
+
+,
+
+(C.4)
+
+as in the derivation of Eq. (C.1), and also using Eq. (C.3).
+
+By Eq. (3.3), we have di = ri + βi−1di−1, so
+
+(cid:5) di, di (cid:6) = (cid:5) ri, ri (cid:6) + 2βi−1(cid:5) di−1, ri (cid:6) + β2
+
+i−1(cid:5) di−1, di−1 (cid:6).
+
+Therefore it suﬃces to show that
+
+2βi−1(cid:5) di−1, ri (cid:6) + β2
+
+i−1(cid:5) di−1, di−1 (cid:6) ≤ 0.
+
+This follows straightforwardly:
+
+Proof (of Lemma 4.1). For convenience, we drop i sub-
+scripts, letting A denote Ai and r denote ri. By Lemma C.2,
+we have
+
+E (i + 1)
+
+E (i)
+
+(cid:2)(cid:4)
+
+(cid:2)
+
+(cid:4)
+
+=
+
+=
+
+det
+
+I + σ
+vTv
+
+vvT
+
+(cid:5)
+
+(cid:4)
+
+A1/2 +
+(cid:4)
+
+I + σ
+vTv
+(cid:5)
+A1/2 + A−1/2
+
+det
+
+(cid:5)(cid:3)−1
+
+(cid:2)(cid:4)
+
+det
+
+I + σ
+vTv
+
+vvT
+
+· det
+
+I + σ
+vTv
+
+vvT
+
+(cid:5)−1A−1/2
+
+vvT
+
+(cid:3)
+
+(cid:2)
+
+(cid:6)
+
+= (1 + σ)
+
+= (1 + σ)
+
+(cid:2)
+
+−1 · det
+−1 ·
+
+det
+
+I + 2σ+σ2
+vTv
+(cid:2)
+
+det(A + I)
+
+I + 2σ+σ2
+vTv
+
+vvTA(A + I)
+
+−1
+
+A(A + I)−1vvT
+
+A(A + I)−1
+
+(cid:6)
+
+(cid:3)
+
+(cid:3)
+
+= (1 + σ)
+
+−1 ·
+
+1 + 2σ+σ2
+vTv
+
+vTA(A + I)
+
+−1v
+
+,
+
+(cid:3)
+
+(cid:5)2A + I
+
+(cid:3)
+
+2βi−1(cid:5) di−1, ri (cid:6) + β2
+
+i−1(cid:5) di−1, di−1 (cid:6)
+
+(cid:2)
+
+= 2βi−1
+
+(cid:5) di−1, ri (cid:6) + βi−1(cid:5) di−1, di−1 (cid:6)
+
+(cid:3)
+
+by Fact 1.
+
+i−1(cid:5) di−1, di−1 (cid:6)
+i−1(cid:5) di−1, di−1 (cid:6)
+
+− β2
+= −β2
+≤ 0.
+
+(by Lemma C.1)
+
+Thus the proof is complete.
+
+Lemma C.2. Let B = (I + γvvT) A (I + γvvT). Then
+
+(cid:2)
+
+det
+
+B1/2
+
+(cid:3)
+
++ B−1/2
+(cid:2)
+
+= det
+
+(I + γvvT
+
+)A1/2
+
++ (I + γvvT
+
+)
+
+−1A−1/2
+
+.
+
+(cid:3)
+
+Proof (of Lemma 4.2). Again, we drop i subscripts, letting
+A denote Ai and r denote ri. By Lemma 4.1, we wish to
+analyze
+
+(cid:2)
+
+ψ(i + 1)
+
+ψ(i)
+
+= (1 + σ)
+
+−1 ·
+
+1 +
+
+vTA(A + I)
+
+−1v
+
+(cid:2)
+
+2σ + σ2
+
+vTv
+
+1 + (2σ + σ2)ζ
+
+1 + σ
+(cid:4)
+− 1 + 1−ζ
+ζ
+√
+
+(cid:5)
+
+ζ
+
+1 +
+
+=
+
+=
+
+1−ζ
+√
+
+ζ
+
+(cid:6)
+
+(cid:6)
+
+= 2
+
+ζ
+
+1 − ζ,
+
+(C.6)
+
+by Eq. (4.2).
+
+Proof. The proof uses only the fact that the determinant
+is a homomorphism. First, note that
+
+(cid:2)
+
+(cid:3)
+
+(cid:2)
+
+(cid:3)
+
+det
+
+B1/2
+
++ B−1/2
+
+= det
+
+B + I
+
+· det
+
+(cid:2)
+
+(cid:3)−1
+
+.
+
+B1/2
+
+Case 2a: In this case, we set v = (A + I)r, implying that
+
+ζ =
+
+vTA(A + I)−1v
+
+vTv
+
+=
+
+rTA(A + I)r
+rT(A + I)2r
+
+.
+
+But
+
+(cid:2)
+
+(cid:3)
+
+det
+
+B1/2
+
+(cid:3)1/2
+
+det B
+
+(cid:2)
+
+(cid:2)
+
+(cid:2)
+
+=
+
+=
+
+=
+
+det A · det(I + γvvT
+(cid:3)
+
+(cid:2)
+
+2
+
+)
+
+= det
+
+A1/2
+
+(I + γvvT
+
+)
+
+.
+
+det(I + γvvT
+
+) · det A · det(I + γvvT
+
+)
+
+(cid:3)1/2
+
+by Eq. (A.1).
+
+The condition of Case 2a is
+
+rTA2r < (cid:8)1/2 · rTr
+
+√
+
+(cid:3)1/2
+
+=⇒ rTAr ≤
+
+rTr · rTA2r < (cid:8)1/4 · rTr,
+
+Claim C.3. Assuming the hypothesis of Case 2a and that
+(cid:8) ≤ 2−4, we have ζ < (cid:8)1/4 and
+
+< 2(cid:8)1/8.
+
+ψ(i+1)
+
+ψ(i)
+
+(cid:2)
+
+(cid:3)
+
+(C.5)
+
+(C.7)
+
+(C.8)
+
+Proof (of Lemma 5.1). We have
+
+E (M ) ≥
+
+(cid:15)
+
+i
+
+√
+
+1
+√
+1 − ζi
+
+,
+
+ζi
+
+2
+
+(C.11)
+
+from Lemma 2.1 and Lemma 4.2,
+(cid:15)
+
+>
+
+i in Case 2a
+
+√
+
+√
+
+1
+√
+
+,
+
+ζi
+
+2
+
+√
+
+1 − ζi < 1 and 2
+
+since
+and, by Lemma 4.2, ζi < (cid:8)1/4
+√
+2
+
+. Consequently,
+
+ζi < ζ 1/4
+
+ζi
+
+i
+
+i
+
+1 − ζi < 1. Since (cid:8)i < 2−16
+, we have ζi < 2−4. Thus
+
+E (M ) >
+
+(cid:15)
+
+ζ −1/4
+i
+
+,
+
+i in Case 2a
+
+(C.12)
+
+(cid:2)
+
+which proves the lemma.
+
+Proof (of Lemma 5.2). As in Eq. (C.11), we have
+
+E (M ) ≥
+
+(cid:15)
+
+i
+
+√
+
+1
+√
+1 − ζi
+
+ζi
+
+2
+
+>
+
+(cid:15)
+
+i in Case 2b
+
+√
+
+1
+1 − ζi
+
+.
+
+2
+
+In Case 2b, we have 1 − ζi ≤ (cid:8)1/4 by Lemma 4.2. Since
+(cid:8) ≤ 2−16, it follows that
+
+≥
+
+1
+
+(1−ζi)1/4 . Thus
+
+√
+2
+
+1
+1−ζi
+(cid:15)
+
+E (M )
+
+2 >
+
+1√
+
+.
+
+(C.13)
+
+1 − ζi
+(cid:8)
+(cid:8)
+(cid:8). We may write
+(cid:8)P −1
+
+k
+
+For the (cid:13)2-norm, we have
+
+Pk =
+
+k(cid:15)
+
+(cid:2)
+
+i=1
+k(cid:15)
+
+(cid:2)
+
+i=1
+k(cid:15)
+
+=⇒ P −1
+
+k =
+
+I − σi/(1+σi)
+
+vivT
+i
+
+vT
+i vi
+
+(by Fact 1)
+
+(cid:3)
+
+(cid:8)
+(cid:8)
+(cid:8)P −T
+
+(cid:8)
+(cid:8)
+(cid:8) ≤
+
+k
+
+=⇒
+
+(cid:8)
+(cid:8)
+(cid:8)I − σi/(1+σi)
+
+(cid:8)
+(cid:8)
+(cid:8)
+
+vivT
+i
+
+i in Case 2b
+(cid:8)
+(cid:8) =
+
+(cid:8)
+(cid:8)P −T
+
+k
+
+(cid:3)
+
+I + σi
+vT
+i vi
+
+vivT
+i
+
+vT
+i vi
+
+(cid:2)
+
+1 −
+
+(cid:3)
+
+σi
+
+1 + σi
+
+≤
+
+=
+
+=
+
+<
+
+i=1
+
+(cid:15)
+
+1≤i≤k
+
+i in Case 2b
+
+(cid:15)
+
+1≤i≤k
+
+i in Case 2b
+
+(cid:15)
+
+1≤i≤k
+
+i in Case 2b
+
+(cid:15)
+
+1≤i≤k
+
+i in Case 2b
+
+1
+
+1 + σi
+
+√
+ζi√
+
+1 − ζi
+
+1√
+
+1 − ζi
+
+(by Fact 1)
+
+< E (M )
+
+2,
+
+by Eq. (C.13).
+
+(cid:2)
+
+Proof. First we show that ζ < (cid:8)1/4. By Eq. (C.7), this is
+equivalent to showing:
+
+(cid:4)
+
+(cid:5)
+
+2r
+
+(A + I)
+rTA2r + 2rTAr + rTr
+
+(cid:5)
+
+rTA(A + I)r < (cid:8)1/4
+
+rT
+⇐⇒ rTA2r + rTAr < (cid:8)1/4(cid:4)
+⇐⇒ (1 − (cid:8)1/4
+⇐= (1 − (cid:8)1/4
+
+)rTA2r + (1 − 2(cid:8)1/4
+)(cid:8)1/2rTr + (1 − 2(cid:8)1/4
+
+)rTAr − (cid:8)1/4rTr < 0
+)(cid:8)1/4rTr − (cid:8)1/4rTr < 0
+
+by (cid:8) ≤ 2−4 and Eq. (C.8),
+
+⇐⇒ − (cid:8)3/4 − (cid:8)1/2 < 0,
+
+which holds for all (cid:8) > 0. From Eq. (C.6), we therefore obtain
+ψ(i+1)
+(cid:2)
+
+√
+
+ζ < 2(cid:8)1/8.
+
+< 2
+
+ψ(i)
+
+Recall that σ = −1 +
+
+(cid:6)
+
+2−4, we have ζ < 1/2 and therefore 0 < σ <
+desired.
+
+1/ζ − 1. Since ζ < (cid:8)1/4 and (cid:8) ≤
+1/ζ − 1, as
+
+(cid:6)
+
+Case 2b: In this case, we set v = (A + I)Ar, implying that
+
+ζ =
+
+vTA(A + I)−1v
+
+vTv
+
+=
+
+rTA3(A + I)r
+rTA2(A + I)2r
+
+.
+
+(C.9)
+
+The condition of Case 2b is
+
+rTA2r < (cid:8)1/2 · rTA4r
+
+√
+
+=⇒ rTA3r ≤
+
+rTA2r · rTA4r < (cid:8)1/4 · rTA4r,
+
+(C.10)
+
+by Eq. (A.1).
+
+Claim C.4. Assuming the hypothesis of Case 2b and that (cid:8) ≤
+2−4, we have 1 − ζ < (cid:8)1/4 and
+
+< 2(cid:8)1/8.
+
+ψ(i+1)
+
+ψ(i)
+
+Proof. Using Eq. (C.9) and Eq. (C.10), an argument similar
+to Claim C.3 shows that 1 − ζ < (cid:8)1/4. From Eq. (C.6), we
+(cid:2)
+obtain
+
+1 − ζ < 2(cid:8)1/8.
+
+< 2
+
+ψ(i+1)
+
+√
+
+ψ(i)
+
+(cid:6)
+
+σ = −1 +
+
+Since 1 − ζ < (cid:8)1/4 and (cid:8) ≤ 2−4, we have ζ > 1/2. Since
+1/ζ − 1, it follows that −1 < σ < 0, as desired.
+To conclude the proof of Lemma 4.2, if (cid:8) ≤ 2−16, then from
+Claim C.3 and Claim C.4 we obtain the following bound on
+the decrease in ψ:
+
+ψ(i + 1)
+
+ψ(i)
+
+< 2(cid:8)1/8 ≤ (cid:8)1/16.
+
+Proof (of Lemma 4.3). The new residual becomes
+
+=
+
+(I + σ
+vTv
+
+vvT
+
+)Ai(I + σ
+vTv
+
+vvT
+
+)
+
+(I + σ
+vTv
+
+vvT
+
+−1xi
+
+)
+
+(cid:3)(cid:2)
+
+ri+1 = Ai+1xi+1 − bi+1
+
+(cid:2)
+
+−
+(cid:4)
+
+(cid:2)
+
+=
+
+I + σ
+vTv
+
+Thus (cid:3)ri+1(cid:3) ≤
+
+(cid:3)
+
+)bi
+
+vvT
+(I + σ
+vTv
+(cid:5)
+vvT
+(cid:8)
+(cid:8)I + σ
+vTv
+
+ri.
+
+(cid:7)
+
+(cid:8)
+(cid:8) · (cid:3)ri(cid:3). By Fact 1, we have
+
+vvT
+
+(cid:3)ri+1(cid:3) ≤
+
+(1 + σ) · (cid:3)ri(cid:3) (if σ > 0)
+(cid:3)ri(cid:3)
+
+(if −1 < σ ≤ 0)
+
+By Lemma 4.2, the proof is complete.
+
+(cid:2)
+
+(cid:3)
+
+(cid:2)
+
+

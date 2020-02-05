@@ -1,0 +1,1885 @@
+BrowserShield: Vulnerability-Driven Filtering of Dynamic HTML
+
+Charles Reis∗
+
+John Dunagan†
+
+Helen J. Wang†
+
+Opher Dubrovsky†
+
+Saher Esmeir‡
+
+Abstract
+
+Vulnerability-driven ﬁltering of network data can offer
+a fast and easy-to-deploy alternative or intermediary to
+software patching, as exempliﬁed in Shield [43]. In this
+paper, we take Shield’s vision to a new domain, inspect-
+ing and cleansing not just static content, but also dy-
+namic content. The dynamic content we target is the
+dynamic HTML in web pages, which have become a
+popular vector for attacks. The key challenge in ﬁlter-
+ing dynamic HTML is that it is undecidable to statically
+determine whether an embedded script will exploit the
+browser at run-time. We avoid this undecidability prob-
+lem by rewriting web pages and any embedded scripts
+into safe equivalents, inserting checks so that the ﬁl-
+tering is done at run-time. The rewritten pages con-
+tain logic for recursively applying run-time checks to
+dynamically generated or modiﬁed web content, based
+on known vulnerabilities. We have built and evaluated
+BrowserShield, a system that performs this dynamic in-
+strumentation of embedded scripts, and that admits poli-
+cies for customized run-time actions like vulnerability-
+driven ﬁltering.
+
+1
+
+Introduction
+
+Web browsers have become an important interface be-
+tween users and many electronic services such as infor-
+mation access, personal communications, ofﬁce tasks,
+and e-commerce. The importance of web browsers is ac-
+companied by rich functionality and extensibility, which
+arguably have also contributed to their popularity as a
+vector of attack. During the year 2005, 8 out of 29 criti-
+cal Microsoft security bulletins, corresponding to 19 vul-
+nerabilities, are due to ﬂaws in Internet Explorer (IE) or
+its extensions such as ActiveX controls [1]. There were
+also 6 security bulletins for Firefox [14], corresponding
+to 59 vulnerabilities over the same period of time.
+
+To date, the primary way to defend browser vulnera-
+bilities is through software patching. However, studies
+have shown that the deployment of software patches is
+
+∗University of Washington CS Dept., creis@cs.washington.edu
+†Microsoft, {jdunagan, helenw, opherd}@microsoft.com
+‡Technion CS Dept., esaher@cs.technion.ac.il
+
+often delayed after the patches become available. Ser-
+vices such as Windows Update download patches auto-
+matically, but typically delay enactment if the patch re-
+quires a reboot or application restart. This delay helps
+both home and corporate users to save work and schedule
+downtime. An additional delay in the corporate setting
+is that patches are typically tested prior to deployment,
+to avoid the potentially high costs for recovering from a
+faulty patch [5].
+
+As a result, there is a dangerous time window between
+patch release and patch application during which attack-
+ers often reverse-engineer patches to gain vulnerability
+knowledge and then launch attacks. One study showed
+that a large majority of existing attacks target known vul-
+nerabilities [4].
+
+For vulnerabilities that are exploitable through appli-
+cation level protocols (e.g., HTTP, RPC), previous work,
+Shield [43], addresses the patch deployment problem by
+ﬁltering malicious trafﬁc according to vulnerability sig-
+natures at a ﬁrewall above the transport layer. The vul-
+nerability signatures consist of a vulnerability state ma-
+chine that characterizes all possible message sequences
+that may lead to attacks, along with the message for-
+mats that can trigger the exploitation of the application
+(e.g., an overly long ﬁeld of a message that triggers a
+buffer overrun). The key characteristic of this approach
+is that it cleanses the network data without modifying
+the code of the vulnerable application. This data-driven
+approach makes signature deployment (and removal if
+needed) easier than it is for patches. Vulnerability signa-
+ture deployment can be automatic rather than user-driven
+and use the same deployment model as anti-virus signa-
+tures.
+
+These desirable features of vulnerability-driven ﬁlter-
+ing motivated us to explore its potential for exploit re-
+moval in web pages. The Shield approach is able to ﬁlter
+static HTML pages by treating HTML as another pro-
+tocol layer over HTTP. However, the challenge lies in
+dynamic HTML, where pages can be dynamically gener-
+ated or modiﬁed through scripts embedded in the page —
+attackers could easily evade Shield ﬁlters by using scripts
+to generate malicious web content at run-time, possi-
+bly with additional obfuscation. Determining whether a
+
+USENIX Association
+
+OSDI ’06: 7th USENIX Symposium on Operating Systems Design and Implementation
+
+61
+
+or edge ﬁrewalls, browser extensions, or web publishers
+that republish third-party content such as ads.
+
+We have implemented a prototype of the Browser-
+Shield system, in which the rewriting logic is injected
+into a web page at an enterprise ﬁrewall and exe-
+cuted by the browser at rendering time. Our pro-
+totype can transparently render many familiar web-
+sites that contain JavaScript (e.g., www.google.com,
+www.cs.washington.edu, www.mit.edu). We also suc-
+cessfully translated and ran a large intranet portal ap-
+plication (Microsoft SharePoint) that uses 549 KB of
+JavaScript libraries.
+
+We chose the ﬁrewall deployment scenario because
+it offers the greatest manageability beneﬁt, as Browser-
+Shield updates can be centralized at the ﬁrewall, imme-
+diately protecting all client machines in the organization
+without any BrowserShield-related installation at either
+clients or web servers. The main disadvantage of this
+deployment scenario is that ﬁrewalls have no visibility
+into end-to-end encrypted trafﬁc. Nevertheless, commer-
+cial products [35] already exist that force trafﬁc cross-
+ing the organization boundary to use the ﬁrewall (in-
+stead of a client within the organization) as the encryp-
+tion endpoint, trading client privacy for aggregate orga-
+nization security. Also, the browser extension and web
+publisher deployment scenarios transparently handle en-
+crypted trafﬁc.
+
+Our evaluation focuses on the effectiveness of the
+BrowserShield design and the performance of our im-
+plementation. Our analysis of recent IE vulnerabil-
+ities shows that BrowserShield signiﬁcantly advances
+the state-of-the-art; existing ﬁrewall and anti-virus tech-
+niques alone can only provide patch-equivalent protec-
+tion for 1 of the 8 IE patches from 2005, but combining
+these two with BrowserShield is sufﬁcient to cover all
+8. We evaluated BrowserShield’s performance on real-
+world pages containing over 125 KB of JavaScript. Our
+evaluation shows a 22% increase in ﬁrewall CPU utiliza-
+tion, and client rendering latencies that are comparable
+to the original page latencies for most pages.
+
+The rest of the paper is organized as follows: In Sec-
+tion 2 we describe a typical browser vulnerability that we
+would like to ﬁlter. We discuss the design of Browser-
+Shield in Section 3, and give BrowserShield’s JavaScript
+rewriting approach in detail in Section 4. We describe
+our implementation in Section 5. In Section 6 we give
+our evaluation of BrowserShield. We discuss related
+work in Section 7, and conclude in Section 8.
+
+2 A Motivating Example
+
+As a motivating example of vulnerability-driven ﬁlter-
+ing, we consider MS04-040: the HTML Elements Vul-
+nerability [28] of IE from December, 2004. In this vul-
+nerability, IE had a vulnerable buffer that was overrun if
+
+Figure 1: The BrowserShield System
+
+script will eventually exploit a vulnerability is undecid-
+able. Our approach to cleansing dynamic content is to
+rewrite HTML pages and any embedded scripts into safe
+equivalents before they are rendered by the browser. The
+safe equivalent pages contain logic for recursively apply-
+ing run-time checks to dynamically generated or mod-
+iﬁed web content, based on known vulnerabilities. To
+this end, we have designed BrowserShield, a system that
+performs dynamic instrumentation of embedded scripts
+and that admits policies for changing web page behav-
+ior. A vulnerability signature is one such policy, which
+sanitizes web pages according to a known vulnerability.
+Figure 1 gives an overview of the BrowserShield system,
+showing how it transforms HTML and JavaScript using a
+set of policies. Our system focuses on JavaScript because
+it is the predominant scripting language used on the web;
+a full ﬂedged system would require additionally rewrit-
+ing or disabling VBScript and any other script languages
+used by web browsers that BrowserShield protects.
+
+Our general approach of code rewriting for interposi-
+tion has been used in other contexts. Code rewriting has
+been used to isolate faults of software extensions [41].
+Java bytecode rewriting has been used to enable secu-
+rity polices [10, 37], such as stack inspection policies
+for access control. However, rewriting script code for
+web browsers poses additional challenges: JavaScript is
+a prototype-based language, and the combination of this
+with JavaScript’s scoping rules, implicit garbage collec-
+tion and pervasive reﬂection required a number of tech-
+niques not needed by previous rewriting work in other
+contexts.
+
+We have designed BrowserShield to adhere to well es-
+tablished principles for protection systems: complete in-
+terposition of the underlying resource (i.e., the HTML
+document tree), tamper-proofness and transparency [3,
+10, 33]. In addition, BrowserShield is a general frame-
+work that supports applications other than vulnerability-
+driven ﬁltering. For example, we have authored poli-
+cies that add UI invariants to prevent certain phishing
+attempts.
+
+Because BrowserShield protects web browsers by
+transforming their inputs, not the browser itself,
+the
+BrowserShield logic injector can be deployed at client
+
+62
+
+OSDI ’06: 7th USENIX Symposium on Operating Systems Design and Implementation
+
+USENIX Association
+
+Web serverBrowserShieldLogic InjectorClientBrowserHTML +JavaScriptShieldedHTML +JavaScriptPoliciesfunction (tag) {
+
+var len = 255; // not the actual limit
+
+// Look for long attribute values
+if ((contains("name", tag.attrs) &&
+
+tag.attrs["name"].length > len) &&
+
+(contains("src", tag.attrs) &&
+
+tag.attrs["src"].length > len)) {
+
+// Remove all attributes to be safe
+tag.attrs = [];
+// Return false to indicate exploit
+return false;
+
+}
+// Return true to indicate safe tag
+return true;
+
+}
+
+Figure 2: JavaScript code snippet to identify exploits of
+the MS04-040 vulnerability
+
+both the name and the src attributes were too long in
+an iframe, frame, or embed HTML element.
+
+Figure 2 shows a corresponding snippet of JavaScript
+code that can be used to identify and to remove exploits
+of this vulnerability. As input, the function takes an ob-
+ject representing an HTML tag, including an associative
+array of its attributes. When invoked on an <iframe>,
+<frame> or <embed> tag, the function determines
+whether the relevant attributes exceed the size of the vul-
+nerable buffer.
+
+The goal of BrowserShield is to take this vulnerability-
+speciﬁc ﬁltering function as a policy and apply it to all
+occurrences of the vulnerable tags whether they are in
+static HTML pages or dynamically generated by scripts.
+The framework could react in many ways to detected ex-
+ploits; our current system simply stops page rendering
+and notiﬁes the user. Vulnerability driven ﬁltering, used
+as a patch alternative or intermediary, should prevent all
+exploits of the vulnerability (i.e., zero false negatives),
+and should not disrupt any exploit-free pages (i.e., zero
+false positives). We design BrowserShield to meet these
+requirements.
+
+3 Overview
+
+The BrowserShield system consists of a JavaScript li-
+brary that translates web pages into safe equivalents and
+a logic injector (such as a ﬁrewall) that modiﬁes web
+pages to use this library.
+
+BrowserShield uses two separate translations along
+with policies that are enforced at run-time. The ﬁrst
+translation, THT M L, translates the HTML: It tokenizes
+an HTML page, modiﬁes the page according to its
+policies (such as the one depicted in Figure 2) and
+wraps the script elements so that the second translation,
+
+Figure 3: THT M L Translation
+
+Figure 4: Tscript Translation
+
+Tscript, will be applied at run-time during page render-
+ing at the browser. THT M L is depicted in Figure 3 us-
+ing bshield.translate(...) to invoke Tscript.
+Tscript, as depicted in Figure 4, parses and rewrites
+JavaScript to access the HTML document tree through
+an interposition layer. This layer regulates all accesses
+and manipulations of the underlying document tree, re-
+cursively applies THT M L to any dynamically generated
+HTML, and recursively applies Tscript to any dynami-
+cally generated script code. Additionally, the interposi-
+tion layer enforces policies, such as ﬁltering exploits of
+known vulnerabilities.
+
+Since users can choose to disable scripting in their web
+browsers, we must ensure BrowserShield protects such
+users even without the JavaScript library. We transpar-
+ently handle such clients by applying THT M L at the logic
+injector, independent of the user’s browser. Any mod-
+iﬁcations due to Tscript are still in place, but disabling
+scripts has made them irrelevant, along with the original
+script code.
+
+Browser extensions, such as ActiveX controls, can
+also manipulate the document tree. The security model
+for such extensions is that they have the same privileges
+as the browser, and thus we focus on interposing between
+script and the extensions, not between the extensions and
+the document tree. This allows BrowserShield to prevent
+malicious script from exploiting known vulnerabilities in
+trusted browser extensions.
+
+We have designed BrowserShield to adhere to well es-
+
+tablished principles for protection systems [3, 10, 33]:
+
+USENIX Association
+
+OSDI ’06: 7th USENIX Symposium on Operating Systems Design and Implementation
+
+63
+
+THTML<html><head></head><body><script>alert(“helloworld!”);</script></body></html><html><head><scriptsrc=“http://internal/bshield.js”></head><body><script>eval(bshield.translate(“alert(\“helloworld!\”);”);</script></body></html>TscriptTranslatedJavaScriptInterpositionLayerwithPoliciesHTMLDocumentTreeOriginalJavaScriptHTMLDocumentTree• Complete interposition: All script access to the HTML
+document tree must be mediated by the BrowserShield
+framework.
+
+• Tamper-proof: Web pages must not be able to modify
+or tamper with the BrowserShield framework in unin-
+tended ways.
+
+• Transparency: Apart from timing considerations and
+reasonable increases in resource usage, web pages
+should not be able to detect any changes in behavior
+due to the BrowserShield framework. The sole excep-
+tion is for policy enforcement (e.g., the behavior of a
+page containing an exploit is visibly modiﬁed).
+
+• Flexible policies: We desire the BrowserShield frame-
+work to have a good separation between mechanism
+and policy, to make the system ﬂexible for many ap-
+plications.
+
+4 Design
+
+We now give a detailed discussion of the BrowserShield
+script library. While much previous work uses code
+rewriting for interposition [10, 11, 12, 41], our approach
+is heavily inﬂuenced by the fact that our code lives in
+the same name space as the code it is managing, and
+also several subtleties of JavaScript. First, JavaScript
+is a prototype-based language [39], not a class-based
+language like Java.
+In prototype-based languages, ob-
+jects are created using other objects as prototypes, and
+can then be modiﬁed to have a different set of member
+variables and methods. A consequence of this is that
+JavaScript has no static typing: different data types can
+be assigned to the same variable, even for references to
+functions and object methods. Second, scoping issues
+must be dealt with carefully, as assigning a method to a
+new object causes any use of the this keyword in the
+method to bind to the new object. Thus, any interposition
+mechanisms must ensure that this is always evaluated
+in the intended context. Third, JavaScript uses a garbage
+collector that is not exposed to the language. Fourth, the
+language has pervasive reﬂection features that let a script
+explore its own code and object properties.
+
+As a result of these subtleties, BrowserShield must
+use a series of interposition mechanisms: method wrap-
+pers, new invocation syntax, and name resolution man-
+agement. We justify and describe these mechanisms in
+the following subsections, organized by our goals for the
+framework.
+
+4.1 Complete Interposition
+
+To provide complete interposition, BrowserShield must
+mediate all possible accesses and manipulations allowed
+by the Document Object Model (DOM) over the HTML
+document trees (including script elements). In this sub-
+section, we detail how we achieve this using script
+
+rewriting to interpose on function calls, object method
+calls, object property accesses, object creation, and con-
+trol constructs. We summarize our rewriting rules in Ta-
+ble 1.
+
+Function and Object Method Calls There are two ways
+to rewrite function or method calls for interposition:
+callee rewriting or caller rewriting.
+
+In callee rewriting, the original function or method
+deﬁnition is ﬁrst saved under a different name, and then
+the original function or method is redeﬁned to allow in-
+terception before calling the saved original. We call the
+redeﬁned function the wrapper. The beneﬁt of callee
+rewriting is that the rewritten code is localized — only
+functions or methods of interest are modiﬁed, but not
+their invocations throughout the code. However, callee
+rewriting does not work for cases where functions or
+methods cannot be redeﬁned.
+
+In caller rewriting, the invocation is rewritten to an in-
+terposition function without changing the original func-
+tion’s deﬁnition. The interposition function looks up the
+appropriate interposition logic based on the identity of
+the target function or method. Although caller rewriting
+causes more pervasive code changes, it can interpose on
+those functions or methods that cannot be overwritten.
+
+In BrowserShield, we have to use a hybrid of both
+approaches to accommodate the previously mentioned
+JavaScript subtleties.
+
+rewriting.
+
+JavaScript contains some native functions that can-
+not be redeﬁned (e.g., alert), which necessi-
+tates caller
+row of Table 1
+shows how BrowserShield indirectly invokes a func-
+tion with its list of parameter values by passing it
+to bshield.invokeFunc(func, paramList),
+where bshield is a global object that we introduce to
+contain BrowserShield library code.
+
+The ﬁrst
+
+However, using caller rewriting alone for interpos-
+ing on method calls requires maintaining references to
+state otherwise eligible for garbage collection. Caller
+rewriting requires maintaining a map from functions and
+methods of interest to their associated interposition logic.
+Maintaining this map as a global table would require
+maintaining a reference to methods of interest on every
+object ever created, since each object may correspond
+to a distinct prototype requiring distinct interposition
+logic. These global table references would prevent recla-
+mation of objects otherwise eligible for garbage collec-
+tion, possibly causing pages that render normally with-
+out BrowserShield to require unbounded memory. To
+avoid this, BrowserShield maintains the necessary inter-
+position logic on each method, allowing unused state to
+be reclaimed.
+
+It might seem tempting to maintain this interposi-
+tion logic as a property on the object. Unfortunately,
+
+64
+
+OSDI ’06: 7th USENIX Symposium on Operating Systems Design and Implementation
+
+USENIX Association
+
+Construct
+Function Calls
+Method Calls
+Object Properties
+
+Original Code
+foo(x);
+document.write(s);
+obj.x = obj.y;
+
+Rewritten Code
+bshield.invokeFunc(foo, x);
+bshield.invokeMeth(document, "write", s);
+bshield.propWrite(obj, "x",
+
+bshield.propRead(obj, "y") );
+
+Object Creation
+
+var obj = new MyClass(x);
+
+var obj = bshield.createObj(
+
+with Construct
+
+Variable Names
+in Construct
+
+with (obj) { x = 3; }
+// x refers to obj.x
+bshield = x;
+for (i in obj) {...}
+
+"MyClass", [x]);
+
+(bshield.undefined(obj.x) ? x = 3 :
+
+bshield.propWrite(obj, "x", 3));
+
+bshield = x;
+for (i in obj) {
+
+}
+
+if (i=="bshield") continue; ...
+
+Table 1: Sample Code for BrowserShield Rewrite Rules
+
+aliases to the interposed method can be created, and
+these aliases provide no reference to the object contain-
+ing the interposition logic. For example, after “f =
+document.write”, any interposition logic associated
+with document.write is not associated with f; ﬁnd-
+ing the logic would require a global scan of JavaScript
+objects. Therefore, we use callee rewriting to install a
+wrapper for the methods of interest, such as those that
+insert new HTML. These wrappers are installed by re-
+placing the original method with the wrapper and saving
+the original method as a property on the wrapper (which
+is itself an object). Because we interpose on object prop-
+erty accesses, object creation, and method invocations,
+we can install wrappers when an object is ﬁrst created or
+used.
+
+Thus far we have justiﬁed caller rewriting for func-
+tions and callee rewriting for methods.
+Because
+JavaScript allows functions to be aliased as methods on
+objects (e.g., “obj.m = eval”), we also must per-
+form caller rewriting for method calls. The rewritten
+method invocations can then check for potential aliased
+functions.
+
+JavaScript scoping introduces additional complexity
+in method interposition. The original method cannot be
+simply called from the method wrapper, because saving
+the original method as a property of the wrapper causes
+the keyword this in the original method to refer to
+the wrapper rather than the intended object. To avoid
+this problem, we use a swapping technique: The wrap-
+per temporarily restores the original method during the
+wrapper execution, and then reinstalls the wrapper for
+the object method before the wrapper returns.
+
+During swapping,
+
+the ﬁrst step is to restore the
+the
+original method.
+method name may not be the same as when the
+method wrapper was installed, because methods can
+be reassigned. We solve this problem again with
+
+One challenge here is that
+
+rewriting through the rewritten method in-
+caller
+vocation syntax invokeMeth(obj, methName,
+paramList), passing the name of the method to the
+method wrapper.
+
+The swapping process requires an additional check
+to handle recursive methods, since otherwise a recur-
+sive call would directly invoke the original method rather
+than the swapped out method wrapper, bypassing any
+interposition logic on nested calls. To this end, the
+invokeMeth method checks to see if a wrapper is al-
+ready swapped out.
+If so, invokeMeth invokes the
+wrapper again, ignoring any swapping logic until the
+original recursive call completes. Because JavaScript is
+single threaded, we have not needed to handle concur-
+rency during this process.
+
+For example,
+
+tree can
+Object Properties The HTML document
+be accessed and modiﬁed through JavaScript ob-
+ject property reads and writes.
+the
+HTML in a page can be modiﬁed by assign-
+ing values to document.body.innerHTML, and
+a script element’s code can be modiﬁed by chang-
+ing its text property.
+To interpose on such ac-
+tions, BrowserShield replaces any attempts to read
+or write object properties with calls to the global
+bshield object’s propRead(obj, propName)
+and propWrite(obj, propName, val) meth-
+ods, as shown in Table 1. We use an object’s identity at
+run-time to check whether an assignment will create new
+HTML or script code. If so, propWrite applies either
+THT M L or Tscript to the value as needed. These identity
+checks can be done by calling JavaScript library func-
+tions that reveal whether the object is part of the HTML
+document tree. We ensure that BrowserShield uses the
+authentic library functions, and not malicious replace-
+ments, by creating private aliases of the functions before
+the script begins to run.
+
+USENIX Association
+
+OSDI ’06: 7th USENIX Symposium on Operating Systems Design and Implementation
+
+65
+
+This interposition on property accesses is required
+for installing wrappers when an object is ﬁrst accessed.
+Additionally, while wrappers are swapped out during
+method execution, propRead must ensure that any at-
+tempts to access the original method are redirected to the
+swapped-out wrapper.
+
+Object Creation To ensure that method wrappers are
+initialized in the case of new object creation, Browser-
+Shield must also rewrite the instantiation of new objects
+to use the createObj(className, paramList)
+method. The createObj method is also responsible
+for interposing on the JavaScript Function construc-
+tor, which can create new executable functions from its
+parameters as follows:
+
+f = new Function("x", "return x+1;");
+
+In this case, createObj applies Tscript to the code ar-
+gument before instantiating the function.
+
+loops, etc.),
+
+Control Constructs For control constructs (e.g., if-
+then blocks,
+the bodies of the con-
+structs are translated by Tscript. The bodies of tradi-
+tional function constructors (e.g., function foo()
+{...}) are translated by Tscript as well.
+
+JavaScript’s with construct presents a special case, as
+it has the ability to modify scope. As shown in Table 1,
+free variables within a with block are assumed to refer
+to properties on the designated object, unless such prop-
+erties are undeﬁned. This construct is purely “syntactic
+sugar” for JavaScript, and thus we handle this case with
+a syntactic transformation.
+
+4.2 Tamper-Proof
+
+Preventing scripts from tampering with BrowserShield
+is challenging because BrowserShield logic lives in the
+same name space as the code it is managing. To address
+this, we use name resolution management to ensure that
+all BrowserShield logic is inaccessible.
+
+Variable Names In the common case, variable names in
+a script can remain unchanged. However, we make the
+bshield name inaccessible to scripts to prevent tam-
+pering with the global BrowserShield data structure.
+
+To do this, we rename any variable references to
+bshield by appending an underscore to the end of the
+name. We also append an underscore to any name that
+matches the bshield( *) regular expression (i.e., that
+begins with bshield and is optionally followed by any
+number of underscores). Note that JavaScript places no
+limit on variable name length.
+
+Reﬂection Reﬂection in JavaScript allows script code to
+explore the properties of objects as well as its own code,
+using two pervasive language features: the syntax for ac-
+cessing object properties (such as myScript.text or
+myScript[i]), and the JavaScript in construct.
+
+In the ﬁrst case, BrowserShield must hide some ob-
+ject properties, because it maintains per-object interpo-
+sition state (details given in Section 4.3) on some ob-
+jects. Such state is stored on a bshield property
+of the object, which we hide using property access in-
+terposition. Speciﬁcally,
+if a call to propRead or
+propWrite attempts to access a property name begin-
+ning with bshield, we simply append an underscore to
+the name, thus returning the property value that the orig-
+inal script would have seen. Since array indices can also
+be used to access object properties, we must return the
+appropriate value for the given index.
+
+In the second case, the in construct allows itera-
+tion through all of an object’s properties by name. The
+bshield property of an object must be hidden during
+the iteration if it is present. Thus, BrowserShield inserts
+a check as the ﬁrst line of the iteration loop, jumping to
+the next item if the property name is bshield. This is
+accomplished using the rewrite rule shown in Table 1.
+
+4.3 Transparency
+
+The BrowserShield framework must also ensure its pres-
+ence is transparent to the original script’s semantics. The
+techniques for preventing tampering described in Sec-
+tion 4.2 contribute to this goal by making BrowserShield
+inaccessible. Transparency additionally requires that we
+present to scripts the context they would have in the ab-
+sence of BrowserShield.
+
+Shadow Copies Scripts can access both their own script
+code and HTML, which BrowserShield modiﬁes for in-
+terposition. To preserve the intended semantics of such
+scripts, BrowserShield retains a “shadow copy” of all
+original code before rewriting it. The shadow copy is
+stored on a bshield property of the object. Interposi-
+tion on property reads and writes allows the shadow copy
+to be exposed to scripts for access and modiﬁcation.
+
+Shadowing translated HTML requires additional care.
+During THT M L transformation, a policy may rewrite
+static HTML elements. We must similarly create shadow
+copies for such translated HTML elements, but we can-
+not directly create a JavaScript object in HTML to store
+the shadow copy. Thus, we persist the shadow copy to a
+bshield HTML tag attribute during THT M L, which is
+later used by the BrowserShield library. For example, a
+policy function that rewrites link URLs may modify the
+href attribute of <a> tags during the THT M L transfor-
+mation. Then, the persisted shadow copy looks like this:
+
+<a href="http://translatedLink"
+
+bshield="{href:’http://originalLink’}">
+
+When BrowserShield looks for the bshield property
+of the DOM object corresponding to this tag, it inter-
+prets this string into an actual bshield property with a
+shadow copy for the href attribute.
+
+66
+
+OSDI ’06: 7th USENIX Symposium on Operating Systems Design and Implementation
+
+USENIX Association
+
+Because scripts can only interact with shadow copies
+of their code and not modiﬁed copies, our transforma-
+tions are not required to be idempotent. That is, we will
+never apply THT M L or Tscript to code that has already
+been transformed.
+
+Preserving Context The JavaScript eval function eval-
+uates a string as script code in the current scope, and any
+occurrence of the this keyword in the string is bound
+to the current enclosing object. Thus, if eval were to be
+called from within bshield.invokeFunc, the this
+keyword might evaluate differently than in the original
+context.
+
+For this reason, the rewriting rule for functions is ac-
+tually more complex than shown in Table 1.
+Instead,
+the rewritten code ﬁrst checks if the function being in-
+voked is eval. If so, the parameter is translated using
+Tscript and then evaluated in the correct context; other-
+wise, invokeFunc is called as described before. Thus,
+the code is rewritten as follows:
+
+bshield.isEval(bshield.func = foo) ?
+
+eval(bshield.translate(x)) :
+bshield.invokeFunc(bshield.func, x);
+
+Note that the function expression foo is assigned to a
+temporary state variable on the bshield object, so that
+the expression is not evaluated a second time in the call
+to invokeFunc.
+
+This check is a special case that is only needed for
+eval, because eval is the only native function in
+JavaScript that accesses this. Other native functions,
+such as alert or parseInt, do not access this, and
+can be evaluated within invokeFunc.
+
+4.4 Flexible policies
+
+The ﬁnal goal of BrowserShield is to support ﬂexible
+policy enforcement. This can be achieved by sepa-
+rating mechanism from policy: Our mechanism con-
+sists of the rewrite rules for translating HTML and
+script code, and our policy consists of the run-time
+checks invoked by the rewritten code. Some run-time
+checks are critical for complete interposition, such as
+applying Tscript to any string passed to eval or the
+Function constructor, or applying THT M L to any
+string passed to document.write or assigned to
+document.body.innerHTML. These checks are al-
+ways applied, regardless of what policy is in place. Be-
+cause the interposition is policy-driven, our system can
+be made incrementally complete. For example, if an un-
+documented API is discovered that can manipulate the
+document tree, we simply add a new policy to interpose
+on this API.
+
+The remaining run-time checks are used for enforc-
+ing ﬂexible policies, such as the MS04-040 vulnerabil-
+ity ﬁlter in Figure 2. Such policy functions are down-
+
+loaded separately from the remainder of the Browser-
+Shield code, and they can be updated and customized
+based on the intended application.
+
+Policy functions are given the chance to inspect and
+modify script behavior at all interposition points, includ-
+ing property reads and writes, function and method invo-
+cations, and object creations. We also allow policy writ-
+ers to introduce new global state and functions as part
+of the global bshield object, or introduce local state
+and methods for all objects or for speciﬁc objects. Policy
+functions for HTML can also be registered by tag name.
+The tags are presented to HTML policy functions as part
+of a token stream of tags and text, without a full parse
+tree.
+It is also possible for policy functions to further
+parse the HTML token stream to gain additional context,
+although we have not yet encountered a need for this in
+the policies we have authored.
+
+5
+
+Implementation
+
+We have implemented a prototype of BrowserShield as
+a service deployed at a ﬁrewall and proxy cache. Our
+prototype consists of a standard plugin to Microsoft’s In-
+ternet Security and Acceleration (ISA) Server 2004 [21],
+and a JavaScript library that is sent to the client with
+transformed web documents. The ISA plugin plays the
+role of the BrowserShield logic injector.
+
+We implemented our ISA plugin in C++ with 2,679
+lines of code. Our JavaScript library has 3,493 lines
+(including comments). Most of the ISA plugin code
+is devoted to parsing HTML, while about half of
+the JavaScript library is devoted to parsing HTML or
+JavaScript. This is a signiﬁcantly smaller amount of code
+than in a modern web browser, which implies that our
+trusted computing base is small compared to the code
+base we are protecting.
+
+The ISA plugin is responsible for applying the
+THT M L transformation to static HTML. The ISA plugin
+ﬁrst inserts a reference to the BrowserShield JavaScript
+library into the web document. Because this library is
+distributed in a separate ﬁle, clients automatically cache
+it, reducing network trafﬁc on later requests. THT M L
+then rewrites all script elements such that they will be
+transformed using Tscript at the client before they are ex-
+ecuted. Figure 3 depicts this transformation; note that it
+does not require translating the JavaScript at the ﬁrewall.
+In our implementation, the ﬁrewall component applies
+THT M L using a streaming model, such that the ISA
+Server can begin sending transformed data to the client
+before the entire page is received. This streaming model
+also means that we do not expect the ﬁlter to be vulnera-
+ble to state-holding DoS attacks by malicious web pages.
+One complexity is that BrowserShield’s HTML pars-
+ing and JavaScript parsing must be consistent with that
+of the underlying browser. Any inconsistency will cause
+
+USENIX Association
+
+OSDI ’06: 7th USENIX Symposium on Operating Systems Design and Implementation
+
+67
+
+false positives and false negatives in BrowserShield run-
+time checks. For our prototype, we have sought to match
+IE’s behavior through testing and reﬁnement. If future
+versions of browsers exposed this logic to other pro-
+grams, it would make this problem trivial.
+
+When the browser starts to run the script in the page,
+the library applies Tscript to each piece of script code,
+translating it to call into the BrowserShield interposition
+layer. This may sometimes require decoding scripts, a
+procedure that is implemented in publicly available li-
+braries [34] and which does not require cryptanalysis,
+though we have not yet incorporated it in our implemen-
+tation.
+
+A ﬁnal
+
+issue in Tscript
+
+is translating scripts that
+originate in source ﬁles linked to from a source tag.
+THT M L rewrites such source URLs so that
+they
+are fetched through a proxy. The proxy wraps the
+scripts in the same way that script code embedded
+directly in the page is wrapped. For example, a script
+source URL of http://foo.com/script.js
+would be translated to http://rewritingProxy/
+translateJS.pl?url=http://foo.com/
+script.js. Tscript is then applied at the client after
+the script source ﬁle is downloaded.
+
+6 Evaluation
+
+Our evaluation focuses on measuring BrowserShield’s
+vulnerability coverage, the complexity of authoring vul-
+nerability ﬁlters, the overhead of applying the Browser-
+Shield transformations at ﬁrewalls, and the overhead of
+running the BrowserShield interposition layer and vul-
+nerability ﬁlters at end hosts.
+
+6.1 Vulnerability Coverage
+
+We evaluated BrowserShield’s ability to protect IE
+against all critical vulnerabilities for which Microsoft re-
+leased patches in 2005 [1]. Of the 29 critical patches
+that year, 8 are for IE, corresponding to 19 IE vulnera-
+bilities. These vulnerabilities fall into three classes: IE’s
+handling of (i) HTML, script, or ActiveX components,
+(ii) HTTP, and (iii) images or other ﬁles. Table 2 shows
+how many vulnerabilities there were in each area, and
+whether BrowserShield or another technology could pro-
+vide patch-equivalent protection. The BrowserShield de-
+sign is focused on HTML, script, and ActiveX controls,
+and it can successfully handle all 12 of these vulnerabil-
+ities. This includes vulnerabilities where the underlying
+programmer error is at a higher layer of abstraction than
+a buffer overrun, e.g., a cross-domain scripting vulnera-
+bility. Handling HTTP accounted for 3 of the 19 vulnera-
+bilities. Perhaps surprisingly, 2 out of 3 of these vulnera-
+bilities required BrowserShield in addition to an existing
+HTTP ﬁlter, such as Snort [38] or Shield [43]. This is
+
+because malformed URLs could trigger the HTTP layer
+vulnerabilities regardless of whether the URL came over
+the network or was generated internally by the browser.
+BrowserShield is able to prevent the HTML/script layer
+from triggering the generation of these bad HTTP re-
+quests. Processing images or other ﬁles accounted for
+the remaining 4 vulnerabilities. Patch-equivalent protec-
+tion for these vulnerabilities is already available using
+existing anti-virus solutions [13].
+
+vulnerability
+
+type
+HTML, script,
+ActiveX
+
+HTTP
+
+images and
+other ﬁles
+
+#
+
+12
+
+3
+
+4
+
+protected by
+
+BrowserShield HTTP ﬁlter
+
+antivirus
+
+12
+
+2∗
+
+0
+
+0
+
+3∗
+
+0
+
+0
+
+0
+
+4
+
+Table 2: BrowserShield Vulnerability Coverage. ∗Two of
+the HTTP vulnerabilities required both BrowserShield and
+an HTTP ﬁlter to provide patch-equivalent protection.
+
+Because management and deployment costs are of-
+ten incurred on a per-patch basis, we also analyze the
+vulnerabilities in Table 2 in terms of the corresponding
+patches. For the 8 IE patches released in 2005, combin-
+ing BrowserShield with standard anti-virus and HTTP
+ﬁltering would have provided patch-equivalent protec-
+tion in every case, greatly reducing the costs associ-
+ated with multiple patch deployments.
+In the absence
+of BrowserShield, anti-virus and HTTP ﬁltering would
+have provided patch-equivalent protection for only 1 of
+the IE patches.
+
+6.2 Authoring Vulnerability Filters
+
+To evaluate the complexity of vulnerability ﬁltering, we
+choose three vulnerabilities from three different classes:
+HTML Elements Vulnerability (MS04-040), COM Ob-
+ject Memory Corruption (MS05-037), and Mismatched
+DOM Object Memory Corruption (MS05-054).
+
+We ﬁltered for the MS04-040 vulnerability using the
+function shown in Figure 2. Registering this ﬁlter for
+each of the three vulnerable tags is as simple as:
+bshield.addHTMLTagPolicy("IFRAME", func);
+
+COM object vulnerabilities typically result from IE in-
+stantiating COM objects that have memory errors in their
+constructors. The IE patch blacklists particular COM
+objects (identiﬁed by their clsid).
+Implementing an
+equivalent blacklist requires adding checks for an HTML
+tag (the OBJECT tag) and sometimes a JavaScript func-
+tion (the ActiveXObject constructor, which can be
+used to instantiate a subset of the COM objects accessi-
+ble through the OBJECT tag). In the case of MS05-037,
+it does not appear to be possible to instantiate the vulner-
+able COM object using the ActiveXObject construc-
+
+68
+
+OSDI ’06: 7th USENIX Symposium on Operating Systems Design and Implementation
+
+USENIX Association
+
+tor. The OBJECT tag ﬁlter is conceptually similar to the
+function shown in Figure 2.
+
+The MS05-054 vulnerability results when the
+window object, which is not a function, is called as
+a function in the outermost scope. Our interposition
+layer itself prevents window from being called as a
+function in the outermost scope since all function calls
+are mediated by BrowserShield with invokeFunc.
+Hence there is no need for a ﬁlter. Nevertheless, if
+this vulnerability had not depended on such a scoping
+constraint, we could simply have added a ﬁlter to prevent
+calling the object as a function.
+
+To test the correctness of our vulnerability ﬁlters, we
+installed an unpatched image of Windows XP Pro within
+a virtual machine, and created web pages for each of
+the vulnerabilities that caused IE to crash. Applying
+BrowserShield with the ﬁlters caused IE to not crash
+upon viewing the malicious web pages. We tested the
+ﬁdelity of our ﬁlters using the same set of URLs that we
+used in our evaluation of BrowserShield’s overhead (de-
+tails are in Section 6.3). Under side-by-side visual com-
+parisons, we found that the ﬁlters had not changed the
+behavior of any of the web pages, as desired.
+
+6.3 Firewall Performance
+
+We evaluated BrowserShield’s performance by scripting
+multiple IE clients to download web pages (and all their
+embedded objects) through an ISA server running the
+BrowserShield ﬁrewall plugin. The ISA ﬁrewall ran on
+a Compaq Evo PC containing a 1.7GHz Pentium 4 mi-
+croprocessor and 1 GB RAM. Because we are within a
+corporate intranet, our ISA server connected to another
+HTTP proxy, not directly to web sites over the inter-
+net. We disabled caching at our ISA proxy, and we ﬁxed
+our IE client cache to contain only the BrowserShield
+JavaScript library, consistent with the scenario of a ﬁre-
+wall translating all web sites to contain a reference to this
+library.
+
+We ran 10 IE processes concurrently using 10 pages
+that IE could render quickly (so as to increase the load on
+the ﬁrewall), and repeatedly initiated each page visit ev-
+ery 5 seconds. We used manual observation to determine
+when the load on the ISA server had reached a steady
+state.
+
+We chose these 10 pages out of a set of 70 URLs that
+are the basis for our client performance macrobench-
+marks. This set is based on a sample of 250 of the
+top 1 million URLs clicked on after being returned as
+MSN Search results in Spring 2005, weighted by click-
+through count. Speciﬁcally, the 70 URLs are those that
+BrowserShield can currently render correctly;
+the re-
+maining URLs in the sample encountered problems due
+to incomplete aspects of our implementation, such as
+JavaScript parsing bugs.
+
+resource
+cpu utilization
+virtual memory
+working set
+private bytes
+
+unmodiﬁed
+15.0%
+317 MB
+45.5 MB
+26.3 MB
+
+browsershield
+18.3%
+319 MB
+46.6 MB
+27.3 MB
+
+Table 3: BrowserShield Firewall overheads. “Virtual
+memory” measures the total virtual memory allocated to
+the process; “working set” measures memory pages that
+are referenced regularly; “private bytes” measures mem-
+ory pages that are not sharable.
+
+We measured CPU and memory usage at the ﬁrewall,
+as shown in Table 3. CPU usage increased by about 22%,
+resulting a potential degradation of throughput by 18.1%;
+all aspects of memory usage we measured increased by
+negligible amounts. We also found that network usage
+increased only slightly (more detail in Section 6.4.2).
+
+6.4 Client Performance
+
+We evaluated the client component of our Browser-
+Shield implementation through microbenchmarks on the
+JavaScript interposition layer and macrobenchmarks on
+network load, client memory usage, and the latency of
+page rendering.
+
+6.4.1 Microbenchmarks
+
+We designed microbenchmarks to measure the overhead
+of individual JavaScript operations after translation. Ta-
+ble 4 lists our microbenchmarks and their respective
+BrowserShield slow-down. Our results are averages over
+10 trials, where each trial evaluated its microbenchmark
+repeatedly, and lasted over half a second. For the ﬁrst
+11 micro-benchmarks, the standard deviation over the 10
+trials was less than 2%. In the last case it was less than
+8%. The slowdown ratio was computed using the aver-
+age time required per microbenchmark evaluation with
+and without the interposition framework.
+
+operation
+i++
+a = b + c
+if
+string concat (‘+’)
+string concat (‘concat’)
+string split (‘split’)
+no-op function call
+x.a = b (property write)
+eval of minimal syntactic structure
+eval of moderate syntactic structure, minimal computation
+eval of moderate syntactic structure, signiﬁcant computation
+image swap
+
+slowdown
+1.00
+1.00
+1.07
+1.00
+61.9
+21.9
+44.8
+342
+47.3
+136
+1.34
+1.07
+
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+
+Table 4: BrowserShield Microbenchmarks. Slowdown
+is the ratio of the execution time of BrowserShield trans-
+lated code and that of the original code.
+
+Microbenchmarks 1-4 measure operations for which
+we expect no changes during rewriting, and hence no
+
+USENIX Association
+
+OSDI ’06: 7th USENIX Symposium on Operating Systems Design and Implementation
+
+69
+
+slowdown. The only slowdown we measure is in the
+case of the if statement. Further examination showed
+that the BrowserShield translation inserted a semi-colon
+(e.g., var a = 1 (linebreak) changed to var a
+= 1; (linebreak)). This results in a 7% slow-
+down.
+
+Microbenchmarks 5-8 measure operations we expect
+to incur a slowdown comparable to an interpreter’s slow-
+down. As detailed in Section 4, BrowserShield trans-
+lation introduces additional logic around method calls,
+function calls, and property writes, leading to a slow-
+down in the range of 20x-400x. This slowdown is in
+line with good interpreters [32], but worse than what is
+achieved by rewriting systems targeting other languages,
+e.g., Java bytecode [10]. BrowserShield is paying a price
+for the JavaScript subtleties that previous rewriting sys-
+tems did not have to deal with. We were curious about
+the difference in slowdown between the two string meth-
+ods; an additional experiment showed that the differ-
+ence can be attributed to the JavaScript built-in concat
+method requiring about 3 times as much CPU as the
+built-in split method. Also, it is not surprising that
+property writes have a greater slowdown than function or
+method calls because property writes need to both guard
+the BrowserShield namespace and interpose on writes to
+DOM elements (such as the text property of scripts).
+
+Microbenchmarks 9-11 explore the overhead of trans-
+lating JavaScript code of various complexity. The “eval
+of minimal syntactic structure” microbenchmark mea-
+sures the cost of translating and then evaluating a simple
+assignment. The cause of the large slowdown is the addi-
+tional work done by eval in the BrowserShield frame-
+work: parsing, constructing an AST, modifying the AST,
+and outputting the new AST as a JavaScript program.
+The two subsequent “eval of moderate syntactic struc-
+ture” microbenchmarks measure the cost of translating
+and evaluating a simple for(;;) loop. This simply
+demonstrates that as the cost of the computation inside
+the simple loop increases, the cost of translating the code
+can decrease to a small fraction of the overall computa-
+tional cost.
+
+The last microbenchmark measures the overhead of
+performing a simple manipulation of the DOM – swap-
+ping two 35 KB images. This microbenchmark is de-
+signed to measure the relative importance of overheads in
+the JavaScript engine when the JavaScript is manipulat-
+ing the layout of the HTML page. The JavaScript code to
+swap these two images requires two property writes (i.e.,
+img.src = ’newLink’), and we described above
+how BrowserShield translation adds signiﬁcant overhead
+to property writes. Nonetheless, the overall slowdown is
+less than 8%. In particular, the raw time to swap the im-
+age only increases from 26.7 milliseconds to 28.5 mil-
+liseconds. This suggests that even the large overheads
+
+that BrowserShield translation adds to some language
+constructs may still be quite small in the context of a
+complete web page.
+
+In summary, BrowserShield incurs a signiﬁcant over-
+head on the language constructs where it must add
+interpreter-like logic, but these overheads can be quite
+small within the context of the larger DOM manipula-
+tions in embedded scripts.
+
+6.4.2 Macrobenchmarks
+
+We designed macrobenchmarks to measure the overall
+client experience when the BrowserShield framework is
+in place.
+In particular, the macrobenchmarks include
+all the dynamic parsing and translation that occurs be-
+fore the page is rendered, while the microbenchmarks
+primarily evaluated the performance of the translated
+code accomplishing a task relative to the untranslated
+code accomplishing that same task. To this end, we
+scripted an instance of IE to download each of the 70
+web pages in our workload 10 times. For the same rea-
+sons given in our evaluation of the BrowserShield ISA
+component, we maintained that the only object in the IE
+cache was the BrowserShield JavaScript library. These
+caching policies represent a worst-case for client latency.
+This measurement includes the overhead of the three ﬁl-
+ters that we discussed in Section 6.1. We then repeated
+these measurements without the BrowserShield frame-
+work and translation.
+
+We set a 30 second upper limit on the time to render
+the web page, including launching secondary (popup)
+windows and displaying embedded objects, but not wait-
+ing for secondary windows to render. We visually veri-
+ﬁed that the programmatic signal that rendering had com-
+pleted indeed corresponded to the user’s perception that
+the page had rendered. IE hit the 30-second timeout sev-
+eral times in these trials, and it hit the timeouts both
+when the BrowserShield framework and translation were
+present and when the framework and translation were ab-
+sent. We did not discern any pattern in these timeouts,
+and because our experiments include factors outside our
+control, such as the wide-area network and the servers
+originating the content, we do not expect page download
+times to be constant over our trials. We re-ran the trials
+that experienced the timeouts.
+
+Figure 5 shows the CDF of page rendering with
+and without BrowserShield. On average BrowserShield
+added 1.7 seconds to page rendering time. By way of
+contrast, the standard deviation in rendering time with-
+out BrowserShield was 1.0 seconds.
+
+In Figure 6, we further break down the latency for
+the 10 pages that took the most time to render under
+BrowserShield. They experienced an average increase in
+latency of 6.3 seconds, requiring 3.9 seconds on average
+without BrowserShield and 10.2 seconds on average with
+
+70
+
+OSDI ’06: 7th USENIX Symposium on Operating Systems Design and Implementation
+
+USENIX Association
+
+Figure 5: Latency CDF with and without BrowserShield
+
+Figure 7: Latency of JavaScript parsing
+
+Figure 6: Breakdown of latency for slowest 10 pages un-
+der BrowserShield
+
+Figure 8: Memory Usage at Client
+
+BrowserShield. Of this 6.3 seconds of increased latency,
+we found that 2.8 seconds (45%) could be attributed to
+the overhead of dynamically translating JavaScript and
+HTML within IE. We attribute the remaining overhead to
+effects such as the overhead of evaluating the translated
+code, and the time to modify the HTML at the ﬁrewall.
+
+We broke down the latency of dynamic translation for
+both HTML and JavaScript into 2 parts each:
+time to
+parse the JavaScript/HTML into an AST and convert the
+modiﬁed AST back to a string, and the time to modify
+the AST. We found that the time to parse the JavaScript
+to and from a string was always more than 70% of the
+overall latency of dynamic translation, and it averaged
+80% of the overall latency. Figure 7 shows the JavaScript
+parsing time versus the number of kilobytes. Fitting a
+least-squares line to this data yields an average parse rate
+of 4.1 KB of JavaScript per second, but there was signif-
+icant variation; the slowest parse rate we observed was
+1.3 KB/second.
+
+Figure 8 shows the memory usage of page rendering
+with and without BrowserShield. We found that private
+bytes (memory pages that are not sharable) was the client
+memory metric that increased the most when rendering
+the transformed page. Private memory usage increased
+on average by 11.8%, from 19.8 MB to 22.1 MB. This
+increase was quite consistent; no page caused memory
+usage to increase by more than 3 MB.
+
+We also measured the increased network load over
+a single run through the pages both with and without
+BrowserShield. We measured an average increase of 9
+KB, less than the standard deviation in the network load
+over any individual trial due to background trafﬁc during
+our measurements. We expect BrowserShield rewriting
+to only slightly increase the network load, because the
+ﬁrewall just adds script wrappers, while the translation
+itself happens at the client.
+
+7 Related Work
+
+We ﬁrst compare with other protection systems in Sec-
+tion 7.1. We then discuss BrowserShield’s relation to
+the extensive work on code rewriting and interposition
+in Section 7.2.
+
+7.1 Remote Exploit Defense
+
+In our prior work on Shield [43], we proposed using
+vulnerability-speciﬁc ﬁlters to identify and block net-
+work trafﬁc that would exploit known software vulner-
+abilities. Shield maintains protocol-speciﬁc state ma-
+chines in an end-host’s network stack, allowing it to rec-
+ognize when a packet will trigger a vulnerability. How-
+ever, the Shield approach does not address dynamic con-
+tent such as scripts in web documents, since it is undecid-
+able whether script code in a document will eventually
+exploit a vulnerability. BrowserShield shares Shield’s
+focus on vulnerability-speciﬁc ﬁlters, but in contrast to
+
+USENIX Association
+
+OSDI ’06: 7th USENIX Symposium on Operating Systems Design and Implementation
+
+71
+
+0%20%40%60%80%100%024681012141618TimetoRender(seconds)PercentageofPagesunmodifiedbrowsershield05101520PagesTimetoRender(seconds)browsershield:otheroverheadbrowsershield:translationatclientunmodified012345670510152025JavaScript(KB)TimetoParseJavaScript(seconds)0%20%40%60%80%100%0510152025ClientMemoryUsage(MB)PercentageofPagesunmodifiedbrowsershieldShield, its use of runtime interposition allows it to han-
+dle exploits in dynamic HTML.
+
+Like BrowserShield and Shield, IntroVirt also em-
+ploys vulnerability-speciﬁc predicates, speciﬁcally to de-
+tect past and present intrusions using virtual machine
+introspection and replay [23]. As a result, IntroVirt al-
+lows “just in time” patch application: postponing the ap-
+plication of a patch while an exploit has not occurred,
+and rolling back system state to apply a patch if an ex-
+ploit does occur. BrowserShield instead offers protec-
+tion while a patch is being tested (or otherwise delayed)
+by the administrator of a vulnerable system, buying time
+even in cases where exploits are immediately attempted.
+Additionally, BrowserShield supports more ﬂexible de-
+ployment scenarios. For example, it does not require the
+client’s browser to run inside an instrumented virtual ma-
+chine.
+
+Opus [2] seeks to address the problem of patching by
+allowing patches to be applied without restarting the ap-
+plication. Opus provides tools for developers to increase
+the reliability of such “dynamic” patches during develop-
+ment. However, these tools reduce, but do not eliminate,
+the programmer’s burden to produce a correct dynamic
+patch.
+
+Vigilante [7] focuses on worm containment, automati-
+cally detecting and preventing the spread of worm trafﬁc.
+Vigilante combines rapid distribution of self-certifying
+alerts and automatic ﬁlter generation, along with vul-
+nerability detection techniques such as non-executable
+pages [30] and dynamic dataﬂow analysis [29]. These
+techniques, even with the Vigilante improvements, ad-
+mit false negatives. BrowserShield does not share the
+speed constraint of Vigilante, since browser exploits re-
+quire human involvement and therefore do not spread on
+the same time scales as worms. Therefore, we are able
+to trade off the speed of automatically generated vulner-
+ability ﬁlters for the accuracy of hand-coded ﬁlters.
+
+EarlyBird [36] and Autograph [24] are two exemplary
+systems that use pattern matching to block network traf-
+ﬁc containing exploits. Pattern matching scales to high
+data rates, crucial to the authors’ goal of stopping worm
+outbreaks at network choke points. The HTML scripts
+that are BrowserShield’s focus seem difﬁcult to detect
+consistently with pattern matching, as they can trivially
+modify themselves at the client.
+
+HoneyMonkey [44] aims to discover web servers that
+distribute malicious code. In HoneyMonkey, virtual ma-
+chines automatically fetch content from the web and use
+black-box techniques to discover exploits. Exploit dis-
+covery is complimentary to BrowserShield’s approach of
+providing patch-equivalent protection to clients.
+
+Finally, a number of techniques have aimed to sandbox
+the browser or other applications, in effect protecting the
+operating system from the impact of an exploit. These
+
+techniques include system call interposition [17, 18, 22]
+and Microsoft’s “protected mode” for IE in Windows
+Vista [20]. These may limit damage to a user’s com-
+puting environment, but they do not protect the browser
+itself, allowing attacks such as keylogging to easily be
+conducted from exploited browsers. Tahoma [8] takes
+the conﬁnement approach one step further, sandboxing
+browsers in virtual machines and using site-speciﬁc man-
+ifests to restrict browser trafﬁc to known servers. While
+this could help to mitigate many browser related prob-
+lems,
+the difﬁculty of getting such manifests widely
+adopted is unclear.
+
+7.2
+
+Interposition Techniques
+
+Interposition techniques such as code rewriting have
+been used in previous work to achieve additional safety
+properties or otherwise modify the behavior of existing
+code. Code rewriting is only one of several alternatives
+for backward compatible modiﬁcations, and the choice
+of technique is inﬂuenced by tradeoffs in deployability
+and performance. Directly modifying the execution envi-
+ronment, such as the Java Virtual Machine, has the high-
+est deployment barriers. Some work instead uses a level
+of indirection, such as emulation (e.g, Bochs [6]), eas-
+ing deployment but incurring a high performance over-
+head. Thus, BrowserShield and others [10, 41, 42] em-
+ploy code rewriting, with its low barriers to deployment
+and smaller performance overhead than that required by
+an emulator.
+
+We characterize interposition techniques by the tar-
+get of interposition, since the technical differences be-
+tween targets require different solutions. Compared to
+approaches for other interposition targets, BrowserShield
+must address a new combination of technical challenges
+presented by JavaScript:
+its scoping rules, an implicit
+garbage collector, pervasive reﬂection, and its prototype-
+based object model (which implies a lack of static typ-
+ing).
+
+Machine Code Many approaches focus on the machine
+code interface, whether rewriting binary instructions or
+emulating them at runtime. Software Fault Isolation
+(SFI) [41] rewrites binary code to insert runtime checks,
+creating sandboxes that prevent code from writing or
+jumping to addresses outside its fault domain. This cre-
+ates process-like memory boundaries between units of
+code within a process. The more recent XFI [9] uses bi-
+nary rewriting to provide ﬂexible access control and ad-
+ditional integrity guarantees. VMware ESX Server [42]
+also rewrites machine code, in its case to allow programs
+to be virtualized on x86 hardware. Etch [31] rewrites
+machine code with the goals of proﬁling and measure-
+ment. Valgrind [40] and Program Shepherding [25] are
+dynamic binary instrumentation tools. Valgrind’s goal is
+
+72
+
+OSDI ’06: 7th USENIX Symposium on Operating Systems Design and Implementation
+
+USENIX Association
+
+to offer debugging and proﬁling support, while Program
+Shepherding’s goal is to monitor control ﬂow, prevent-
+ing the transfer of control to data regions which might
+include malicious code.
+
+The techniques used for rewriting at the machine
+code interface do not need to address any of the four
+challenges of JavaScript rewriting that have inﬂuenced
+BrowserShield: scoping, reﬂection, garbage collection
+or typing. Most work interposing at the machine code in-
+terface only adds semantics that can be deﬁned in terms
+of low level operations, such as enforcing a process-like
+memory boundary, as in SFI. Indeed, Erlingsson and
+Schneider [11] note the difﬁculty of extending rewriting
+at the machine code interface to enforce policies on the
+abstractions internal to an application. BrowserShield’s
+interposition target (the HTML document tree) is such an
+application-internal abstraction.
+
+System Call Interface Much previous work has modi-
+ﬁed user level program behavior by interposing on the
+system call interface. Jones introduces a toolkit for sys-
+tem call interposition agents that simpliﬁes tasks such
+as tracing, emulation, and sandboxing [22]. Wagner
+et al. use system call interposition in Janus to con-
+ﬁne untrusted applications to a secure sandbox environ-
+ment [18]. Garﬁnkel notes difﬁculties in trying to in-
+terpose on the system call interface [16], such as violat-
+ing OS semantics, side effects, and overlooking indirect
+paths. Garﬁnkel et al. discuss a delegation-based archi-
+tecture to address some of these problems [17]. Naccio
+describes an approach to provide similar guarantees by
+rewriting x86 code that links against the Win32 system
+call interface [12]. Naccio can also rewrite Java byte-
+code.
+
+Work on the system call
+
+interface differs from
+BrowserShield both in goal and in technique. System call
+interposition can guard external resources from an appli-
+cation, while the goal of BrowserShield is to guard an
+application-internal resource, the HTML document tree.
+Naccio’s use of rewriting as a technique to interpose on
+the system call interface does not present any of the four
+technical challenges (scoping, reﬂection, garbage collec-
+tion or typing) relevant to JavaScript rewriting. For ex-
+ample, Naccio also wraps methods to accomplish inter-
+position, but Naccio’s method wrappers do not need to
+handle JavaScript’s scoping rules, and so do not need to
+implement swapping.
+
+Java Bytecode Several pieces of previous work [10, 11,
+37], including the previously mentioned Naccio [12],
+have used rewriting at the Java Virtual Machine bytecode
+interface [26]. This interface is type-safe, and provides
+good support for reasoning about application-internal
+abstractions.
+In the most similar of these works to
+BrowserShield, Erlingsson’s PoET mechanism rewrites
+
+Java bytecode to enforce security policies expressed in
+the PSLang language [10].
+
+JavaScript’s pervasive reﬂection, scoping rules, and
+prototype-based object model forced us to develop sev-
+eral techniques not needed for Java bytecode rewrit-
+ing. For example, where Java bytecode rewriting can
+interpose on Java’s reﬂection API, BrowserShield must
+interpose on all property reads and writes, as well as
+some for loops, to achieve similar control over reﬂec-
+tion. Additionally, Java bytecode rewriting can achieve
+complete interposition by only modifying callees (using
+method wrappers) and without maintaining state, though
+some previous work allowed modifying callers or adding
+state to simplify policy construction [10].
+In contrast,
+BrowserShield must modify both callers and callees to
+appropriately handle scoping and the possibility of func-
+tions aliased as methods (and vice versa). Also, Browser-
+Shield must maintain state, requiring careful attention to
+its interaction with the JavaScript garbage collector.
+
+Web Scripting Languages We are not aware of any
+full interposition techniques for web scripting languages
+like JavaScript. The SafeWeb anonymity service used
+a JavaScript rewriting engine that failed to provide ei-
+ther complete interposition or transparency [27]. The
+Greasemonkey [19] extension to the Firefox browser al-
+lows users to run additional site-speciﬁc scripts when a
+document is loaded, but it does not provide complete in-
+terposition between existing script code and the HTML
+document tree.
+
+8 Conclusion
+
+Web browser vulnerabilities have become a popular vec-
+tor of attacks. Filtering exploits of these vulnerabilities is
+made challenging by the dynamic nature of web content.
+We have presented BrowserShield, a general framework
+that rewrites HTML pages and any embedded scripts to
+enforce policies on run-time behavior. We have designed
+BrowserShield to provide complete interposition over the
+underlying resource (the HTML document tree) and to be
+transparent and tamper-proof. Because BrowserShield
+transforms content rather than browsers, it supports de-
+ployment at clients, ﬁrewalls, or web publishers. Our
+evaluation shows that adding this approach to existing
+ﬁrewall and anti-virus techniques increases the fraction
+of IE patches from 2005 that can be protected at the net-
+work level from 12.5% to 100%, and that this protection
+can be done with only moderate overhead.
+
+We have focused on the application of vulnerability-
+driven ﬁltering in this paper, but JavaScript rewrit-
+ing techniques may also enable new functionality for
+AJAX (Asynchronous JavaScript and XML) applica-
+tions. Some potential uses include: eliminating the effort
+currently required to modify a website for the Coral [15]
+
+USENIX Association
+
+OSDI ’06: 7th USENIX Symposium on Operating Systems Design and Implementation
+
+73
+
+CDN; modifying the cached search results returned by
+web search engines to redirect links back into the cache
+(since the original site may be unavailable); allowing ap-
+propriately sandboxed dynamic third-party content on a
+community site (such as a blog or wiki) that currently
+must restrict third-party content to be static; and debug-
+ging JavaScript code when attaching a debugger is in-
+feasible, perhaps offering call traces or breakpoint func-
+tionality for complex scripts. User interface changes
+could even be added to make phishing more difﬁcult,
+e.g., enforcing the display of origin URLs on all pop-
+up windows. As this list suggests, we are optimistic that
+JavaScript rewriting is a widely applicable technique.
+
+References
+[1] Microsoft Security Bulletin Summaries and Webcasts, 2005.
+
+http://www.microsoft.com/technet/security/bulletin/
+summary.mspx.
+
+[2] G. Altekar, I. Bagrak, P. Burstein, and A. Schultz. OPUS: Online
+
+Patches and Updates for Security. In Usenix Security, 2005.
+
+[3] J. P. Anderson. Computer Security Technology Planning Study
+Volume II. ESD-TR-73-51, Vol. II, Electronic Systems Division,
+Air Force Systems Command, Hanscom Field, Bedford, MA, Oc-
+tober 1972.
+
+[4] W. A. Arbaugh, W. L. Fithen, and J. McHugh. Windows of Vul-
+nerability: a Case Study Analysis. IEEE Computer, December
+2000.
+
+[5] S. Beattie, S. Arnold, C. Cowan, P. Wagle, and C. Wright. Timing
+the Application of Security Patches for Optimal Uptime. In LISA,
+2002.
+
+[6] Bochs. http://bochs.sourceforge.net/.
+
+[7] M. Costa, J. Crowcroft, M. Castro, A. Rowstron, L. Zhou,
+L. Zhang, and P. Barham. Vigilante: End-to-End Containment
+of Internet Worms. In SOSP, 2004.
+
+[9]
+
+[8] R. S. Cox, J. G. Hansen, S. D. Gribble, and H. M. Levy. A Safety-
+Oriented Platform for Web Applications. In IEEE Symposium on
+Security and Privacy, 2006.
+´U. Erlingsson, M. Abadi, M. Vrable, M. Budiu, and G. C. Necula.
+XFI: Software guards for system address spaces. In OSDI, 2006.
+´U. Erlingsson and F. B. Schneider.
+IRM Enforcement of Java
+Stack Inspection. In IEEE Symposium on Security and Privacy,
+2000.
+´U. Erlingsson and F. B. Schneider. SASI Enforcement of Security
+Policies: A Retrospective.
+In WNSP: New Security Paradigms
+Workshop, 2000.
+
+[10]
+
+[11]
+
+[18] I. Goldberg, D. Wagner, R. Thomas, and E. A. Brewer. A Se-
+cure Environment for Untrusted Helper Applications. In Usenix
+Security, 1996.
+
+[19] Greasemonkey. http://greasemonkey.mozdev.org/.
+
+[20] Protected
+
+Mode
+
+in
+
+Vista
+
+IE7.
+
+http://blogs.msdn.com/ie/archive/2006/02/09/528963.aspx.
+
+[21] ISA Server. http://www.microsoft.com/isaserver/default.mspx.
+
+[22] M. B. Jones.
+
+Interposition Agents: Transparently Interposing
+
+User Code at the System Interface. In SOSP, 1993.
+
+[23] A. Joshi, S. T. King, G. W. Dunlap, and P. M. Chen. Detecting
+Past and Present Intrusions Through Vulnerability-speciﬁc Pred-
+icates. In SOSP, 2005.
+
+[24] H.-A. Kim and B. Karp. Autograph: Toward Automated, Dis-
+
+tributed Worm Signature Detection. In Usenix Security, 2004.
+
+[25] V. Kiriansky, D. Bruening, and S. Amarasinghe. Secure Execu-
+
+tion via Program Shepherding. In Usenix Security, 2002.
+
+[26] T. Lindholm and F. Yellin. The Java Virtual Machine Speciﬁca-
+
+tion, 2nd edition, 1999.
+
+[27] D. Martin and A. Schulman. Deanonymizing Users of the
+
+SafeWeb Anonymizing Service. In USENIX Security, 2002.
+
+[28] Microsoft Security Bulletin MS04-040, December 2004.
+
+http://www.microsoft.com/technet/security/Bulletin/MS04-
+040.mspx.
+
+[29] J. Newsome and D. Song. Dynamic Taint Analysis for Auto-
+matic Detection, Analysis, and Signature Generation of Exploits
+on Commodity Software. In NDSS, 2005.
+
+[30] Pax. http://pax.grsecurity.net/.
+
+[31] T. Romer, G. Voelker, D. Lee, A. Wolman, W. Wong, H. Levy,
+and B. Bershad. Instrumentation and Optimization of Win32/Intel
+Executables Using Etch. In Usenix NT Workshop, 1997.
+
+[32] T. H. Romer, D. Lee, G. M. Voelker, A. Wolman, W. A. Wong,
+J.-L. Baer, B. N. Bershad, and H. M. Levy. The Structure and
+Performance of Interpreters. In ASPLOS, 1996.
+
+[33] J. H. Saltzer and M. D. Schroeder. The Protection of Information
+
+in Computer Systems. In SOSP, 1973.
+
+[34] Windows Script Decoder. http://www.virtualconspiracy.com.
+
+[35] Secure Computing. http://www.securecomputing.com/pdf/WW-
+
+SSLscan-PO.pdf.
+
+[36] S. Singh, C. Estan, G. Varghese, and S. Savage. Automated Worm
+
+Fingerprinting. In OSDI, 2004.
+
+[37] E. G. Sirer, R. Grimm, A. J. Gregory, and B. N. Bershad. Design
+and Implementation of a Distributed Virtual Machine for Net-
+worked Computers. In SOSP, 1999.
+
+[38] The Open Source Network Intrusion Detection System.
+
+http://www.snort.org/.
+
+[39] D. Ungar and R. B. Smith. Self: The Power of Simplicity. In
+
+[12] D. Evans and A. Twyman. Flexible Policy-Directed Code Safety.
+
+OOPSLA, 1987.
+
+In IEEE Symposium on Security and Privacy, 1999.
+
+[40] Valgrind. http://www.valgrind.org/.
+
+[13] Eweek: Anti-Virus Protection for WMF Flaw, December 2005.
+
+[41] R. Wahbe, S. Lucco, T. Anderson, and S. Graham. Efﬁcient
+
+http://www.eweek.com/article2/0,1895,1907102,00.asp.
+
+Software-Based Fault Isolation. In SOSP, 1993.
+
+and
+
+Announcements.
+
+[42] C. A. Waldspurger. Memory Resource Management in VMware
+
+[14] Mozilla
+
+Alerts
+http://www.mozilla.org/security/.
+
+Security
+
+[15] M. J. Freedman, E. Freudenthal, and D. Mazires. Democratizing
+
+Content Publication with Coral. In NSDI, 2004.
+
+[16] T. Garﬁnkel. Traps and Pitfalls: Practical Problems in in System
+
+Call Interposition based Security Tools. In NDSS, 2003.
+
+[17] T. Garﬁnkel, B. Pfaff, and M. Rosenblum. Ostia: A Delegat-
+ing Architecture for Secure System Call Interposition. In NDSS,
+2004.
+
+ESX Server . In OSDI, 2002.
+
+[43] H. J. Wang, C. Guo, D. R. Simon, and A. Zugenmaier. Shield:
+Vulnerability-Driven Network Filters for Preventing Known Vul-
+nerability Exploits. In SIGCOMM, 2004.
+
+[44] Y.-M. Wang, D. Beck, X. Jiang, R. Roussev, C. Verbowski,
+S. Chen, and S. King. Automated Web Patrol with Strider Hon-
+eyMonkeys: Finding Web Sites That Exploit Browser Vulnera-
+bilities. In NDSS, 2006.
+
+74
+
+OSDI ’06: 7th USENIX Symposium on Operating Systems Design and Implementation
+
+USENIX Association
+
+

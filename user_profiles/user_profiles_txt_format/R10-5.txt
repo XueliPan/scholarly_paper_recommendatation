@@ -1,0 +1,3356 @@
+Dynamic Storage Cache Allocation in
+
+Multi-Server Architectures
+
+Ramya Prabhakar, Shekhar Srikantaiah, Christina Patrick and Mahmut Kandemir
+Department of Computer Science and Engineering, Pennsylvania State University
+
+{rap244, srikanta, patrick, kandemir}@cse.psu.edu
+
+ABSTRACT
+We introduce a dynamic and eﬃcient shared cache manage-
+ment scheme, called Maxperf, that manages the aggregate
+cache space in multi-server storage architectures such that
+the service level objectives (SLOs) of concurrently execut-
+ing applications are satisﬁed and any spare cache capacity is
+proportionately allocated according to the marginal gains of
+the applications to maximize performance. We use a combi-
+nation of Neville’s algorithm and linear-programming-model
+to discover the required storage cache partition size, on each
+server, for every application accessing that server. Experi-
+mental results show that our algorithm enforces partitions
+to provide stronger isolation to applications, meets applica-
+tion level SLOs even in the presence of dynamically chang-
+ing storage cache requirements, and improves I/O latency
+of individual applications as well as the overall I/O latency
+signiﬁcantly compared to two alternate storage cache man-
+agement schemes, and a state-of-the-art single server storage
+cache management scheme extended to multi-server archi-
+tecture.
+
+1.
+
+INTRODUCTION
+
+Traditional client/server architectures employ a single stor-
+age server to manage multiple clients. In such architectures,
+clients connect to the server and initiate requests for data
+accesses. Under heavy loads, the single server is a poten-
+tial bottleneck. One solution employed in architectures to
+solve this problem is to replace single server with multiple
+servers [6, 25, 11]. Recently, several research prototypes
+that oﬀer multi-server storage architectures have been built,
+e.g., IBM’s Intelligent bricks [9], CMU’s Ursa Minor [7] and
+HP Labs’ FAB [10]. Such architectures have high avail-
+ability, scalability and are distributed in nature. But, in
+a multi-server architecture, the servers do not directly share
+their resources, nor do they communicate with each other.
+Hence, there is a need for a consolidated resource manage-
+ment scheme that handles all the required coordination and
+eﬀectively utilizes the distributed shared resources.
+
+Permission to make digital or hard copies of all or part of this work for
+personal or classroom use is granted without fee provided that copies
+Permission to make digital or hard copies of all or part of this work for 
+are not made or distributed for proﬁt or commercial advantage and that
+personal or classroom use is granted without fee provided that copies are 
+copies bear this notice and the full citation on the ﬁrst page. Copyrights
+not made or distributed for profit or commercial advantage and that copies 
+for components of this work owned by others than ACM must be honored.
+bear this notice and the full citation on the first page. To copy otherwise, to 
+Abstracting with credit is permitted. To copy otherwise, to republish, to
+republish, to post on servers or to redistribute to lists, requires prior specific 
+post on servers or to redistribute to lists, requires prior speciﬁc permission
+permission and/or a fee. 
+and/or a fee.
+SC09 November 14-20, 2009, Portland, Oregon, USA. 
+Copyright 2009 ACM 978-1-60558-744-8/09/11 ...$10.00. 
+SC’09 November 14–20, 2009, Portland, Oregon, USA
+(c) 2009 ACM 978-1-60558-744-8/09/11... $10.00
+
+Managing shared resources in a multi-server architecture
+poses several challenges. Though multiplexing of shared
+storage resources among applications signiﬁcantly reduces
+operation cost, it brings forth interference among compet-
+ing applications which can lead to unpredictable system
+behavior. Therefore, when consolidating multiple applica-
+tions, shared servers must address contention for various
+shared resources. In this paper, we discuss managing aggre-
+gate shared storage server cache space, although our scheme
+can be extended to managing any other shared resource
+(e.g., shared I/O bandwidth). Also, it is important that the
+scheme manages shared resources dynamically. That is, it
+is able to adjust the resources (e.g., amount of cache space)
+devoted to applications during runtime so that shared re-
+sources are used in the way that best matches the needs of
+applications.
+
+Partitioning shared cache among multiple concurrently
+executing applications eliminates the possibility of applica-
+tions destructively interfering with each other, as demon-
+strated in various studies; [31, 18, 24, 26] to name a few.
+However, dynamically partitioning distributed server caches
+across multiple applications is challenging and demands so-
+lutions to questions such as (i) how to partition the cumu-
+lative cache space across competing applications?; (ii) what
+would be the cache allocation across each of the available
+server caches for each application?; and (iii) how would the
+cache allocation to each application adapt to dynamic mod-
+ulations in cache requirements at runtime? In particular,
+we need an eﬀective scheme that can exploit the aggregate
+memory capacity (cumulative storage cache space) in such
+a server cluster to minimize I/O latencies. Another chal-
+lenge in managing shared cache resources is satisfying the
+service level objectives (SLOs) of the consolidated appli-
+cations, while partitioning distributed server caches across
+them. Owing to the dynamics of both the applications and
+the storage systems, obtaining predictable performance is
+pragmatic only if each application accessing a common stor-
+age server can surely possess a speciﬁed minimum share of
+server cache space in spite of the presence of other competing
+applications.
+
+Some existing solutions have explored shared storage cache
+partitioning designs that attempt to avoid conﬂicts among
+multiple applications [23, 31, 26, 27, 24, 20]. In Argon [26],
+the cache partitioning algorithm uses a simulator to predict
+the cache absorption rate with hypothetical cache sizes. Pat-
+terson et al [20] use application-provided hints about future
+accesses and partitions the ﬁlesystem cache into three par-
+titions for read prefetching, caching hinted blocks for reuse,
+
+and caching unhinted blocks for reuse.
+[14] and [12] parti-
+tion the shared ﬁle system cache between multiple processes
+by detecting the data access patterns. A common character-
+istic of all these techniques is that they do not have any spe-
+cial treatment for multi-server scenarios, where data blocks
+are accessed by clients that belong to more than one server
+cache. Other works [13, 15, 2] describe architectures for
+a shared storage proxy cache in single server architectures,
+which can provide long-term hit rate assurances to compet-
+ing classes using feedback control. Most existing mecha-
+nisms for providing performance guarantees in storage sys-
+tems can throttle data traﬃc for a single storage node [30].
+Many techniques have been proposed for managing multi-
+level server caches in the presence of multiple clients [28, 31].
+MC2 [31] uses application hints to partition multilevel cache
+and to achieve the shortest I/O response times when there
+are multiple clients. However, they do not discuss scenarios
+when data is shared over multiple servers. Also, MC2 does
+not guarantee SLOs of concurrently-running applications in
+the system.
+
+In this paper, we propose and evaluate an automated dis-
+tributed storage cache partitioning strategy for multi-server
+architectures. Our algorithm, Maxperf, determines the amount
+of storage cache space that has to be allocated to each ap-
+plication from each of the servers it has access to, such that
+the SLOs of applications are satisﬁed and additionally, any
+spare capacity is proportionately allocated according to the
+marginal gains of the applications such that the overall sys-
+tem performance is maximized. To the best of our knowl-
+edge, this is the ﬁrst paper that addresses the problem of au-
+tomated cache partitioning in distributed storage systems,
+that involve multiple shared server caches. In this paper, we
+make the following contributions:
+
+• We ﬁrst propose to use Neville’s algorithm [8] to predict
+the storage cache space required by competing applications
+such that every application’s SLO is satisﬁed and the overall
+I/O latency is minimized. That is, this ﬁrst partitioning
+considers all the storage server caches as one big monolithic
+cache space and allocates it across applications.
+
+• We then use a linear programming model to further par-
+tition the cache allocation of each application across avail-
+able server caches. That is, the second partitioning deter-
+mines the cache space allocations from individual servers for
+each application.
+
+• We present experimental evidence showing the eﬀective-
+ness of our approach. The results obtained using a storage
+cache simulator and a set of I/O intensive workloads demon-
+strate that our partitioning strategy can accomplish perfor-
+mance insulation among multiple competing applications as
+well as improve the eﬀective utilization of the shared storage
+cache space, thereby reducing the overall I/O latency while
+continuously providing service level guarantees to applica-
+tions. We also compare our scheme to a recently proposed
+approach [26], and show that, our scheme performs signiﬁ-
+cantly better on the overall I/O latency metric. It also re-
+duces I/O latency of individual applications by up to 68.8%
+and 39.6% over fair share and uncontrolled cache manage-
+ment schemes, respectively.
+
+A brief description of our system model is provided in
+Section 2. Section 3 presents a detailed discussion of the
+Maxperf storage cache partitioning scheme. We present de-
+tails about the experimental setup, including our simulation
+platform and applications in Section 4, and discuss our ex-
+
+Client
+
+Server
+
+Client
+
+Client
+
+Server
+
+Client
+
+Server
+
+Server
+
+Client
+
+Client
+
+Client
+
+Client
+
+Client
+
+Client
+Client
+
+Figure 1: Multi-server architecture. In this archi-
+tecture, each client has access to a set of servers and
+each server is shared among all the clients accessing
+it.
+
+perimental results in Section 5. Our conclusions are given
+in Section 6.
+
+2. SYSTEM MODEL
+
+2.1 System Architecture
+
+The system architecture considered in this work consists
+of multiple concurrently executing clients utilizing the re-
+sources provided by a multi-server storage system. Clients
+access resources from multiple servers and share them with
+other clients accessing the same server. A generic model of
+such an architecture is depicted in Figure 1. Each client
+executes one or more applications on it and hence, each
+storage server in such a multi-server architecture has its
+storage cache1 shared among all the applications accessing
+that server at any instant of time. As in [26] and [28], we
+assume no cooperation between caches at the client level.
+Each client may page blocks only from the caches directly
+attached to it. Furthermore, we assume a client has no in-
+formation about applications running on other clients.
+
+We do not make any assumptions about homogeneity of
+these servers. We only assume that all the servers can po-
+tentially be shared among the applications. Such shared
+architectures are very good ﬁt for environments where re-
+source consolidation (clustering of resources into large mono-
+lithic pools) is important. Resource consolidation helps in
+improving resource utilization, reducing administration and
+maintenance costs and alleviating the problems of bursty
+traﬃc and intensive workloads. However, in a multi-server
+scenario, where each server has a local storage cache, there
+is a need for a coordinated cache management scheme that
+manages allocation of cache for diﬀerent applications across
+shared multiple servers.
+It is important to adopt design
+strategies that develops a holistic view of several storage
+server caches so that available resources are eﬃciently uti-
+lized and overall optimization goals are met. We propose an
+automated distributed cache partitioning support for multi-
+server architectures. We envision such a partitioning scheme
+incorporated as part of a coordinated allocation and re-
+source distribution server that dynamically receives infor-
+mation about applications’ SLO. Storage servers that have
+information about applications’ requirements as well as the
+available storage cache capacity provide this information to
+
+1Note that, we use the term storage cache to refer to the
+buﬀer cache used to store recently/frequently accessed ap-
+plication data in the server as opposed to disk cache which
+is the cache lying on the disk to store the most recent data
+accessed from the disk.
+
+the resource distribution server, which then computes the
+best allocation of storage cache space for each application
+and the best possible distribution of this cache space across
+multiple servers. The resource distribution server further
+provides the computed cache partition sizes as hints to each
+storage server in the system. The storage servers adhere to
+these hints provided by the co-ordinating resource distribu-
+tion server and allocate the speciﬁed amount of buﬀer cache
+for each application.
+
+2.2 Our Goal
+
+Partitioning shared caches in systems with consolidated
+shared resources can provide performance guarantees to cus-
+tomers, ensure isolation, and improve application perfor-
+mance. Our goal is to ﬁrst provide guarantees to applica-
+tions’ Service Level Objectives (SLOs) and then to improve
+overall system performance. The SLOs of applications are
+usually speciﬁed in the Service Level Agreement (SLA) be-
+tween applications and service provider and it could be spec-
+iﬁed in many metrics such as I/O latency, cache hit rate,
+bandwidth, etc. The resource distribution server described
+earlier maps the speciﬁed metric in applications SLA to the
+amount of resources to be allocated. In this paper, we con-
+sider distributing shared storage server caches according to
+the speciﬁed I/O latency metric as the SLO for every appli-
+cation. However, it is important to note that our approach
+can be extended to any shared resource in general and to any
+application metric speciﬁed in the SLAs (e.g., I/O latency,
+hit rate, bandwidth, etc).
+
+Diﬀerent approaches have been used in literature to spec-
+ify SLOs for applications. In [26], applications specify SLO
+metric as a conﬁgurable value (R-value), that is between 0
+and 1 of the cache absorption rate achieved by the applica-
+tion, within its share of the available storage server cache.
+For example, if n applications are sharing the storage server
+cache, the SLO metric is speciﬁed as a fraction between
+0 and 1 of the hit rate achieved by the application when
+it is allocated 1/nth of the server cache.
+In [21], the ser-
+vice provider ﬁrst executes every application in isolation on
+the entire infrastructure, and then, executes applications by
+sharing the available infrastructure among all the applica-
+tions in order to determine the possible SLOs of applications,
+such that resources are best utilized and service provider
+revenues are maximized. In this paper, the SLOs of applica-
+tions are indicative of the maximum degradation tolerable
+in access latencies, with respect to their access latencies in
+fair share of aggregate cache space (i.e., equal partitioning
+of the storage cache space). That is, if the application’s
+I/O latency is 100ms for every one thousand I/O accesses
+in fair share case and the speciﬁed SLO is a maximum of
+5% degradation, then the service level guarantees provided
+to the applications in terms of I/O latency would be a max-
+imum of 105ms for every thousand I/O accesses. Note that
+the proposed storage cache partitioning scheme guarantees
+the minimum requirements as speciﬁed in SLA for each ap-
+plication in the system, in every enforcement interval (the
+interval over which cache partition is enforced each time).
+
+3. MAXPERF PARTITIONING SCHEME
+
+3.1 A High Level View of Our Scheme
+
+Maxperf uses a two-step process to discover the required
+storage cache partition size for each application, on each
+
+(cid:15) (cid:16)(cid:16)(cid:17)(cid:18)
+
+(cid:18)
+
+(cid:21)
+
+(cid:19)(cid:20)
+
+(cid:22)(cid:23)(cid:24)
+
+(cid:13)(cid:14)
+
+JK
+
+JL
+
+(cid:28)(cid:29)(cid:30)
+
+(cid:29) "(cid:29)
+
+(cid:29) # $%(cid:30)(cid:29)(cid:29)&(cid:29)’
+
+(cid:28)"$*+
+
+( )
+
+(cid:31)  
+
+!
+
+(cid:31)
+
+(cid:25)
+
+G
+
+(cid:26)(cid:27)
+
+(cid:26)H
+
+G
+
+(cid:26)I
+
+2
+
+’
+
+(cid:29)(cid:30)
+
+#
+
+’
+
+(
+
+(
+
+3.
+
+,
+
+.
+
+ 
+
+/
+
+#(cid:29)
+
+.01
+
+)4
+
+(cid:31)  
+
+(cid:29)
+
+##(cid:29)
+
+*
+
+5
+
+"
+
+’(cid:29)
+
+(cid:30)
+
+ 
+
+,
+
+-
+
+(cid:30)
+
+%(cid:30)
+
+&&
+
+’%
+
+.
+
+,
+
+ 
+
+/
+
+#(cid:29)
+
+.01
+
+7
+
+9:
+
+88
+
+;<= >?
+
+#%
+
+(cid:30)
+
+&+
+
+(6
+
+,
+
+.
+
+ 
+
+@AB
+
+C?D8
+
+@E
+
+B
+
+@
+
+E
+
+>8C
+
+? F;>
+
+?
+
+ME
+
+N
+
+AP
+
+@B
+
+?C<8O
+
+F>
+
+F8 <;<Q8
+
+B
+
+@
+
+@
+
+E@E
+
+;C>
+
+>
+
+?
+
+R
+
+(cid:0)(cid:1)(cid:2)
+
+(cid:1) (cid:2) (cid:4)(cid:5)
+
+(cid:1) (cid:8)(cid:4)(cid:9)
+
+(cid:0)(cid:1) (cid:2)
+
+(cid:1) (cid:2) (cid:4)(cid:5)
+
+(cid:1) (cid:8)(cid:4)(cid:11)
+
+(cid:0)(cid:1) (cid:2)
+
+(cid:1)(cid:2) (cid:4)(cid:5)
+
+(cid:1) (cid:8)(cid:4)(cid:12)
+
+(cid:10)
+
+(cid:10)
+
+(cid:10)
+
+(cid:3)
+
+(cid:6)(cid:7)
+
+(cid:3)
+
+(cid:6)(cid:7)
+
+(cid:3)
+
+(cid:6)(cid:7)
+
+Figure 2: High level view of our scheme.
+
+server utilized by the application. First, we consider the
+aggregate storage server cache space available from all the
+servers, as a single large (monolithic) cache and use Neville’s
+algorithm to predict the cache space required by each appli-
+cation that satisﬁes its SLO and minimizes the overall I/O
+access latency. Note that, in general, after the cache space is
+distributed to guarantee SLO requirements, if there is free
+space left, we use interpolation to ﬁgure out the applica-
+tions that can most contribute to reducing overall I/O la-
+tency, and reward those applications with extra cache space
+allocation. Then, we use a linear programming model to
+further partition the allocation of each application across
+available individual server caches. Figure 2 provides a high
+level view of our storage cache partitioning scheme where a
+set of N applications A1, A2...AN are executing on a multi-
+server architecture of the type shown in Figure 1. Appli-
+cations and servers can be partially connected where each
+application Ai can be serviced from a subset of M diﬀerent
+servers S1, S2...SM , or fully connected where each applica-
+tion Ai can be serviced from all the M servers. Our scheme
+works with any connectivity conﬁguration between applica-
+tions and servers. For simplicity, we use a fully connected
+conﬁguration in the description of the scheme. We later
+present results on how our scheme works in such a conﬁgu-
+ration in Section 5.4.
+
+Consider the I/O latency numbers speciﬁed in the applica-
+tions’ service level agreement (SLA) to be δA1, δA2 ... δAN .
+Maxperf uses Neville’s algorithm to dynamically predict the
+cache partition size CA1 through CAN , required for N con-
+currently running applications A1 through AN , respectively,
+such that each CAi satisﬁes the SLO constraint speciﬁed by
+application Ai and minimizes the overall access latency. We
+explain how the the algorithm determines cache sizes CA1
+through CAN in Section 3.3. We then use a linear program-
+ming model for distributing the allocation of each applica-
+tion across available server caches. Detailed steps of using
+a linear programming model to partition the capacity of in-
+dividual server caches (C1,C2...CM ) to distribute the cache
+allocation of each application (CA1, CA2...CAN ) are given in
+Section 3.4. Maxperf enforces the determined cache parti-
+tion in every enforcement interval during runtime to cater
+to the dynamically changing storage cache requirements of
+
+viewperf
+cscope
+glimpse
+tpcc
+tpch
+tpcr
+
+)
+s
+m
+
+(
+ 
+s
+s
+e
+c
+c
+a
+
+ 
+r
+e
+p
+
+ 
+y
+c
+n
+e
+
+t
+
+a
+L
+
+ 4
+
+ 3.5
+
+ 3
+
+ 2.5
+
+ 2
+
+ 1.5
+
+ 1
+
+ 0.5
+
+ 0
+
+ 0
+
+ 128  256  384  512  640  768  896  1024
+
+Buffer cache size (MB)
+
+Figure 3: Variation of access latencies of diﬀerent
+applications with varying storage cache sizes. These
+results were obtained by executing the applications
+individually on a single server for various storage
+cache sizes shown on x-axis.
+
+the applications.
+
+3.2 Motivation for a Dynamic Scheme
+
+To understand how the applications behave as the storage
+cache space allocated to them is increased, we conducted ex-
+periments using six applications under varying storage cache
+sizes and measured the access latencies obtained. The de-
+tails of our experimental set up are described later in Sec-
+tion 4. Figure 3 shows the access latencies of these appli-
+cations with diﬀerent storage cache sizes. One can observe
+from this ﬁgure that diﬀerent applications exhibit very dif-
+ferent behaviors as the storage cache capacity allocated to
+them is increased. For example, we see that the access
+latencies of almost all the applications decrease with in-
+crease in the storage cache size, and the decrease is up to
+a certain point beyond which the curves become ﬂat. How-
+ever, the saturating point is diﬀerent for diﬀerent applica-
+tions.
+In case of glimpse, for example, the access latency
+curve continues to decrease even when it is allocated 1GB
+of cache space, whereas in case of viewperf, the curve satu-
+rates largely around 128MB of cache with a slight decrease
+in access latency when allocated close to 1GB of cache space.
+In cscope, the access latency decreases dramatically when it
+is allocated 256MB cache, as 256MB cache space accommo-
+dates most of the working set of the application. In the three
+TPC applications, we see that their access latency almost
+saturates when allocated cache space close to 1GB. Hence,
+we may conclude that some applications beneﬁt considerably
+(depending on their working set sizes) as they are given more
+storage cache space as compared to others. Clearly, a good
+dynamic partitioning policy should be able to recognize the
+diﬀerence in application characteristics, and allocate storage
+cache partitions accordingly.
+
+Figure 4 on the other hand plots the access latency be-
+havior of the same applications over time. As can be seen
+from these graphs, the access latency per thousand accesses
+of diﬀerent applications vary from phase to phase during
+the course of execution. Hence, we can infer that applica-
+tions storage cache requirements vary dynamically during
+its execution. Clearly, a static partitioning scheme cannot
+adapt to the dynamic modulations in cache requirements at
+
+runtime. Since application behavior changes at runtime, we
+need a dynamic scheme that changes cache allocation care-
+fully to satisfy the SLO throughout the execution period of
+the application.
+
+3.3 Neville’s Algorithm Based Prediction
+
+Recall from Figure 2 that our proposed approach to parti-
+tioning the multi-server storage caches has two components:
+interpolation module and linear programming module.
+In
+the interpolation module, we predict the total cache space
+required by each application for meeting their SLO using
+Neville’s algorithm and later distribute any remaining cache
+space to the applications so as to minimize overall I/O la-
+tency. We ﬁrst explain Neville’s algorithm, and then de-
+scribe how the cache sizes CA1 through CAN for the N ap-
+plications are determined.
+
+Throughout the execution, our approach predicts a cache
+size versus I/O latency curve for each application. In the
+ﬁrst step of using Neville’s algorithm, called bootstrapping,
+the I/O latencies of applications are measured by running
+each application on storage cache capacities X1 and X2
+(e.g., 1MB and 511MB), for very short periods of the ﬁrst
+enforcement interval (e.g., 1
+n of the enforcement interval),
+where n is the number of concurrently executing applica-
+tions on the system. We deﬁne enforcement interval as the
+interval over which a storage cache partition is enforced.
+The I/O latency measurements obtained on capacities X1
+and X2 give the initial data points on the cache size versus
+I/O latency curve for each application,
+
+and the other predictions are determined by the line that
+passes through both the data points by linear interpolation.
+For example, let the line between P 1 and P 2 represent such
+a line as shown in Figure 5. The accuracy of these initial
+data points is not of major concern since the algorithm con-
+tinually updates each application’s prediction curve at every
+enforcement interval in order to experimentally gather more
+sample points to increase the accuracy.
+
+In the second step of the algorithm, we use the initial data
+points as well as the additional (I/O latency versus cache
+size) data points experimentally obtained in subsequent en-
+forcement intervals to interpolate a new prediction curve.
+For example, let P 3 be the new data point obtained experi-
+mentally in the second enforcement interval. We could now
+interpolate data points P 1, P 2 and P 3 and obtain a piece-
+wise linear curve similar to the two straight lines in Figure
+5. However, this curve is not smooth, it has a sharp point
+at P 2. To construct a smooth curve that passes through all
+these points, Neville’s algorithm applies linear interpolation
+to the previously computed linear curves to obtain a higher
+degree polynomial (quadratic) curve as shown in Figure 5
+that approximates the I/O latency versus cache size curve
+at diﬀerent instances of application execution. Note that,
+this step is carried out for each application independently
+at every enforcing interval. We obtain cache allocations (of
+diﬀerent sizes) in every interval, and thus, accumulate more
+sample points which are used in subsequent enforcement in-
+tervals. As we obtain more sample points, we construct
+higher order polynomial curves that pass through all the
+previously measured data points, thereby increasing the ac-
+curacy of interpolation.
+
+In this way, the accuracy of the interpolated curve, as
+well as the cache allocations determined, continuously in-
+creases as the execution progresses. The minimum storage
+
+tpcr
+
+glimpse
+
+tpcc
+
+)
+s
+m
+
+(
+ 
+s
+s
+e
+c
+c
+a
+
+ 
+r
+e
+p
+
+ 
+y
+c
+n
+e
+a
+L
+
+t
+
+)
+s
+m
+
+(
+ 
+s
+s
+e
+c
+c
+a
+ 
+r
+e
+p
+
+ 
+y
+c
+n
+e
+
+t
+
+a
+L
+
+ 4
+
+ 3.5
+
+ 3
+
+ 2.5
+
+ 2
+
+ 1.5
+
+ 1
+
+ 0.5
+
+ 0
+
+ 4
+
+ 3.5
+
+ 3
+
+ 2.5
+
+ 2
+
+ 1.5
+
+ 1
+
+ 0.5
+
+ 0
+
+)
+s
+m
+
+(
+ 
+s
+s
+e
+c
+c
+a
+
+ 
+r
+e
+p
+
+ 
+y
+c
+n
+e
+a
+L
+
+t
+
+)
+s
+m
+
+(
+ 
+s
+s
+e
+c
+c
+a
+ 
+r
+e
+p
+
+ 
+y
+c
+n
+e
+
+t
+
+a
+L
+
+ 4
+
+ 3.5
+
+ 3
+
+ 2.5
+
+ 2
+
+ 1.5
+
+ 1
+
+ 0.5
+
+ 0
+
+ 4
+
+ 3.5
+
+ 3
+
+ 2.5
+
+ 2
+
+ 1.5
+
+ 1
+
+ 0.5
+
+ 0
+
+)
+s
+m
+
+(
+ 
+s
+s
+e
+c
+c
+a
+
+ 
+r
+e
+p
+
+ 
+y
+c
+n
+e
+a
+L
+
+t
+
+)
+s
+m
+
+(
+ 
+s
+s
+e
+c
+c
+a
+ 
+r
+e
+p
+
+ 
+y
+c
+n
+e
+
+t
+
+a
+L
+
+ 4
+
+ 3.5
+
+ 3
+
+ 2.5
+
+ 2
+
+ 1.5
+
+ 1
+
+ 0.5
+
+ 0
+
+ 4
+
+ 3.5
+
+ 3
+
+ 2.5
+
+ 2
+
+ 1.5
+
+ 1
+
+ 0.5
+
+ 0
+
+ 0  10  20  30  40  50  60  70  80  90  100
+
+ 0  10  20  30  40  50  60  70  80  90  100
+
+ 0  10  20  30  40  50  60  70  80  90  100
+
+Normalized Execution Time
+
+Normalized Execution Time
+
+Normalized Execution Time
+
+(a) TPC-R
+
+(b) Glimpse
+
+(c) TPC-C
+
+viewperf
+
+cscope
+
+tpch
+
+ 0  10  20  30  40  50  60  70  80  90  100
+
+ 0  10  20  30  40  50  60  70  80  90  100
+
+ 0  10  20  30  40  50  60  70  80  90  100
+
+Normalized Execution Time
+
+Normalized Execution Time
+
+Normalized Execution Time
+
+(d) Viewperf
+
+(e) Cscope
+
+(f) TPC-H
+
+Figure 4: Variation in access latency per thousand accesses of diﬀerent applications with time when executed
+on the storage cache with a capacity of 512 MB. In all cases, we studied the behavior after warming the cache
+for 1/10 of the execution time of the application.
+
+cache capacity required to satisfy the SLOs is calculated us-
+ing these interpolated curves and the speciﬁed I/O latency
+requirements.
+
+After all the applications are allocated the minimum cache
+capacity required to satisfy their SLO, if there is any free
+cache space remaining, it is distributed among applications
+in proportion to the projected gains that each application
+will exhibit in terms of the access latencies. The important
+point here is that the curve predicted for an application is
+not only used to determine the cache size to be allocated to
+satisfy its SLO, but also to decide the strategy to distribute
+any free cache space that remains to applications that con-
+tribute most in minimizing the overall I/O latency.
+
+There are two possible methods of distributing this free
+cache space. A simple solution is to equally distribute it
+amongst all the running applications. However, recall that
+we want to minimize the overall I/O latency. Therefore,
+we adopt a diﬀerent strategy and distribute the free cache
+among all the applications in proportion to the projected
+gains that each application will exhibit in terms of the re-
+ducing the I/O latency. That is, if N is the number of
+concurrently executing applications, Latj is the predicted
+I/O latency of application j, min(Latj) is the minimum
+recorded access latency of application j and, Cf ree is the
+free cache space available for distribution; then each appli-
+
+P1
+
+Piecewise Linear 
+Interpolation
+
+P2
+
+Polynomial curve 
+generated by Neville’s 
+algorithm
+algorithm
+
+P3
+
+Figure 5: Piecewise linear interpolation of three
+sample points and a quadratic interpolating curve
+obtained from Neville’s algorithm.
+The curve
+predicted using piecewise linear interpolation has
+sharp points whereas Neville’s algorithm generates
+a smooth higher order polynomial curve that passes
+through all the sampled data points, thereby better
+approximating the actual I/O latency vs cache size
+curve.
+
+blocks of the free
+
+3.4 Linear Programming Model for Determin-
+
+cation gets (Cf ree)
+
+Latj −min(Latj )
+
+PN
+
+j=1(Latj −min(Latj ))
+
+cache (which is proportional to their individual contribu-
+tion in reducing the overall I/O access latency). We use
+Latj − min(Latj) because it denotes the potential of the
+application to exhibit lower access latency when allocated
+extra cache, which increases the probability that the applica-
+tion’s access latency is likely to decrease. Such a distribution
+balances the requirement of minimizing overall I/O latency
+as well as maintaining fairness among applications. Thus
+the algorithm determines cache sizes CA1 through CAN for
+all N applications that not only guarantees SLO, but also
+minimizes overall I/O latency.
+
+Let us consider an example scenario when the number of
+applications in the system is two (N = 2) and both the ap-
+plications (A1, A2) have access to both of the two storage
+server caches (M = 2) with cache capacities C1 and C2.
+Consider applications’ service level objective as (δA1, δA2).
+These are indicative of the maximum degradation tolera-
+ble in access latencies, with respect to their access latencies
+in fair share of aggregate cache space, i.e., if Lat1base and
+Lat2base are the access latencies obtained by applications
+A1 and A2, when allocated a fair share (in this case 1
+2 ) of
+the aggregate cache capacity, then the service level objec-
+tive, in terms of assured I/O latencies would be LatA1 and
+LatA2 for applications A1 and A2, respectively, and can be
+expressed as:
+
+LatA1 = δA1 ∗ Lat1base
+LatA2 = δA2 ∗ Lat2base,
+
+(1)
+
+(2)
+
+where δA1, δA2 ≥ 1. For example, if δA1, δA2 are both equal
+to 1.05, then it indicates that both the applications can tol-
+erate at most 5% degradation in access latency compared to
+access latencies in fair share case. Suppose Neville’s algo-
+rithm calculates (as explained above) CA1min and CA2min
+as the minimum cache capacity required to satisfy LatA1
+and LatA2 respectively (in step 2), we distribute the free
+cache space Cf ree = (C1 + C2) − (CA1min + CA2min) in
+proportion to the projected gains that each application will
+exhibit in terms of the I/O latency. That is, if applications
+′
+A1 and A2 get CA1
+, respectively, in step 3 of the
+algorithm, the total cache space (CA1 and CA2) allocated to
+applications A1 and A2 is calculated as:
+
+′
+and CA2
+
+′
+and CA2 = CA2min + CA2
+
+′
+CA1 = CA1min + CA1
+The obtained CA1 and CA2 values guarantee the I/O la-
+tency numbers speciﬁed as SLO and also improve the overall
+performance. To summarize, we predict a (cache size, per-
+formance) curve from the points observed so far in execu-
+tion, for each application. Although the prediction is from
+the points observed in the previous enforcement interval, the
+application’s phase typically lasts over several enforcement
+intervals. Hence, the predictions hold good while the phase
+of the application lasts. At every enforcement interval, we
+decide the amount of cache to allocate for an application to
+satisfy its SLO using this curve. The cache space remaining
+after satisfying the SLOs of all applications is further dis-
+tributed to applications such that the overall I/O latency
+is minimized. Note that the curves are updated across the
+boundaries of enforcement intervals, and in this way our
+approach adapts to the dynamic changes in cache space re-
+quirements.
+
+.
+
+ing Server Cache Partitions
+
+i=1 cij ≤ Cj
+
+The second stage of our Maxperf partitioning scheme in-
+volves distributing the total cache space required by each
+application CA1, CA2...CAN (obtained from ﬁrst stage of
+our algorithm), using a linear programming model, across
+available server cache space. The problem can be formu-
+lated as a system of linear equations as follows. Suppose
+each server Sj has a total storage cache capacity of Cj. We
+partition each server cache (C1,C2...CM ) such that the cache
+allocation CAi for each application Ai, is distributed across
+M servers under the following constraints: PM
+j=1 cij ≥ CAi,
+where cij is the share of application Ai in cache Cj, where
+j ranges from 1 to M . Also, the total cache used by concur-
+rently running applications on each server Sj is less than or
+equal to its total available cache Cj i.e., PN
+The linear programming solver determines every cij (the
+share of application Ai in cache Cj) using the constraints
+mentioned above with an objective of maximizing the mini-
+mum value of cij for each server j. Such an objective func-
+tion distributes the load on each server as uniformly as pos-
+sible across all M servers. Maxperf enforces the determined
+cache partition sizes (cij) in every enforcement interval dur-
+ing runtime to cater to the dynamically changing cache re-
+quirements of the applications. It is important to note that
+the solver distributes cache allocations’ of each application
+over the available server caches as uniformly as possible so
+that no single server is overloaded. Such a distribution is
+also beneﬁcial to the application because, the application
+has minimal risk of its requirement not being fulﬁlled in the
+event of a single server failure. However, if there is a re-
+quirement to enforce one applications’ cache allocation to a
+particular server, we could just allocate the cache size deter-
+mined by the ﬁrst step of our algorithm on that server and
+our algorithm ensures that the speciﬁed I/O latency require-
+ment is guaranteed and the overall I/O latency is minimized
+with that allocation.
+
+Continuing with our example of two applications and two
+servers, to distribute CA1 and CA2 obtained from curve ﬁt-
+ting across the two server caches C1 and C2, we partition C1
+as C11 and C21 and C2 as C12 and C22 under the following
+constraints:
+
+C11 + C21 ≤ C1
+C12 + C22 ≤ C2,
+
+and
+
+C11 + C12 ≥ CA1
+C21 + C22 ≥ CA2,
+
+such that both the servers are uniformly loaded. The de-
+termined cache partition sizes C11 and C21 are enforced in
+server cache C1, and C12 and C22 are enforced in C2 in ev-
+ery enforcement interval. Also, in every enforcement inter-
+val, more and more accurate data points are accumulated,
+increasing the precision of the curve obtained from interpo-
+lation as well as the quality of cache partitioning.
+
+4. EXPERIMENTAL SETUP
+
+4.1 Simulation Platform
+
+We have extended AccuSim [3], a buﬀer cache simulator
+that models the kernel subsystems involved in buﬀer cache
+management, to support multiple servers. Accusim also has
+support for prefetching data from the disk. It is interfaced
+with DiskSim 3.0, an accurate disk simulator [29], since ob-
+
+Table 1: Description of the applications used in our experiments. The second column gives the size of the
+I/O reference stream for each application and the third column shows the total number of I/O accesses in
+each application.
+
+Application Description
+TPCC is an on-line transaction processing (OLTP) application trace, that involves a mix of ﬁve
+diﬀerent concurrent transactions on a database [16]. We collected traces while running the TPCC
+database benchmark on Postgres 7.1.2.
+TPC-H is a decision support benchmark from the OLTP suite of benchmarks. TPC-H exercises
+diﬀerent ad-hoc queries and concurrently modiﬁes the database. The queries involve a huge volume
+of I/O read and write requests.
+TPC-R is a business reporting and decision support benchmark similar to TPC-H, but with
+additional optimizations based on advance knowledge of the queries.
+It consists of a suite of
+business oriented queries and concurrent data modiﬁcations.
+CScope locates speciﬁed elements of code in C, lex , or yacc source ﬁles [22]. It basically performs
+source code examination. The examined source code is Linux kernel 2.4.20.
+Viewperf is a SPEC benchmark designed to measure of graphics subsystem performance [1]. It
+reads entire ﬁles to render images.
+Glimpse stands for GLobal IMPlicit SEarch, provides indexing and query schemes for ﬁle systems
+and is used to search for text strings under the /usr directory [17].
+
+I/O Stream Size Accesses
+
+1370 MB
+
+3.9M
+
+1187 MB
+
+13.4M
+
+1087 MB
+
+9.4M
+
+260 MB
+
+495 MB
+
+669 MB
+
+1.2 M
+
+0.3M
+
+3M
+
+taining an accurate hit ratio in the presence of prefetching is
+not possible without a time-aware simulator. DiskSim sim-
+ulates the Seagate ST39102LW disk model. The combined
+simulator extended for the multi-server scenario allows us
+to measure individual cache hit rates and I/O time of ap-
+plications. Apart from this, we have also integrated this
+simulator with PCx [5], a linear programming solver in or-
+der to eﬃciently solve the simple linear programming for-
+mulation for distributing the aggregate cache capacity. PCx
+is an interior-point predictor-corrector linear programming
+package.
+
+Our default conﬁguration of a multi-server platform con-
+sists of four servers executing four applications (fully con-
+nected), with a 512MB storage cache in each server, which
+gives an aggregate shared cache capacity of 2GB. In this con-
+ﬁguration, each application (client) can access any server in
+the system. Each time a cache allocation is made, it is en-
+forced for an interval of enf orcement interval which has a
+default value of 30 sec. In our simulation experiments, we
+use 4 KB cache blocks. Table 3 gives the default values of
+other simulation parameters used in our experiments.
+
+In every enforcement interval, the best allocation of cache
+space for each application and the best possible distribution
+of such a cache allocation across multiple servers is computed
+such that SLO of each application is satisﬁed. The com-
+puted new cache partition sizes are communicated as hints
+to each server running those applications. We observed dur-
+ing our experiments that such communication overheads are
+not very high; nonetheless, they are included in all our re-
+sults. To minimize the possibility of applications losing lots
+of already warmed up cache space, because of a new cache
+partition size determined by the LP solver that is diﬀerent
+from the previous one, we keep track of how the partition
+sizes and allocations in diﬀerent servers, change in every
+interval. If the new partitioning size is more than the pre-
+vious one and the allocation is over the same server, then
+data blocks are brought into the new cache space without
+aﬀecting the already warmed up cache. However, if the new
+partitioning size is less than the previous one, we choose to
+keep the ”hot blocks” (most frequently accessed blocks) of
+the application in the new partition.
+
+4.2 Applications
+
+AccuSim is a trace-driven simulator and uses application
+traces that were collected using tracing tools such as strace.
+
+Traces record the following information about the I/O op-
+erations: access type, time, ﬁle identiﬁer (inode), and I/O
+size. We use six large scale traces of I/O intensive applica-
+tions. The applications and their workload sizes used in this
+work are comparable to workloads in [3, 19, 4]. Important
+characteristics of these applications are described in Table
+1. We conducted several experiments by concurrently exe-
+cuting diﬀerent combinations of these six application traces,
+with four applications in each experiment. Table 2 describes
+the diﬀerent combinations of applications used in the ex-
+periments. The combinations have been chosen such that
+they cover a large spectrum of data intensiveness and ex-
+hibit varying access patterns and locality. The three TPC
+benchmarks predominantly exhibit random access patterns
+while cscope, viewperf and glimpse exhibit varying degrees
+of sequentiality in their access patterns [3]. Among the com-
+binations of applications used, combo1 and combo2 exhibit
+a higher degree of random accesses as compared to that of
+combo3 and combo4 which are dominated by sequential ap-
+plications. And, each application has a speciﬁc I/O latency
+requirement speciﬁed as its SLO. Note that, for the sake of
+consistency, we have used the same SLOs for an application
+regardless of the combination in which it is used. We later
+study the impact of varying these numbers in the speciﬁca-
+tion for each of these applications in Section 5.4.
+
+5. EXPERIMENTAL RESULTS
+
+In this section, we ﬁrst describe the two base cases against
+which we compare our multi server storage cache alloca-
+tion and distribution scheme, and explain the metrics used
+for studying the performance of our scheme followed by a
+detailed performance analysis of our scheme. Lastly, we
+present a study of sensitivity of our approach to various
+parameters of the scheme, varying one parameter at a time
+from the default conﬁguration (see Table 3).
+
+5.1 Base Schemes
+
+5.1.1 Uncontrolled partitioning
+
+In this scheme, all server caches are shared among com-
+peting applications and the amount of cache used by any
+application is bound only by the aggregate cache capacity
+of the multi-server system. That is, the system does not
+enforce any partitioning of the shared storage cache. This
+
+Table 2: Concurrently executed applications.
+
+Traces
+Combo1
+Combo2
+Combo3
+Combo4
+
+Concurrent Applications
+tpc-c, tpc-h, tpc-r, viewperf
+cscope, tpc-c, glimpse, tpc-r
+glimpse, viewperf, tpc-h, cscope
+viewperf, cscope, tpc-c, glimpse
+
+Table 3: Major (default) simulation parameters.
+
+Number of Applications (Clients)
+
+Parameter
+Conﬁguration
+
+Number of Servers
+
+Server Cache size
+
+Disk Capacity
+
+Disk RPM
+
+Disk Seek Time
+
+Enforcement Interval
+
+Page replacement policy
+
+Cache block size
+
+Fully connected
+
+Value
+
+4
+4
+
+512 MB
+9.1 GB
+10,045
+5 msec
+30 sec
+LRU
+4 KB
+
+Uncontrolled
+
+maxperf
+
+Uncontrolled
+
+maxperf
+
+Uncontrolled
+
+maxperf
+
+Uncontrolled
+
+maxperf
+
+y
+c
+n
+e
+t
+a
+
+l
+ 
+s
+s
+e
+c
+c
+a
+d
+e
+z
+i
+l
+
+ 
+
+a
+m
+r
+o
+N
+
+1.5
+
+1.3
+
+1.1
+
+0.9
+
+0.7
+
+0.5
+
+y
+c
+n
+e
+t
+a
+
+l
+ 
+s
+s
+e
+c
+c
+a
+d
+e
+z
+i
+l
+
+ 
+
+a
+m
+r
+o
+N
+
+1.5
+
+1.3
+
+1.1
+
+0.9
+
+0.7
+
+0.5
+
+y
+c
+n
+e
+t
+a
+
+l
+ 
+s
+s
+e
+c
+c
+a
+d
+e
+z
+i
+l
+
+ 
+
+a
+m
+r
+o
+N
+
+1.5
+
+1.3
+
+1.1
+
+0.9
+
+0.7
+
+0.5
+
+y
+c
+n
+e
+t
+a
+
+l
+ 
+s
+s
+e
+c
+c
+a
+d
+e
+z
+i
+l
+
+ 
+
+a
+m
+r
+o
+N
+
+1.5
+
+1.3
+
+1.1
+
+0.9
+
+0.7
+
+0.5
+
+tpcc
+
+tpch
+
+tpcr
+
+viewperf overall
+
+cscope
+
+tpcc
+
+glimpse
+
+tpcr
+
+overall
+
+glimpse viewperf
+
+tpch
+
+cscope overall
+
+viewperf cscope
+
+tpcc
+
+glimpse overall
+
+(a) Combo1
+
+(b) Combo2
+
+(c) Combo3
+
+(d) Combo4
+
+Figure 6: Access latencies achieved by diﬀerent schemes for diﬀerent application combinations when executed
+on four servers with aggregate storage cache capacity of 2GB (512 MB in each server). In each graph, the
+last group of bars give the overall I/O latency. The dotted lines indicate the SLO of the applications in terms
+of maximum tolerable I/O latency.
+
+scheme has been used traditionally by most systems due
+to the simplicity in administration. Although this simple
+scheme is ﬂexible in accommodating bursty traﬃc and en-
+courages sharing of buﬀered data, more often than not, it
+is plagued by the problem of inter-application interferences
+leading to unpredictable application behavior. This leads to
+lack of performance guarantees.
+
+5.1.2 Fair Share
+
+In this scheme, the aggregate storage cache is divided
+equally amongst competing applications and each applica-
+tion can use only its assigned allocation, thereby providing
+isolation. Note that this is a static allocation scheme and the
+allocations do not change to cater to the varying resource
+demands of the applications with time. Also, note that fair
+share provides strong insulation (static) and a strict form
+of guarantee where each application is guaranteed to have a
+known share of the cache capacity for its entire execution.
+However, it might be less useful when considered from a
+holistic perspective as it does not reduce the overall I/O la-
+tency by much as compared to the uncontrolled partitioning
+scheme. This static scheme contrasts with our scheme that
+dynamically modulates the cache allocations to applications
+in order to guarantee the requested performance in terms of
+I/O latency.
+
+Apart from these two base schemes, we compare our ap-
+proach against the cache partitioning approach in Argon
+[26]. We extended their single server storage cache man-
+agement scheme to multi-server architecture for our study.
+
+5.2 Metrics of interest
+
+Application I/O latency is deﬁned as the average time
+taken for a data block to be made available since a request
+to that block was made. We would like to reemphasize here
+that our SLO speciﬁcation directly translates to an upper
+
+bound on the application I/O latency as the number of ap-
+plications accessing a server has an upper bound that is
+known. Overall I/O latency is deﬁned from the perspective
+of the multi-server system (rather than the application) as
+the sum of average data access latencies of all the appli-
+cations. Recall that our storage cache allocation strategy
+distributes the remaining cache capacity after SLOs are sat-
+isﬁed for all applications such that overall I/O latency is
+minimized by improving the I/O latencies of all applications
+in a utilitarian manner.
+
+5.3 Performance Analysis
+
+We performed experiments to study the performance of
+our scheme, Maxperf, against the base schemes described
+above. Figure 6 plots the I/O latencies achieved by our
+scheme in comparison with the uncontrolled partitioning
+scheme, for diﬀerent application combinations (see Table 2)
+when executed on the default conﬁguration (see Table 3).
+The access latencies in the uncontrolled partitioning and
+Maxperf schemes have been normalized with respect to the
+respective access latencies in the fair share scheme. We can
+observe some key characteristics of our proposed allocation
+scheme from these results. Firstly, the SLA of each of the
+applications is met regardless of the combination of applica-
+tions. In all the experiments, this is assumed to be tolerating
+a 5% degradation in access latency from that in its fair share
+of the aggregate storage cache. However, the uncontrolled
+partitioning scheme violates the service level objectives in
+many cases (e.g., tpcc and tpcr in combo1, cscope, tpcc and
+tpcr in combo2, viewperf, tpch and cscope in combo3, and
+cscope and tpcc in combo4). We now consider combo3, and
+explain how our approach is able to handle the cache allo-
+cation to the applications involved through the two phases
+in the interpolation module. For example, at a particular
+enforcement interval, predictions using Neville’s algorithm
+
+glimpse
+
+viewperf
+
+tpch
+
+cscope
+
+ 0  10  20  30  40  50  60  70  80  90 100
+
+ 0  10  20  30  40  50  60  70  80  90 100
+
+ 0  10  20  30  40  50  60  70  80  90 100
+
+ 0  10  20  30  40  50  60  70  80  90 100
+
+Normalized time
+
+Normalized time
+
+Normalized time
+
+Normalized time
+
+(a) Glimpse (Aver-
+age allocation=148.7
+MB)
+
+(b) Viewperf (Aver-
+age allocation=121.3
+MB)
+
+(c) TPC-H (Aver-
+age allocation=127.8
+MB)
+
+(d) Cscope (Aver-
+age allocation=114.2
+MB)
+
+Figure 7: Variations in cache space allocations with time on one server (server 1) with 512 MB cache for all
+applications of combo3.
+
+Uncontrolled
+
+maxperf
+
+Uncontrolled
+
+maxperf
+
+Uncontrolled
+
+maxperf
+
+Uncontrolled
+
+maxperf
+
+)
+
+B
+M
+
+(
+ 
+
+e
+c
+a
+p
+s
+ 
+
+e
+h
+c
+a
+c
+ 
+
+d
+e
+
+t
+
+a
+c
+o
+
+l
+l
+
+A
+
+ 256
+
+ 192
+
+ 128
+
+ 64
+
+ 0
+
+y
+c
+n
+e
+t
+a
+
+l
+ 
+s
+s
+e
+c
+c
+a
+d
+e
+z
+i
+l
+
+ 
+
+a
+m
+r
+o
+N
+
+1.5
+
+1.3
+
+1.1
+
+0.9
+
+0.7
+
+0.5
+
+)
+
+B
+M
+
+(
+ 
+
+e
+c
+a
+p
+s
+ 
+
+e
+h
+c
+a
+c
+ 
+
+d
+e
+
+t
+
+a
+c
+o
+
+l
+l
+
+A
+
+ 256
+
+ 192
+
+ 128
+
+ 64
+
+ 0
+
+y
+c
+n
+e
+t
+a
+
+l
+ 
+s
+s
+e
+c
+c
+a
+d
+e
+z
+i
+l
+
+ 
+
+a
+m
+r
+o
+N
+
+1.5
+
+1.3
+
+1.1
+
+0.9
+
+0.7
+
+0.5
+
+)
+
+B
+M
+
+(
+ 
+
+e
+c
+a
+p
+s
+ 
+
+e
+h
+c
+a
+c
+ 
+
+d
+e
+
+t
+
+a
+c
+o
+
+l
+l
+
+A
+
+ 256
+
+ 192
+
+ 128
+
+ 64
+
+ 0
+
+y
+c
+n
+e
+t
+a
+
+l
+ 
+s
+s
+e
+c
+c
+a
+d
+e
+z
+i
+l
+
+ 
+
+a
+m
+r
+o
+N
+
+1.5
+
+1.3
+
+1.1
+
+0.9
+
+0.7
+
+0.5
+
+)
+
+B
+M
+
+(
+ 
+
+e
+c
+a
+p
+s
+ 
+
+e
+h
+c
+a
+c
+ 
+
+d
+e
+
+t
+
+a
+c
+o
+
+l
+l
+
+A
+
+ 256
+
+ 192
+
+ 128
+
+ 64
+
+ 0
+
+y
+c
+n
+e
+t
+a
+
+l
+ 
+s
+s
+e
+c
+c
+a
+d
+e
+z
+i
+l
+
+ 
+
+a
+m
+r
+o
+N
+
+1.5
+
+1.3
+
+1.1
+
+0.9
+
+0.7
+
+0.5
+
+tpcc
+
+tpch
+
+tpcr
+
+viewperf overall
+
+cscope
+
+tpcc
+
+glimpse
+
+tpcr
+
+overall
+
+glimpse viewperf
+
+tpch
+
+cscope overall
+
+viewperf cscope
+
+tpcc
+
+glimpse overall
+
+(a) Combo1
+
+(b) Combo2
+
+(c) Combo3
+
+(d) Combo4
+
+Figure 8: Access latencies achieved by diﬀerent schemes for diﬀerent application combinations when executed
+on four servers with aggregate storage cache capacity of 1GB (256 MB in each server). The dotted lines
+indicate the SLO of the applications in terms of maximum tolerable I/O latency.
+
+determine the applications in combo3 (glimpse, viewperf,
+tpch, cscope) to require (412.3, 296.8, 361.7, 462.2) MB
+amounts of cache in order to satisfy their SLOs. Once this
+is allocated, an aggregate of 515 MB of cache space is left
+unallocated which needs to be distributed in proportion to
+the marginal gains of the applications as explained before.
+The marginal gains are determined to be in the proportions
+of (0.77, 0.03, 0.16, 0.04) for the applications leading to an
+overall allocation of (807.7, 312.5, 441.9, 485.9) MB for the
+applications of combo3. As a result, we observe that, the
+overall I/O latency improves by 19.6%, over uncontrolled
+partitioning scheme after satisfying the SLOs.
+
+To analyze the dynamic nature of our scheme and how it
+dynamically allocates varying cache sizes to each of the ap-
+plications in a workload, we plot the variations in allocations
+with time (on a time-scale of 1–100 representing the entire
+execution time of each application) for each of the applica-
+tions of a representative combination (combo3) in one of the
+servers (server1) in Figure 7. Note that the sum of alloca-
+tions of all the applications in each server is 512 MB (the
+total storage cache capacity of the server) at every instant of
+time. These results illustrate the adaptive nature of our al-
+gorithm in tracking the speciﬁed SLO values by modulating
+cache allocations.
+
+5.4 Sensitivity Study
+
+performance. Therefore, we study the impact of varying the
+aggregate cache size on the performance of our scheme. Fig-
+ure 8 plots the I/O access latencies achieved by our scheme
+in comparison to the uncontrolled partitioning when the ag-
+gregate cache capacity is modiﬁed to be 1GB (256 MB in
+each server), every other parameter remaining the same as
+in the default conﬁguration. The results are normalized with
+respect to the access latencies in the fair share of the aggre-
+gate server cache.
+
+We observe that when the aggregate cache capacity is re-
+duced, the performance of the applications that the most
+aﬀected applications in comparison to that in the default
+conﬁguration are those which obtained a large performance
+beneﬁt beyond satisfying the SLOs, while the performance of
+the other applications that barely satisﬁed the SLOs remain
+more or less similar. This is speciﬁcally true for applications
+like glimpse and viewperf. Such a behavior can be explained
+by observing that, when the aggregate cache capacity is re-
+duced, the applications that would otherwise beneﬁt from
+spare storage cache capacity lose the additional share of the
+cache they would have received from the applications that
+would not have beneﬁted signiﬁcantly from the same, while
+these applications do not suﬀer as much because the reduc-
+tion in aggregate cache size is amortized by losing out on
+the additional cache without compromising signiﬁcantly on
+the performance.
+
+5.4.1
+
+Sensitivity to aggregate cache capacity
+
+5.4.2
+
+Sensitivity to Service Level Agreements
+
+The aggregate available cache capacity directly inﬂuences
+the performance of our scheme as it inﬂuences the fair share
+
+In this section, we report results from our experiments
+that study the sensitivity of our approach to the service
+
+Uncontrolled
+
+maxperf
+
+Uncontrolled
+
+maxperf
+
+Uncontrolled
+
+maxperf
+
+Uncontrolled
+
+maxperf
+
+y
+c
+n
+e
+t
+a
+
+l
+ 
+s
+s
+e
+c
+c
+a
+d
+e
+z
+i
+l
+
+ 
+
+a
+m
+r
+o
+N
+
+1.5
+
+1.3
+
+1.1
+
+0.9
+
+0.7
+
+0.5
+
+y
+c
+n
+e
+t
+a
+
+l
+ 
+s
+s
+e
+c
+c
+a
+d
+e
+z
+i
+l
+
+ 
+
+a
+m
+r
+o
+N
+
+1.5
+
+1.3
+
+1.1
+
+0.9
+
+0.7
+
+0.5
+
+y
+c
+n
+e
+t
+a
+
+l
+ 
+s
+s
+e
+c
+c
+a
+d
+e
+z
+i
+l
+
+ 
+
+a
+m
+r
+o
+N
+
+1.5
+
+1.3
+
+1.1
+
+0.9
+
+0.7
+
+0.5
+
+y
+c
+n
+e
+t
+a
+
+l
+ 
+s
+s
+e
+c
+c
+a
+d
+e
+z
+i
+l
+
+ 
+
+a
+m
+r
+o
+N
+
+1.5
+
+1.3
+
+1.1
+
+0.9
+
+0.7
+
+0.5
+
+tpcc
+
+tpch
+
+tpcr
+
+viewperf overall
+
+cscope
+
+tpcc
+
+glimpse
+
+tpcr
+
+overall
+
+glimpse viewperf
+
+tpch
+
+cscope overall
+
+viewperf cscope
+
+tpcc
+
+glimpse overall
+
+(a) Combo1
+
+(b) Combo2
+
+(c) Combo3
+
+(d) Combo4
+
+Figure 9: Sensitivity to SLO speciﬁcations. An example case of executing four applications simultaneously
+using the four servers with an aggregate cache capacity of 2 GB (512 MB on each server). The dotted lines
+indicate the SLO of the applications in terms of maximum tolerable I/O latency.
+
+Uncontrolled
+
+maxperf
+
+Uncontrolled
+
+maxperf
+
+Uncontrolled
+
+maxperf
+
+y
+c
+n
+e
+t
+a
+
+ 
+
+l
+ 
+s
+s
+e
+c
+c
+a
+d
+e
+z
+i
+l
+a
+m
+r
+o
+N
+
+1.5
+
+1.3
+
+1.1
+
+0.9
+
+0.7
+
+0.5
+
+y
+c
+n
+e
+t
+a
+
+ 
+
+l
+ 
+s
+s
+e
+c
+c
+a
+d
+e
+z
+i
+l
+a
+m
+r
+o
+N
+
+1.5
+
+1.3
+
+1.1
+
+0.9
+
+0.7
+
+0.5
+
+y
+c
+n
+e
+t
+a
+
+ 
+
+l
+ 
+s
+s
+e
+c
+c
+a
+d
+e
+z
+i
+l
+a
+m
+r
+o
+N
+
+1.5
+
+1.3
+
+1.1
+
+0.9
+
+0.7
+
+0.5
+
+(a) Combo1
+
+(b) Combo2
+
+(c) Combo3
+
+Figure 10: Sensitivity to increasing number of applications. An example case of executing ﬁve applications
+simultaneously using the four servers with an aggregate cache capacity of 2 GB (512 MB on each server).
+The dotted lines indicate the SLO of the applications in terms of maximum tolerable I/O latency.
+
+U VVWXYZ
+
+X\]
+
+[
+
+^
+
+ST
+
+S_
+
+S ‘
+
+S ‘
+
+level agreements of each application. The overall storage
+cache I/O latency achieved by our scheme is sensitive to the
+SLOs of each of the applications. Note that the overall I/O
+latencies in the fair share scheme is a lower bound on what
+our scheme achieves regardless of service level objectives of
+other applications as our scheme strives to improve the over-
+all I/O latency by utilizing all of the aggregate storage cache
+capacity. We experimented with a new set of service level
+objectives for each of the applications in the combinations
+and retained all other parameters similar as in the default
+case. An important characteristic captured by the new ser-
+vice level objectives is the diﬀerentiated nature of the spec-
+iﬁcations. Diﬀerent applications have diﬀerent service level
+objectives as opposed to the same across applications in the
+default case. The results showing the comparison of the per-
+formance of our scheme in comparison to the uncontrolled
+partitioning with the new service level objectives are plot-
+ted in Figure 9. We observe that the overall I/O latency
+improves by up to 20.8% over the uncontrolled partitioning.
+
+5.4.3
+
+Sensitivity to Increasing the Number of Appli-
+cations
+
+We now study how our scheme performs when the num-
+ber of applications is more than the default conﬁguration.
+We experimented with several combinations consisting of
+the ﬁve applications. The results are shown in Figure 10.
+Combo1 consists of the applications TPC-C, TPC-H, TPC-
+R, Viewperf and Cscope. Combo2 consists of Cscope, TPC-
+C, Glimpse, TPC-R and Viewperf and Combo3 consists of
+Glimpse, Viewperf, TPC-H, Cscope, TPC-C. We observe
+
+ab c
+
+b c efghb iejk
+
+ab c
+
+b c efghb ielk
+
+ab c
+
+b c efghb ienk
+
+ab c
+
+b c efghb ie
+
+k
+
+d
+
+d
+
+d
+
+d
+
+m
+
+Figure 11: A topology where client applications and
+server caches are partially connected.
+
+that, in all combinations of applications, our scheme is able
+to eﬃciently redistribute the unutilized cache space to in-
+crease the overall I/O latency. We observe that the overall
+I/O latency improves over uncontrolled partitioning scheme
+by 19.75%, 26.02%, and 22.32%, for the three application
+mixes (ﬁve applications each) considered.
+
+5.4.4 Results with Partial Connectivity
+
+In all the above discussions, we have assumed that the
+clients and servers are fully connected, i.e., every client is
+connected to every server and vice-versa. We now consider
+the case of partial connectivity between applications and
+server caches as depicted in Figure 11. In this example, each
+application is connected to only two of the total four server
+caches. Therefore, each client has access to an aggregate
+cache capacity of only 1GB of the 2GB, considering all other
+
+Uncontrolled
+
+maxperf
+
+Uncontrolled
+
+maxperf
+
+Uncontrolled
+
+maxperf
+
+Uncontrolled
+
+maxperf
+
+y
+c
+n
+e
+t
+a
+
+l
+ 
+s
+s
+e
+c
+c
+a
+d
+e
+z
+i
+l
+
+ 
+
+a
+m
+r
+o
+N
+
+1.5
+
+1.3
+
+1.1
+
+0.9
+
+0.7
+
+0.5
+
+y
+c
+n
+e
+t
+a
+
+l
+ 
+s
+s
+e
+c
+c
+a
+d
+e
+z
+i
+l
+
+ 
+
+a
+m
+r
+o
+N
+
+1.5
+
+1.3
+
+1.1
+
+0.9
+
+0.7
+
+0.5
+
+y
+c
+n
+e
+t
+a
+
+l
+ 
+s
+s
+e
+c
+c
+a
+d
+e
+z
+i
+l
+
+ 
+
+a
+m
+r
+o
+N
+
+1.5
+
+1.3
+
+1.1
+
+0.9
+
+0.7
+
+0.5
+
+y
+c
+n
+e
+t
+a
+
+l
+ 
+s
+s
+e
+c
+c
+a
+d
+e
+z
+i
+l
+
+ 
+
+a
+m
+r
+o
+N
+
+1.5
+
+1.3
+
+1.1
+
+0.9
+
+0.7
+
+0.5
+
+tpcc
+
+tpch
+
+tpcr
+
+viewperf overall
+
+cscope
+
+tpcc
+
+glimpse
+
+tpcr
+
+overall
+
+glimpse viewperf
+
+tpch
+
+cscope overall
+
+viewperf cscope
+
+tpcc
+
+glimpse overall
+
+(a) Combo1
+
+(b) Combo2
+
+(c) Combo3
+
+(d) Combo4
+
+Figure 12: Comparison of our scheme to uncontrolled partitioning when the servers are partially connected.
+The aggregate cache capacity is 2 GB. The dotted lines indicate the SLO of the applications in terms of
+maximum tolerable I/O latency.
+
+parameters the same as our default conﬁguration. In such a
+partially connected case, it might be possible (although not
+frequent) that the total cache allocation to an application as
+determined before the linear programming step of the Max-
+perf scheme (as described in Section 3.3) leads to a solution
+that exceeds the available cache limits. This is when the to-
+tal storage cache size determined in the interpolation step of
+our scheme (for a given client) is greater than the total cache
+size of the servers connected to that client. For the sake of
+correctness, in such cases, we could revert to the case of fair
+share of the aggregate cache space available. A comparison
+of our scheme with uncontrolled partitioning scheme in case
+of such a partially connected system is shown in Figure 12.
+Apart from observing that the application SLO require-
+ments are guaranteed, it is important to note that we achieve
+improvements in the overall I/O latency in case of the un-
+controlled partitioning scheme as compared to that on the
+default conﬁguration. This can be explained as occurring
+due to reduced inter-application interferences in the server
+caches (each server cache is shared by only two applications
+in the partially connected case, as opposed to four applica-
+tions in the default conﬁguration).
+
+5.5 Comparison with Argon
+
+We extended the cache partitioning scheme proposed in
+a recent work [26] to partition the aggregate shared cache
+capacity in multi-server environments and compared the im-
+provements in terms of the overall I/O latency metric against
+that obtained by our Maxperf scheme. In Argon [26], in or-
+der to discover the required cache partition size for each
+workload, ﬁrst workload’s request pattern is traced to de-
+duce the relationship between cache space required and its
+I/O absorption rate. Then, using an analytic model, the
+cache space required for speciﬁc I/O absorption rate is pre-
+dicted and in the last step workload’s throughput when shar-
+ing the server is calculated.
+
+We have extended their approach to multi-server environ-
+ment to predict the cache space required to be allocated
+in each server such that the speciﬁed SLO requirement (in
+terms of I/O latency) is fulﬁlled. Figure 13 plots the over-
+all I/O latency obtained through this extended version of
+Argon against that obtained by our scheme. On an aver-
+age, the Maxperf scheme achieves 4.7% better overall I/O
+latency. This can be attributed to the dynamic adaptability
+of our Maxperf scheme as compared to Argon. Our approach
+caters to the changing storage cache requirements of the ap-
+plications over the course of their execution and hence better
+
+Argon MaxPerf
+
+y
+c
+n
+e
+t
+a
+L
+ 
+l
+l
+
+a
+r
+e
+v
+O
+d
+e
+z
+i
+l
+
+ 
+
+a
+m
+r
+o
+N
+
+1
+
+0.95
+
+0.9
+
+0.85
+
+0.8
+
+combo1
+
+combo2
+
+combo3
+
+combo4
+
+Figure 13: Comparison of our scheme with cache
+partitioning scheme of Argon in terms of overall I/O
+latency.
+
+fulﬁlls the cache space requirement.
+
+6. CONCLUSIONS
+
+This paper proposes a consolidated storage cache man-
+agement scheme, called Maxperf, which eﬃciently utilizes
+the aggregate storage cache space in multi-server architec-
+tures. Maxperf consolidates the available cache space across
+all the servers and enables coordinated access to the shared
+storage cache. This scheme also provides performance isola-
+tion to each of the concurrently executing applications, by
+partitioning the aggregate storage cache space among the
+applications and then, distributing each application’s cache
+allocation across all the servers the application is serviced
+from. Experimental results show that our proposed strat-
+egy performs signiﬁcantly better on improving I/O latencies
+of individual applications as well as the overall I/O latency
+metric, over both the uncontrolled partitioning scheme and
+fair share scheme, after satisfying the applications’ SLOs.
+
+7. ACKNOWLEDGMENTS
+
+The authors would like to gratefully thank Dr. Suzanne
+Shontz, Co-Director of the Scalable Scientiﬁc Computing
+Lab (SSCL) at Penn State University for her kind assistance
+in helping us understand the diﬀerent optimization metrics
+that could be used with the linear solver. Dr. Shontz also
+introduced us to the PCx linear programming solver. We
+gratefully acknowledge the assistance of Nicholas Voshell of
+Department of CSE at Penn State University for his com-
+ments/reviews that helped us improve the paper. This work
+is supported in part by NSF grants #0406340, #0444158,
+#0621402, #0724599, #0821527, and #0833126.
+
+8. REFERENCES
+[1] Specviewperf-9 performance evaluation software. In
+
+implementation for global performance measurement
+of computer systems. In ACM SIGMOD Record, 2006.
+
+http://spec.it.miami.edu/gwpg/gpc.static/vp9info.html.
+
+[17] U. Manber and S. Wu. Glimpse: a tool to search
+
+[2] M. Aron, P. Druschel, and S. Iyer. A resource
+
+management framework for predictable quality of
+service in web servers. In
+citeseer.ist.psu.edu/article/aron01resource.html, 2001.
+
+through entire ﬁle systems. In Proc. of the USENIX
+Winter Technical Conference, 1994.
+
+[18] R. L. Mattson. Partitioned cache ˝U a new type of
+
+cache. In IBM Research Report, 1987.
+
+[3] A. R. Butt, C. Gniady, and Y. C. Hu. The
+
+[19] N. Megiddo and D. S. Modha. Arc: A self-tuning, low
+
+performance impact of kernel prefetching on buﬀer
+cache replacement algorithms. In Proc. of the Intl.
+Conference on Measurements and Modeling of
+Computer Systems, 2005.
+
+[4] J. Choi, S. H. Noh, S. L. Min, and Y. Cho. Towards
+
+application/ﬁle-level characterization of block
+references: a case for ﬁne-grained buﬀer management.
+In Measurement and Modeling of Computer Systems,
+2000.
+
+[5] J. Czyzyk, S. Mehrotra, M. Wagner, and S. J. Wright.
+PCx: Software for linear programming. In Proc. of the
+24th IEEE Conference on Mass Storage Systems and
+Technologies, 1997.
+
+[6] M. D. Dahlin, R. Y. Wang, T. E. Anderson, and D. A.
+
+Patterson. Cooperative caching: Using remote client
+memory to improve ﬁle system performance. 1994.
+
+[7] M. Abd-El-Malek et al. Ursa minor: Versatile
+
+cluster-based storage. In Proc. of the 4th conference
+on USENIX Conference on File and Storage
+Technologies, 2005.
+
+[8] S. Teukolsky et al. Polynomial interpolation and
+
+extrapolation. In Numerical Recipes in C. The Art of
+Scientiﬁc Computing (2nd edition ed.). Cambridge
+University Press., 1992.
+
+[9] W. Wilcke et al. IBM intelligent bricks project –
+
+petabytes and beyond. In IBM Journal of Research
+and Development, 2006.
+
+[10] Y. Saito et al. FAB: building distributed enterprise
+
+disk arrays from commodity components. In SIGOPS
+Oper. Syst. Rev., 2004.
+
+Karlin, H. M. Levy, and C. A. Thekkath.
+Implementing global memory management in a
+workstation cluster. In Proc. of the ﬁfteenth ACM
+symposium on Operating systems principles, 1995.
+
+[12] C. Gniad, A. R. Butt, and Y. C. Hu. Program counter
+based pattern classiﬁcation in buﬀer caching. In Proc.
+of the 6th Symposium on Operating Systems Design
+and Implementation, 2004.
+
+[13] P. Goyal, D. Jadav, D. S. Modha, and R. Tewari.
+
+Cachecow: Providing QoS for storage system caches.
+In Proc. of the Intl. Conference on Measurements and
+Modeling of Computer Systems, 2003.
+
+[14] J. M. Kim, J. Choi, J. Kim, S. H. Noh, S. L. Min,
+
+Y. Cho, and C. S. Kim. A low-overhead
+high-performance uniﬁed buﬀer management scheme
+that exploits sequential and looping references. In
+Proc. of the 4th Symposium on Operating Systems
+Design and Implementation, 2000.
+
+[15] B. Ko, K. Lee, K. Amiri, and S. Calo. Scalable service
+
+diﬀerentiation in a shared storage cache. In Proc. of
+the Intl. Conference on Distributed Computing
+Systems, 2003.
+
+[16] D. R. Llanos. Tpcc-uva: An open-source tpc-c
+
+overhead replacement cache. In Proc. of the 2nd
+USENIX Conference on File and Storage
+Technologies, 2003.
+
+[20] R. H. Patterson, G. A. Gibson, E. Ginting,
+
+D. Stodolsky, and J. Zelenka. Informed prefetching
+and caching. In ACM Symposium on Operating
+System Principles, 1995.
+
+[21] G. Soundararajan et al. Dynamic partitioning of the
+
+cache hierarchy in shared data centers. In Proc. of the
+VLDB Endowment, 2008.
+
+[22] J. Steﬀen et al. Interactive examination of a c program
+
+with cscope. In Proc. of USENIX Winter Technical
+Conference, 1985.
+
+[23] G. E. Suh, S. Devadas, and L. Rudolph. A new
+memory monitoring scheme for memory-aware
+scheduling and partitioning. In Proc. of the Eighth
+Intl. Symposium on High-Performance Computer
+Architecture, 2002.
+
+[24] D. Thi´ebaut, H. S. Stone, and J. Wolf. Improving disk
+
+cache hit-ratios through cache partitioning. In IEEE
+Trans. Computers, 1992.
+
+[25] S. Venkatarman. Global memory management for
+
+multi-server database systems. In Technical Report,
+ftp://ftp.cs.wisc.edu/tech-
+reports/reports/1996/tr1325.ps.Z,
+1996.
+
+[26] M. Wachs, M. Abd-El-Malek, E. Thereska, and G. R.
+
+Ganger. Argon: Performance insulation for shared
+storage servers. In Proc. of the 5th conference on
+USENIX Conference on File and Storage Technologies.
+
+scheduling for distributed storage systems. In Proc. of
+the 5th USENIX conference on File and Storage
+Technologies, 2007.
+
+[28] T. M. Wong and J. Wilkes. My cache or yours?
+Making storage more exclusive. In Proc. of the
+USENIX Annual Technical Conference, 2002.
+
+[29] B. Worthington, G. R. Ganger, and Y. N. Patt. The
+
+disksim simulation environment. University of
+Michigan, EECS, Technical Report CSE-TR-358-98,
+1998.
+
+[30] J. Wu and S. A. Brandt. Providing quality of service
+
+support in object-based ﬁle system. In Proc. of the
+24th IEEE Conference on Mass Storage Systems and
+Technologies, 2007.
+
+[31] G. Yadgar, M. Factor, K. Li, and A. Schuster. MC2:
+
+Multiple clients on a multilevel cache. In Proc. of 28th
+Intl. Conference on Distributed Computing Systems,
+2008.
+
+[11] M. J. Feeley, W. E. Morgan, E. P. Pighin, A. R.
+
+[27] Y. Wang and A. Merchant. Proportional-share
+
+

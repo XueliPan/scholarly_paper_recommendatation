@@ -1,0 +1,1820 @@
+...................................................................................................................................................................................................................
+
+ATOM-AID: DETECTING AND
+
+SURVIVING ATOMICITY VIOLATIONS
+
+...................................................................................................................................................................................................................
+
+HARDWARE CAN PLAY A SIGNIFICANT ROLE IN IMPROVING RELIABILITY OF MULTI-
+
+THREADED SOFTWARE. RECENT ARCHITECTURAL PROPOSALS ARBITRARILY GROUP CON-
+
+SECUTIVE DYNAMIC MEMORY OPERATIONS INTO ATOMIC BLOCKS TO ENFORCE COARSE-
+
+GRAINED MEMORY ORDERING, PROVIDING IMPLICIT ATOMICITY. THE AUTHORS OF THIS
+
+ARTICLE OBSERVE THAT IMPLICIT ATOMICITY PROBABILISTICALLY HIDES ATOMICITY
+
+VIOLATIONS BY REDUCING THE NUMBER OF INTERLEAVING OPPORTUNITIES BETWEEN
+
+MEMORY OPERATIONS. THEY PROPOSE ATOM-AID, WHICH CREATES IMPLICIT ATOMIC
+
+BLOCKS INTELLIGENTLY INSTEAD OF ARBITRARILY, DRAMATICALLY REDUCING THE
+
+PROBABILITY THAT ATOMICITY VIOLATIONS WILL MANIFEST THEMSELVES.
+
+......Extracting performance from
+
+emerging multicore architectures requires
+parallel programs. However, writing such
+programs is difficult and largely inaccessible
+to most programmers. When writing explic-
+itly parallel programs for shared-memory
+multiprocessors, programmers must make
+sure shared data is kept consistent. This usu-
+ally involves specifying critical sections using
+locks or transactions. However, this practice
+is typically error-prone and can lead to syn-
+chronization defects, such as data races, dead-
+locks, and atomicity violations.
+
+Atomicity violations are challenging con-
+currency errors. They occur when pro-
+grammers make incorrect assumptions about
+atomicity and fail to enclose memory accesses
+that should occur atomically inside the same
+critical section. According to a recent compre-
+hensive study,1 atomicity violations account
+for
+examined
+
+two-thirds of
+
+about
+
+all
+
+nondeadlock concurrency bugs. Finding
+these bugs is difficult because of their subtle
+nature and the nondeterminism in multi-
+threaded execution. Hence, no one can afford
+to assume code will be free of bugs, so it’s im-
+portant to both detect and prevent their man-
+ifestation. Interestingly, the manifestation of
+concurrency bugs is considerably influenced
+by how multithreaded programs are executed,
+which determines the global interleaving of
+memory operations. For a given set of mem-
+ory semantics exposed to the software, multi-
+ple valid global
+interleavings of memory
+operations exist. The system can allow only
+a subset of those interleavings to avoid con-
+currency bugs while still exposing the same
+memory semantics to the software. We lever-
+age this property in our work.
+
+Recent architectural proposals arbitrarily
+group consecutive memory operations into
+atomic blocks. Such systems provide what
+
+Brandon Lucia
+Joseph Devietti
+Luis Ceze
+University of Washington
+
+Karin Strauss
+AMD and
+University of Washington
+
+0272-1732/09/$25.00 (cid:2)c 2009 IEEE
+
+Published by the IEEE Computer Society
+
+...................................................................
+
+73
+
+...............................................................................................................................................................................................
+TOP PICKS
+
+The read and
+
+update of counter
+
+should have
+
+happened inside the
+same critical section.
+
+int counter;  // shared variable 
+              // protected by lock L
+
+void increment() {
+  int temp;
+
+  lock (L);
+  temp = counter;
+  unlock (L);
+
+Bad interleavings of 
+
+remote thread
+
+lock (L);
+temp = counter;
+unlock (L);
+
+  temp++;
+
+temp++;
+
+  lock (L);
+  counter = temp;
+  unlock (L);
+}
+
+lock (L);
+counter = temp;
+unlock (L);
+
+Figure 1. Simple example of an atomicity violation. The read and update
+of the counter from two threads could interleave such that counter is
+incremented only once.
+
+debugging process. Finally, through an eval-
+uation using buggy code from real applica-
+tions, we show that Atom-Aid can reduce,
+by several orders of magnitude, the chances
+that an atomicity violation will lead to incor-
+rect program behavior.
+
+Atomicity violations
+
+Data races are the most widely known
+concurrency defects, and there has been
+significant work on tools3 and hardware
+support4 for data-race detection. However,
+as Flanagan et al. point out,5 data-race free-
+dom doesn’t imply that a concurrent pro-
+gram is correct, because the program could
+still suffer from atomicity violations.
+
+In this
+
+violation.
+
+Figure 1 shows a simple example of an
+atomicity
+example,
+counter is a shared variable, and both
+the read and update of counter are inside
+distinct critical sections under the protection
+of lock L, implying that the code is free of
+data races. However, the code is still incor-
+to increment()
+rect, because a call
+from another thread could be interleaved be-
+tween the read and update of counter,
+leading to incorrect behavior. For example,
+two concurrent calls to increment()
+could cause counter to be incremented
+only once. This is a subtle error, and an
+easy mistake to make, because determining
+when atomicity is necessary and which oper-
+ations must be grouped atomically can be
+difficult and prone to misconceptions.
+
+The code snippet in Figure 1 doesn’t have
+to counter
+a data race (all accesses
+are properly synchronized). However, the
+code is still incorrect. In this example, what
+is missing is atomicity, because both the
+read and update of counter should have
+been atomic to avoid unwanted interleaving
+of accesses to counter from other threads.
+An atomicity violation exists in the code
+when a programmer makes incorrect assump-
+tions about atomicity and fails to enclose
+accesses that should have been performed
+atomically inside the same critical section.
+Atomicity violations can also exist in pro-
+grams that use transactional-memory-based
+synchronization6 instead of locks. The pro-
+grammer could fail
+to enclose memory
+accesses that should be performed atomically
+in the same transaction.
+
+we call implicit atomicity: they arbitrarily
+group a sequence of dynamic memory oper-
+ations of a program thread into an atomic
+block (or chunk) without following any pro-
+gram annotation. This significantly reduces
+the amount of interleaving between memory
+operations of different threads, because inter-
+leaving only occurs at coarse granularity.
+Such proposals aim to support stricter mem-
+ory consistency models with high perfor-
+mance by enforcing consistency at a coarse
+grain.
+
+In this article, we show that implicit
+atomicity can hide atomicity violations if
+their memory operations fall within a chunk’s
+boundaries. We support this observation
+through probability analysis and empirical
+evidence. Building on this observation, we
+propose Atom-Aid, a hardware-supported
+mechanism to detect and dynamically avoid
+atomicity violations on behalf of software
+without requiring any program annotation.
+The Atom-Aid architecture uses hardware
+signatures to detect likely atomicity violations
+and avoids them by dynamically adjusting
+chunk boundaries. To the best of our knowl-
+edge, this is the first article on surviving
+atomicity violations without requiring global
+checkpointing and recovery.2 To allow pro-
+grammers
+to find atomicity violations,
+Atom-Aid reports where atomicity violations
+could exist
+in the code, aiding in the
+
+..................................................................
+
+74
+
+IEEE MICRO
+
+Table 1. Memory interleaving serializability analysis cases.7
+
+Interleaving 
+
+Serializes?
+
+Comment 
+
+RR ← R 
+RR ← W
+RW ← R  
+RW ← W 
+
+WR ← R  
+WR ← W  
+WW ← R  
+
+WW ← W 
+
+Yes
+
+No
+Yes
+
+No
+
+Yes
+No
+
+No
+
+Yes
+
+Interleaved write makes two local reads inconsistent. 
+
+Local write may depend on result of read, which is
+
+  overwritten by remote write before local write.  
+
+Local read does not get expected value. 
+
+Intermediate value written by first write is made visible
+
+ 
+
+to other threads. 
+
+—
+
+—
+
+—
+
+—
+
+...
+lock(L)
+
+ld $R1
+unlock(L)
+inc $R1
+lock(L)
+
+[counter]
+
+st [counter] $R1
+unlock(L)
+...
+
+Opportunities
+
+for
+
+interleaving 
+
+...
+lock(L)
+
+ld $R1
+unlock(L)
+inc $R1
+lock(L)
+
+[counter]
+
+st [counter] $R1
+unlock(L)
+...
+
+Implicit atomic blocks
+
+arbitrarily deﬁned
+by the processor 
+
+(a)
+
+(b)
+
+Figure 2. Opportunities for interleaving in traditional systems (a) and in systems that
+provide implicit atomicity (b).
+
+violation manifesting
+
+Atomicity violations lead to incorrect pro-
+gram behavior if there is an interleaving of
+memory accesses from different threads that
+breaks the assumptions the programmer
+makes about atomicity. The chance of an
+atomicity
+itself
+depends on the chance of such an unfortu-
+nate interleaving. Figure 2a shows four
+opportunities in which interleavings can
+occur in traditional fine-grained systems. In
+contrast, Figure 2b shows where interleavings
+can occur when the atomicity violation’s
+memory operations are inside the same
+chunk in coarse-grained systems. In such
+cases, the atomicity violation is hidden.
+
+Serializability is a property of concurrent
+program executions. An execution in which
+code assumed atomic by a programmer is
+interleaved by code in another thread is serial-
+izable if there is a noninterleaved execution
+that produces the same resulting state as the
+interleaved execution. Thus, if an atomicity vi-
+olation manifests itself in an execution, the ex-
+ecution is not serializable. We can apply this
+concept directly to shared data accesses by
+determining whether the interleavings of
+memory accesses to a shared variable are serial-
+izable. Lu et al. used this analysis to determine
+same-variable unserializable access interleavings
+detected by their AVIO system (see Table 1).7
+
+....................................................................
+
+JANUARY/FEBRUARY 2009
+
+75
+
+...............................................................................................................................................................................................
+TOP PICKS
+
+Possible
+ﬁne-grain
+
+interleavings 
+
+a1
+a1
+a2
+b1
+b2
+
+...
+
+a1
+b1
+a2
+b2
+
+b1
+b2
+a1
+a2
+
+Processors
+
+A
+a1
+a2
+
+B
+b1
+b2
+
+(a)
+
+Possible
+
+coarse-grain
+interleavings 
+
+a1
+a2
+
+b1
+b2
+
+b1
+b2
+
+a1
+a2
+
+Processors
+
+A
+
+a1
+a2
+
+B
+
+b1
+b2
+
+Chunks
+
+(b)
+
+Figure 3. Fine-grained (a) and coarse-grained (b) access interleaving.
+There are six possible interleavings for the fine-grained system and two
+possible interleavings for the coarse-grained system.
+
+Chunk
+
+boundaries 
+
+If the first operation
+
+falls anywhere in here,
+the two operations are
+
+in the same chunk,
+and hence atomic.
+
+(c − d + 1)th
+instruction
+
+c
+
+d
+
+Atomicity
+lacking
+section
+
+Phide =
+
+0
+c − d + 1
+
+if c < d
+if c ≥ d
+
+c
+
+Figure 4. Atomicity violation within chunk boundaries. (Phide is the
+probability that the violation will execute entirely in one chunk.)
+
+The first column represents the interleaving
+in the format AB   C, where AB is the
+pair of local memory accesses interleaved by
+C, the access from a remote thread. For exam-
+ple, RR   W corresponds to two local read
+accesses interleaved by a remote write access.
+In this work, we leverage this analysis, consid-
+ering unserializable interleavings of shared-
+memory accesses as indicators of potential
+violations of the atomicity of code that a pro-
+grammer has assumed to be atomic.
+
+Implicit atomicity
+
+Several recent proposals (for example,
+BulkSC,8 atomic sequence ordering (ASO),9
+and implicit transactions10) describe systems
+that support
+implicit atomicity. In such
+systems, memory operations in the dynamic
+instruction stream are arbitrarily grouped
+into atomic chunks. This allows coarse-grained
+
+hardware memory consistency enforcement, as
+opposed to instruction granularity enforce-
+ment. Coarse-grained consistency enforcement
+lets a system support sequential consistency
+with the performance of more relaxed memory
+models such as release consistency.
+
+Implicit atomicity has two interesting
+properties, which we leverage in Atom-Aid.
+First, the amount of interleaving of memory
+operations from different processors is reduced
+because interleaving occurs only at chunk
+boundaries. As a result, the effects of remote
+threads are visible only at these chunk bounda-
+ries. Figure 3 contrasts fine- and coarse-
+grained interleaving. In Figure 3a, interleaving
+can occur between any instructions, and there
+are six possible interleavings. In Figure 3b,
+interleaving opportunities exist only between
+chunks, and there are far fewer possible inter-
+leavings—only two in this example. Second,
+the software is oblivious to the granularity
+of the chunks used, letting the system arbi-
+trarily choose chunk boundaries and adjust
+the size of chunks dynamically without affect-
+ing program semantics.
+
+Atom-Aid can be implemented in any ar-
+chitecture that supports forming arbitrary
+atomic blocks from the dynamic-instruction
+stream. In this article, we assume a system
+similar to BulkSC,8 in which processors
+repeatedly execute chunks
+separated by
+local checkpoints, and no dynamic instruc-
+tion is executed outside an atomic chunk.
+Implicit atomicity naturally hides
+atomicity violations
+
+Chunk granularity systems naturally hide
+atomicity violations by reducing the proba-
+bility that code assumed atomic is actually
+interleaved. This is because, by chance, the
+violations can execute completely inside one
+atomic chunk.
+
+Figure 4 illustrates how we derive the prob-
+ability that an atomicity violation will execute
+inside a chunk. Let c be the default size of a
+chunk in dynamic instructions, and d be the
+size of the atomicity violation in dynamic
+instructions. Let Phide be the probability
+that the violation executes inside a single
+chunk—that is, the probability of hiding the
+atomicity violation. If the first operation of
+the violation is within a chunk’s
+first
+(c (cid:2) d þ 1) instructions, the first and last
+
+..................................................................
+
+76
+
+IEEE MICRO
+
+operations in the violation will fall in the same
+chunk and will be committed atomically, hid-
+ing the atomicity violation. We can then ex-
+press the probability of hiding an atomicity
+violation as shown in Figure 4.
+
+In this model, an instruction granularity
+system is one with a chunk size equal to
+one instruction (c ¼ 1) and, hence, where
+Phide ¼ 0, because the size of an atomicity vi-
+olation is at least two instructions (d (cid:3) 2).
+This is consistent with the observation that an
+instruction granularity system can’t hide atom-
+icity violations. Also, in the worst case, atomicity
+violations are bigger than the chunks in chunk-
+based systems, which prevents any violation
+from being hidden (Phide ¼ 0). As a result,
+chunk granularity systems can hide atomicity
+violations but never increase the chances of
+them manifesting themselves.
+
+We validated this model with empirical
+data. Figure 5 shows the percentage of
+atomicity violation instances naturally hid-
+den for bug kernels as the chunk size
+increases. Most experimental data points
+are very close to the lines derived from
+the analytical model. This verifies the mod-
+el’s accuracy as well as our hypothesis that
+implicit atomicity naturally hides atomicity
+violations.
+
+Figure 5 shows that a chunk size of 2,000
+instructions yields a probability of naturally
+hiding atomicity violations that ranges from
+53 to 95 percent, excluding BankAccount2,
+LogProc&Sweep2, and CircularList2, whose
+atomicity violations are longer than 2,000
+instructions.
+
+Actively hiding atomicity violations
+with smart chunking
+
+to
+
+Atom-Aid uses a technique called smart
+chunking
+automatically determine
+where to place chunk boundaries, to further
+reduce the probability of exposing atomic-
+ity violations. Atom-Aid does
+this by
+detecting potential atomicity violations
+and inserting a chunk boundary just before
+the first memory access of these potential
+violations, thus attempting to enclose all
+memory accesses of an atomicity violation
+inside the same chunk. In essence, Atom-
+Aid infers where critical sections should
+be in the dynamic-instruction stream and
+
+100.0
+
+i
+
+l
+
+i
+
+n
+e
+d
+d
+h
+ 
+s
+n
+o
+i
+t
+a
+o
+v
+ 
+y
+t
+i
+c
+m
+o
+t
+a
+ 
+f
+o
+ 
+t
+n
+e
+c
+r
+e
+P
+
+i
+
+80.0
+
+60.0
+
+40.0
+
+20.0
+
+0
+
+0
+
+BankAccount
+MySQL-extract
+LogProc&Sweep
+StringBuffer
+CircularList
+Apache-extract
+BankAccount2
+LogProc&Sweep2
+CircularList2
+
+1,000
+
+2,000
+
+3,000
+
+4,000
+
+5,000
+
+6,000
+
+7,000
+
+8,000
+
+Chunk size (instructions)
+
+Figure 5. Experimental data on the natural hiding of atomicity violations
+with implicit atomicity for various chunk sizes and bug kernels. Points show
+empirical data; curves show data predicted by our analytical model (Phide).
+
+chunk boundaries
+
+inserts
+accordingly.
+This process is transparent to software and
+is oblivious to synchronization constructs
+that might be present in the code.
+
+Atom-Aid detects potential atomicity viola-
+tions by observing the memory accesses of each
+chunk and the interleaving of memory accesses
+from other committing chunks in the system.
+When Atom-Aid detects at least two nearby
+accesses to the same variable a by the local
+thread, and at least one recent access to a by
+another thread, it examines the types of accesses
+involved and determines whether these accesses
+are potentially unserializable, according to
+Table 1. If so, Atom-Aid starts monitoring
+accesses to a. When the local thread accesses
+a again, Atom-Aid inserts a chunk boundary.
+Atom-Aid keeps a history of memory accesses
+by recording the read and write sets of the
+most recent local chunks and recently commit-
+ted remote chunks.
+
+counter
+
+example
+
+increment
+
+Figure 6 shows how the idea is applied to
+the
+given
+in Figure 1, assuming BulkSC provides
+implicit atomicity and uses hardware signatures
+to efficiently keep read and write sets.8 Atom-
+Aid also maintains the read and write sets of
+the previously committed chunk, RP and WP.
+Recall that, in BulkSC, processors committing
+
+....................................................................
+
+JANUARY/FEBRUARY 2009
+
+77
+
+...............................................................................................................................................................................................
+TOP PICKS
+
+P1
+
+P2
+
+...
+lock(L)
+ld $R1 [counter]
+unlock(L)
+inc $R1
+lock(L)
+st [counter] $R1
+unlock(L)
+...
+
+WRP
+
+...
+lock(L)
+ld $R1 [counter]
+unlock(L)
+inc $R1
+lock(L)
+st [counter] $R1
+unlock(L)
+...
+
+WP
+RP
+
+WC
+RC
+
+[counter]   RP
+[counter]   WRP
+
+(a)
+
+[counter] might be
+involved in an atomicity
+
+⇒
+
+violation, add it to
+chunkBreakSet
+
+(b)
+
+[counter] chunkBreakSet
+
+⇒
+
+ force a chunk break.
+
+P1
+
+...
+lock(L)
+ld $R1 [counter]
+unlock(L)
+inc $R1
+lock(L)
+st [counter] $R1
+unlock(L)
+...
+
+Default
+chunk
+size
+
+Figure 6. Actively hiding an atomicity violation. Atom-Aid discovers that counter might be involved in an atomicity viola-
+tion and adds it to the chunkBreakSet (a). When counter is accessed, a chunk boundary is automatically inserted
+because it belongs to the chunkBreakSet (b).
+
+chunks send their write sets to other processors
+in the system, allowing Atom-Aid to learn
+what was written recently by remotely commit-
+ting chunks (WRP). In Figure 6a, processors P1
+and P2 are both executing increment().
+Although there is a chance that the read and
+update of counter will be atomic due to
+natural hiding, this isn’t the case in Figure 6a.
+In the example, the read of the counter is
+inside the previously committed chunk (P),
+whereas the update is part of the chunk cur-
+rently being built (C). When counter is
+updated in C, Atom-Aid determines that
+counter was read by the previous local
+chunk (counter 2 RP) and recently
+updated by a remote processor (counter 2
+WRP). This characterizes a potential viola-
+tion, making counter a member of the
+set of all variables possibly involved in an
+atomicity violation—the chunkBreak-
+Set. Later, when P1 accesses counter
+again (Figure 6b), Atom-Aid detects that
+counter 2 chunkBreakSet and,
+
+therefore, a chunk boundary should be
+inserted before the read from counter is
+executed. This increases the chances that
+both accesses to counter will be enclosed in
+the same chunk, making them atomic.
+Although the atomicity violation in Figure 6a
+is exposed, it doesn’t mean it has manifested
+itself, because the interleaving might not actually
+have occurred. Also, even if the atomicity viola-
+tion is naturally hidden, Atom-Aid can still de-
+tect it. This shows that Atom-Aid can detect
+atomicity violations before they manifest
+themselves.
+
+Detecting likely atomicity violations
+
+finds
+
+The goal of Atom-Aid is to detect poten-
+tial atomicity violations before they occur.
+When it
+two nearby accesses by
+the local thread to the same address and
+one recent access by another thread to
+that same address, Atom-Aid examines the
+types of accesses to determine whether
+they’re potentially unserializable. If they are,
+
+..................................................................
+
+78
+
+IEEE MICRO
+
+Signatures
+
+Signatures
+
+for local
+chunks
+
+encoded with
+
+remote
+
+accesses
+
+Previous
+chunk (P) 
+
+Current
+
+chunk (C)
+
+ 
+
+st
+
+ld
+
+st
+
+ld
+
+WP
+RP
+
+WC
+RC
+
+WRP
+RRP
+
+WRC
+RRC
+
+From other
+
+processors’ W
+
+signatures
+
+Remote reads
+(downgrades)
+
+Figure 7. Signatures used by Atom-Aid to detect likely atomicity violations.
+
+Atom-Aid treats them as a potential atom-
+icity violation. Atom-Aid needs to keep
+track of three pieces of information, as
+shown in Figure 7:
+
+(cid:4) the type t (read or write) and address a
+of the memory operation currently
+executing;
+
+(cid:4) the read and write sets (as signatures)
+of the current and previously commit-
+ted chunk, RC, WC, RP, and WP; and
+(cid:4) the read and write sets of chunks com-
+mitted by remote processors while the
+previously committed chunk was exe-
+cuting (RRP and WRP), along with
+read and write sets of chunks commit-
+ted by other processors while the cur-
+rent chunk is executing (RRC and WRC).
+
+Table 2 shows how Atom-Aid uses this
+information to determine whether these
+accesses constitute a potential atomicity vio-
+lation. The first column shows the type of
+a given local memory access, the second col-
+umn shows which interleavings Atom-Aid
+tries to identify when it observes this local
+memory access, and the third column
+shows how Atom-Aid identifies these inter-
+leavings. For example, consider the first
+two cases: When the local memory access is
+a read, the two possible nonserializable inter-
+leavings are RR   W and WR   W. To
+detect whether either of them has occurred,
+Atom-Aid uses the corresponding set of
+expressions in the third column. Specifically,
+to identify a potential RR   W interleaving,
+Atom-Aid first checks whether a is in any of
+the local read sets (a 2 RC _ a 2 RP). If so,
+Atom-Aid checks whether a can also be
+found in any of the remote write sets of a
+chunk committed by another processor, ei-
+ther while the previous local chunk was exe-
+cuting (a 2 WRP) or since the beginning of
+the current local chunk (a 2 WRC). If the
+condition is satisfied, Atom-Aid identifies
+address a as potentially involved in an atom-
+icity violation and adds it to the processor’s
+chunkBreakSet. This case is not neces-
+sarily an atomicity violation, because the
+remote write might not have actually inter-
+leaved between the two reads. Also, because
+Atom-Aid keeps only two chunks’ worth of
+history,
+is capable of detecting only
+
+it
+
+atomicity violations that are shorter than
+the size of two chunks. But this isn’t a limit-
+ing factor, because Atom-Aid can’t hide
+atomicity violations larger than a chunk. Be-
+cause Atom-Aid uses signatures to keep read
+and write sets, it is very simple to evaluate the
+necessary set expressions.
+
+Adjusting chunk boundaries
+
+After an address is added to the process-
+or’s chunkBreakSet, every access to
+this address by the local thread triggers
+the Atom-Aid chunk-breaking mechanism.
+If Atom-Aid placed a chunk boundary im-
+mediately before all accesses that triggered
+it, Atom-Aid wouldn’t actually prevent any
+atomicity violation from being exposed. To
+see why, consider Figure 6b again. Suppose
+the address of variable counter had been
+previously inserted in the chunkBreak-
+Set. When the load from counter exe-
+cuted, it would trigger Atom-Aid, which
+could then place a chunk boundary immedi-
+ately before this access. When the store to
+counter executed,
+it would trigger
+Atom-Aid again. If it placed another chunk
+boundary at that point, Atom-Aid would
+actually expose the atomicity violation, in-
+stead of hiding it as intended.
+
+There are other situations in which break-
+ing a chunk by placing a new chunk bound-
+ary is undesirable. For example, atomicity
+violations involving multiple accesses might
+cause Atom-Aid to be invoked several times.
+We actually want Atom-Aid to place a
+chunk boundary before the first access,
+
+....................................................................
+
+JANUARY/FEBRUARY 2009
+
+79
+
+...............................................................................................................................................................................................
+TOP PICKS
+
+Table 2. Cases when an address is added to the chunkBreakSet. 
+
+Local operation
+
+Interleaving
+
+Expression
+
+Read 
+
+Write
+
+RR ← W
+WR ← W
+RW ← W
+WW ← R
+
+(a ∈ RC
+(a ∈ WC
+(a ∈ RC
+(a ∈ WC
+
+ ∨ a ∈ RP) ∧ (a ∈ WRC
+ ∨ a ∈ WP) ∧ (a ∈ WRC
+ ∨ a ∈ RP) ∧ (a ∈ WRC
+ ∨ a ∈ WP) ∧ (a ∈ RRC
+
+ ∨ a ∈ WRP)
+ ∨ a ∈ WRP)
+ ∨ a ∈ WRP)
+ ∨ a ∈ RRP)
+
+but not before every single access. Another ex-
+ample is when an address has just been added
+to the chunkBreakSet. Most likely, the
+local thread is still manipulating the corre-
+sponding variable, in which case avoiding a
+chunk break can actually be beneficial.
+Atom-Aid avoids these undesirable chunk
+breaks by detecting the conditions
+just
+described (see the full version of this article
+for more details11).
+
+Evaluation
+
+We modeled a system that resembles
+BulkSC using the Pin dynamic binary in-
+strumentation infrastructure.12 We also
+modeled chunk-based execution, signature-
+based read and write sets, and the mecha-
+nisms required by Atom-Aid’s algorithm.
+Unless noted, the signature configuration
+used is the same as that used by Ceze
+et al.13 We ran experiments on a real multi-
+processor, so executions were subject to non-
+determinism. For this reason, we show
+results averaged across many runs, with
+error bars indicating a 95 percent confidence
+interval for the average.
+
+To check whether an atomicity violation
+has been hidden, we annotated each one
+and checked whether these markers fell
+within the same chunk at runtime. These
+markers are invisible to Atom-Aid; their
+sole purpose is to evaluate Atom-Aid’s bug-
+hiding capability.
+
+We
+
+experimented with two types
+of workloads: bug kernels and full applica-
+tions. Bug kernels let us experiment under
+stress-test conditions
+in which buggy
+code was executed more often than in full
+applications. We
+also included three
+full applications: MySQL, Apache, and
+XMMS (X Multimedia System) in our
+evaluation. To test MySQL, we used the
+SQL-bench test-insert workload. We tested
+Apache using ApacheBench. To test
+
+XMMS, we played a media file with the vi-
+sualizer on.
+
+We created bug kernels from applica-
+tions used previously in the literature.2,5,7
+In the kernels, we carefully preserved the
+bug from the original application and,
+when possible, included timing-sensitive
+events such as I/O operations to mimic re-
+alistic behavior.
+
+Violations in our benchmarks ranged
+widely, from about 80 to approximately
+3,600 dynamic instructions. In the full-
+application workloads, violations were as
+large as several hundred instructions, but
+never exceeded 1,000 instructions. The reason
+that these violations are relatively short is that
+long violations are easier to find in testing be-
+cause they likely manifest themselves more
+often. For the bug-kernel experiments, we
+varied the size of chunks from 750 to 8,000
+instructions. For the full-application experi-
+ments, we used 4,000 instruction chunks.
+
+Active hiding with smart chunking
+
+Figure 8a shows that Atom-Aid hid nearly
+100 percent of violations for almost all
+chunk sizes, with a few exceptions—namely
+Apache-extract and three bug kernels with
+artificially enlarged atomicity violations:
+BankAccount2, CircularList2, and Log-
+Proc&Sweep2. The artificially large viola-
+tions were too large to execute within small
+chunks; hence, they couldn’t be hidden, ex-
+cept by larger chunks. Apache-extract suf-
+fered from early chunk breaks, decreasing
+Atom-Aid’s ability to hide violations with
+smaller chunks. When the chunk size
+reached 4,000 instructions, however, chunks
+were large enough to enclose both the access
+that caused the early break and the violation,
+ensuring survival.
+
+Figure 8b contrasts the hiding effects of
+Atom-Aid with those of implicit atomicity
+alone, in full applications. Our results show
+
+..................................................................
+
+80
+
+IEEE MICRO
+
+100
+
+80
+
+60
+
+40
+
+20
+
+n
+e
+d
+d
+h
+
+i
+
+ 
+s
+n
+o
+
+i
+t
+
+i
+
+l
+
+a
+o
+v
+ 
+y
+t
+i
+
+i
+
+c
+m
+o
+
+t
+
+a
+
+ 
+f
+
+o
+
+ 
+t
+
+n
+e
+c
+r
+e
+P
+
+(a)
+
+99.0
+
+99.9
+
+98.8
+
+100
+
+86.2
+
+85.4
+
+81.5
+
+Natural
+hiding
+Active
+hiding
+
+e
+h
+c
+a
+p
+A
+
+L
+Q
+S
+y
+M
+
+S
+M
+M
+X
+
+Chunk size
+
+(no. of instructions)
+
+750
+1,000
+1,500
+2,000
+4,000
+6,000
+8,000
+
+n
+e
+d
+d
+h
+
+i
+
+ 
+s
+n
+o
+
+i
+t
+
+i
+
+l
+
+a
+o
+v
+ 
+y
+t
+i
+
+i
+
+c
+m
+o
+
+t
+
+a
+
+ 
+f
+
+o
+
+ 
+t
+
+n
+e
+c
+r
+e
+P
+
+80
+
+60
+
+40
+
+20
+
+0
+
+(b)
+
+0
+
+ct
+xtra
+e-e
+h
+c
+a
+p
+A
+
+nt
+u
+o
+c
+c
+A
+k
+n
+a
+B
+
+ularList
+Circ
+
+nt2
+u
+o
+c
+c
+A
+k
+n
+a
+B
+
+ularList2
+Circ
+
+p
+e
+e
+w
+S
+&
+c
+Pro
+g
+o
+L
+
+2
+p
+e
+e
+w
+S
+&
+c
+Pro
+g
+o
+L
+
+ct
+xtra
+L-e
+Q
+S
+y
+M
+
+uffer
+
+B
+g
+
+Strin
+
+Figure 8. Average percentage of atomicity violations hidden by Atom-Aid: bug kernels (a) and real applications (chunks
+of 4,000 instructions) (b). (Error bars show the 95 percent confidence interval.)
+
+that Atom-Aid can hide virtually 100 percent
+of atomicity violations in our full-application
+benchmarks with chunks of
+just 4,000
+instructions. Figure 8 clearly shows that
+Atom-Aid’s smart chunking algorithm can
+hide a far higher percentage of atomicity vio-
+lations than implicit atomicity alone. More-
+over, Atom-Aid reduces the number of
+exposed atomicity violations by several orders
+of magnitude when compared to current
+commercial systems. In fact, it hides more
+than 99 percent of atomicity violations.
+
+Debugging with Atom-Aid
+
+In addition to helping software survive
+atomicity violations, Atom-Aid also reports
+the program counter (PC) of the memory
+instruction at which a data address was
+added to the chunkBreakSet. At such
+points in the execution Atom-Aid detected
+a potentially unserializable interleaving.
+These points could help a developer locate
+bugs in code.
+
+We simply sorted the list of code points
+at which Atom-Aid detected a potentially
+unserializable interleaving according to
+the
+frequency with which each PC
+appeared in the list. We were able to locate
+buggy code in MySQL and Apache, which
+have been used in prior bug detection re-
+search2,7 and even to detect a new bug in
+XMMS.
+
+For Apache, only 85 lines of code in six
+files needed to be inspected. For MySQL,
+this number was larger (more than 300),
+but MySQL has a very large code base,
+with nearly 400,000 lines of code. We
+identified a bug in XMMS that was not pre-
+viously known after inspecting only nine
+lines of code. Overall, the information pro-
+vided by Atom-Aid is useful in directing the
+programmer’s attention to the correct
+region of code, even when using a simple
+heuristic like the one we present here.
+More sophisticated techniques could result
+in an even more efficient debugging
+methodology.
+
+Other work related to Atom-Aid
+
+There is significant work in concurrency
+bug detection, but survival is not widely
+addressed. AVIO,7 the most relevant prior
+work in hardware atomicity violation detec-
+tion, extracts interleaving invariants in train-
+ing and checks whether they hold in future
+runs. AVIO monitors interleavings using
+cache extensions. Atom-Aid is different in
+that it uses hardware signatures, monitors
+potential violations (ones that might not
+have necessarily occurred), and leverages im-
+plicit atomicity to detect and help software
+survive concurrency bugs.
+
+ReEnact is another hardware proposal
+that targets concurrency bugs.4 However, it
+
+....................................................................
+
+JANUARY/FEBRUARY 2009
+
+81
+
+...............................................................................................................................................................................................
+TOP PICKS
+
+focuses only on data races, not atomicity vio-
+lations. ReEnact attempts to dynamically re-
+pair data races on the basis of a library of race
+patterns.
+
+Serializability violation detection (SVD)
+heuristically infers critical sections based on
+data and control dependences and attempts
+serializability.2 The
+to determine their
+authors suggest that their algorithm could
+be implemented in hardware, and could
+avoid bugs via backwards error recovery
+(BER) using global checkpointing and restart.
+Atom-Aid,
+like SVD, attempts to infer
+critical sections dynamically. Atom-Aid, how-
+ever, uses memory interleavings to detect po-
+tential violations. Moreover, unlike BER,
+Atom-Aid’s bug avoidance doesn’t require
+global checkpointing and restart.
+
+A tom-Aid, building on the observation
+
+that implicit atomicity can naturally
+hide some atomicity violations, proactively
+chooses chunk boundaries to avoid exposing
+the violations, without requiring any special
+program annotations or global checkpoint-
+ing mechanism. Achieving the same effect of
+implicit atomicity statically, by having a
+compiler automatically insert arbitrary trans-
+actions in a program, would be challenging
+because it could hurt performance or even
+prevent
+forward progress. On the other
+hand, systems that support implicit atom-
+icity facilitate forward progress.8 Atom-Aid
+is a meaningful step toward a system that
+offers both resilience to and detectability of
+MICRO
+concurrency bugs.
+
+3. S. Savage et al.,
+
+‘‘Eraser: A Dynamic
+
+Data Race Detector for Multi-threaded Pro-
+
+grams,’’ ACM Trans. Computer Systems,
+
+vol. 30, no. 4, Nov. 1997, article no. 20.
+
+4. M. Prvulovic and J. Torrellas, ‘‘ReEnact:
+
+Using Thread-Level Speculation Mecha-
+
+nisms to Debug Data Races in Multi-
+
+threaded Codes,’’ Proc. 30th Ann.
+Int’l
+Symp. Computer Architecture (ISCA 03),
+
+ACM Press, 2003. pp. 110-121.
+
+5. C. Flanagan and S. Qadeer, ‘‘A Type and Ef-
+
+fect System for Atomicity,’’ Proc. ACM SIG-
+
+PLAN Conf. Programming Language Design
+
+and Implementation (PLDI 03), ACM Press,
+
+2003, pp. 338-349.
+
+6. M. Herlihy and J.E.B. Moss, ‘‘Transactional
+Memory: Architectural Support for Lock-
+
+Free Data Structures,’’ Proc. 20th Ann.
+
+Int’l Symp. Computer Architecture (ISCA
+
+93), IEEE CS Press, 1993, pp. 289-300.
+
+7. S. Lu et al., ‘‘AVIO: Detecting Atomicity Vio-
+
+lations via Access Interleaving Invariants,’’
+
+Proc. Int’l Conf. Architectural Support for
+
+Programming Languages and Operating
+Systems (ASPLOS 06), ACM Press, 2006,
+
+pp. 37-48.
+
+8. L. Ceze et al., ‘‘BulkSC: Bulk Enforcement
+
+of Sequential Consistency,’’ Proc. 34th
+
+Ann.
+
+Int’l Symp. Computer Architecture
+
+(ISCA 07), ACM Press, 2007, pp. 278-289.
+
+9. T.F. Wenisch et al., ‘‘Mechanisms for Store-
+
+Wait-Free Multiprocessors,’’ Proc. 34th
+Ann.
+Int’l Symp. Computer Architecture
+
+(ISCA 07), ACM Press, 2007, pp. 266-277.
+
+10. E. Vallejo et al., ‘‘Implementing Kilo-instruction
+
+Multiprocessors,’’ Proc. Int’l Conf. Pervasive
+
+Services (ICPS 05), IEEE CS Press, 2005,
+
+pp. 325-336.
+
+....................................................................
+References
+1. S. Lu et al., ‘‘Learning from Mistakes: A
+
+11. B. Lucia et al., ‘‘Atom-Aid: Detecting and
+
+Surviving Atomicity Violations,’’ Proc. 35th
+Int’l Symp. Computer Architecture (ISCA
+
+Comprehensive Study on Real World Con-
+
+35), IEEE CS Press, 2008, pp. 277-288.
+
+currency Bug Characteristics,’’ Proc. 13th
+
+12. C.K. Luk et al., ‘‘Pin: Building Customized
+
+Int’l Conf. Architectural Support for Pro-
+
+Program Analysis Tools with Dynamic In-
+
+gramming Languages and Operating Sys-
+
+strumentation,’’ Proc. ACM SIGPLAN
+
+tems (ASPLOS 08), ACM Press, 2008,
+
+Conf. Programming Language Design and
+
+pp. 329-339.
+
+Implementation (PLDI 05), ACM Press,
+
+2. M. Xu, R. Bodik, and M.D. Hill, ‘‘A Serializ-
+for Shared-
+
+ability Violation Detector
+
+2005, pp. 190-200.
+
+13. L. Ceze et al., ‘‘Bulk Disambiguation of
+
+Memory Server Programs,’’ Proc. ACM SIG-
+
+Speculative Threads in Multiprocessors,’’
+
+PLAN Conf. Programming Language Design
+
+Proc. 33rd Ann. Int’l Symp. Computer Archi-
+
+and Implementation (PLDI 05), 2005,
+
+tecture (ISCA 06), ACM Press, 2006,
+
+pp. 1-14.
+
+pp. 227-238.
+
+..................................................................
+
+82
+
+IEEE MICRO
+
+science at
+
+Brandon Lucia is a graduate student in
+computer
+the University of
+Washington. His research interests include
+hardware support for dynamic analysis of
+concurrent software, with a focus on debug-
+ging and increasing software reliability. Lucia
+has a BS in computer science from Tufts
+University. He is a member of the ACM.
+
+science at
+
+Joseph Devietti is a graduate student in
+computer
+the University of
+Washington. His research interests include
+parallel-programming models, and the
+intersection of architecture and program-
+ming languages. Devietti has a BS in
+engineering and computer science from
+the University of Pennsylvania. He is a
+member of the ACM.
+
+Karin Strauss is a researcher at the AMD
+Research and Advanced Development Labs
+and an affiliate assistant professor in the
+Department of Computer Science and
+Engineering at the University of Washing-
+ton. Her research interests encompass multi-
+processor systems and enabling technologies
+
+for multiprocessor adoption, including hard-
+ware support for debugging. She has a PhD
+in computer science from the University of
+Illinois at Urbana-Champaign. She is a member
+of the ACM and the IEEE.
+
+Luis Ceze is an assistant professor in the
+Department of Computer Science and
+Engineering at the University of Washing-
+ton. His research interests include computer
+architecture and systems
+to improve the
+programmability of multiprocessor systems.
+He has a PhD in computer science from the
+University of Illinois at Urbana-Champaign.
+He is a member of the ACM and the IEEE.
+
+Direct questions and comments about
+this article to Brandon Lucia, Dept. of
+Computer Science and Engineering, Univ.
+of Washington, PO Box 352350, Seattle,
+WA 98195; blucia0a@cs.washington.edu.
+
+For more information on this or any
+other computing topic, please visit our
+Digital Library at http://computer.org/
+csdl.
+
+....................................................................
+
+JANUARY/FEBRUARY 2009
+
+83
+
+
