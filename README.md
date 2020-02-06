@@ -12,6 +12,19 @@ The project use the [dataset 2](https://scholarbank.nus.edu.sg/handle/10635/1460
 	* Each researcher's published papers in DBLP list (full text in pdf format)
 	* Paper IDs relevant to each researcher's interests (ground truth)
 * Candidate papers to recommend: 95,238 (full text in pdf format)
+ 
+**Statistics of user profiles:**
+
+|      |   number of publications  | number of relevant papers|
+|:-------------: | :-------------: | :-------------: |
+| Min            | 2               |8              |
+| Max            | 31              |241            |
+| Avg            | 10.68           |74.56          |
+| Total          | 534	            |3728           |
+
+
+	
+
 
 
 
