@@ -1,6 +1,6 @@
 # python 3.7
 # -*- coding: utf-8 -*-
-# @Time    : 2020-02-03 17:46
+# @Time    : 2020-01-03 17:46
 # @Author  : Xueli
 # @File    : pdf2text.py
 # @Software: PyCharm
@@ -43,6 +43,7 @@ def convert_pdf_to_txt(file):
     portion = os.path.splitext(pdfFileName)
     if portion[1] == ".pdf":
         txtFileName = portion[0] + ".txt"
+        
     # write text into txtFileName and save to current directory()
     f = open(txtFileName, "w+")
     f.write(text)
