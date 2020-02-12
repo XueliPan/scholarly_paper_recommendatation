@@ -11,7 +11,9 @@ The project use the [dataset 2](https://scholarbank.nus.edu.sg/handle/10635/1460
 * Research interests of 50 researchers
 	* Each researcher's published papers in DBLP list (full text in pdf format)
 	* Paper IDs relevant to each researcher's interests (ground truth)
-* Candidate papers to recommend: 95,238 (full text in pdf format)
+* Candidate papers to recommend:
+	* full text in pdf format: 95,238
+	* full text in txt format: 95,125 (some pdf files were not readable by python packages pdfminer.six, therefore were failed to be converted to txt files)
  
 **Statistics of user profiles:**
 
@@ -32,9 +34,7 @@ The project use the [dataset 2](https://scholarbank.nus.edu.sg/handle/10635/1460
 
 Python packages: pdfminer.six
 
-## Experiment pipeline
-
-**Pipeline**
+## Experiment pipelines
 
 1. Data preprocessing
 	* convert all papers (researchers's published papers and candidate papers to recommend) from pdf format to plain text format (pdf2text.py)
@@ -47,7 +47,7 @@ Python packages: pdfminer.six
 	* Using the pretrain word2vec model to create feature vector for each candidate paper ( *FV<sub>pi</sub>* )
 	* using a normal word2vec model to create feature vector for each candidate paper ( *FV<sub>ni</sub>* )
 	
-4. Researchers interest representation ( *n from 1 to 50* )
+4. Researchers interest representation ( *n from 1 to 50* ): generating feature vectors to represent each researcher's interest
 	* Using pretrain word2vec model
 		* Using the most recent publication of a specific researchers as input to get feature vector the researcher's interest ( *FV<sub>pmn</sub>*, )
 		* Using researcher's all publications with the same weight as input( *FV<sub>psn</sub>* )

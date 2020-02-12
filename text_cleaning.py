@@ -128,6 +128,7 @@ def file_cleaning(file, newRootDir):
     f = open(file, 'r')
     input_str = f.read()
     output_str = text_cleaning(input_str)
+    f.close()
 
     # write text into txtFileName and save to current directory()
     f = open(newRootDir + cleanedTxtFileName, "w+")
