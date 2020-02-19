@@ -4,8 +4,8 @@
 # @Author  : Xueli
 # @File    : pdf2text.py
 # @Software: PyCharm
-
 # required packages:pdfminer.six
+
 from pdfminer.pdfinterp import PDFResourceManager, PDFPageInterpreter
 from pdfminer.converter import HTMLConverter, TextConverter, XMLConverter
 from pdfminer.layout import LAParams

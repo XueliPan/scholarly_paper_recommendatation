@@ -37,13 +37,21 @@ Python packages: pdfminer.six
 ## Experiment pipelines
 
 1. Data preprocessing
-	* convert all papers (researchers's published papers and candidate papers to recommend) from pdf format to plain text format (pdf2text.py)
-	* text cleaning (text_cleaning.py)
-	* use all cleaned candidate papers to generate a corpus for word2vec model training
+	* Converting all papers (researchers's published papers and candidate papers to recommend) from pdf format to plain text format (pdf2text.py)
+	* Text cleaning (text_cleaning.py)
+	* Using all cleaned candidate papers to generate a corpus for word2vec model training
+		* The corpus contains 95,125 candidate papers after text cleaning (see corpus.txt.zip)
+		* There's one document/candidate paper per line, tokens separated by whitespace
 	
 2. Pretraining a  word2vec model based on the corpus of all candidate papers to recommend
+	* Corpus (see corpus.txt.zip)
+	* Key training parameters setting: min_count=5, size=300, window=5
+		* **min_count** It is for pruning the internal dictionary. Words that appear only once or twice in a billion-word corpus are probably uninteresting typos and garbage. In addition, there’s not enough data to make any meaningful training on those words, so it’s best to ignore them. Default value of min_count=5
+		* **size**: The number of dimensions (N) of the N-dimensional space that gensim Word2Vec maps the words onto. Bigger size values require more training data, but can lead to better (more accurate) models. Reasonable values are in the tens to hundreds.
+		* **window**: The maximum distance between a target word and words around the target word.
+	* Saving model in file ()
 
-3. Candidate papers representation ( *i from 1 to 95238* )
+3. Candidate papers representation ( *i from 1 to 95125* )
 	* Using the pretrain word2vec model to create feature vector for each candidate paper ( *FV<sub>pi</sub>* )
 	* using a normal word2vec model to create feature vector for each candidate paper ( *FV<sub>ni</sub>* )
 	

@@ -17,6 +17,7 @@ from nltk import wordnet
 from nltk.corpus import words as words_dict
 import os
 import os.path
+import sys
 
 
 def rejoin_words_with_hyphen(input_str):
@@ -145,10 +146,11 @@ def iter_files(rootDir):
             file_name_list.append(file_name)
     return file_name_list
 
-# do text cleaning for all txt files in user profiles
-rootDir = '/Users/sherry/Desktop/user_profiles/user_profiles_txt_format/'
-newRootDir = '/Users/sherry/Desktop/user_profiles/user_profile_after_text_cleaning/'
+# enter a rootDir that contains files to be cleaned
+rootDir = sys.argv[1]
+# enter a new rootDir that stores the results
+newRootDir = sys.argv[2]
+# do text cleaning for all txt files in user profiles and save the results to new files
 file_name_list = iter_files(rootDir)
 for file in file_name_list:
     output_str = file_cleaning(file,newRootDir)
-    print(output_str)
