@@ -1,7 +1,6 @@
 # python 3.7
 # -*- coding: utf-8 -*-
 # @Author  : Xueli
-# @File    : NDCG.py
 
 import re
 import pandas as pd
@@ -88,6 +87,29 @@ def get_ndcg(rank_list):
     else:
         ndcg = get_dcg(rank_list)/get_idcg(rank_list)
     return ndcg
+
+def get_precision(result_list):
+    """
+    input a top 10 result list such as [1,1,0,0,1,0,1,1,0,0]
+    """
+    tp = 0 # truth positive
+    fp = 0 # flase positive
+    for i in range(len(result_list)):
+        if result_list[i] == 1:
+            tp += 1
+        else:
+            fp += 1
+    precision = tp/len(result_list)
+    return precision
+
+def avg_precision(rank_matrix):
+    p_ls = []
+    for (k,v) in  rank_matrix.items():
+        p = get_precision(v)
+        p_ls.append(p)
+    avg_p = np.mean(p_ls)
+    return avg_p,p_ls
+
 # read ranking result for 50 researchers and the ground truth
 data = 'rank_result_rm/ranking.csv'
 ground_truth = pd.read_csv('user_profiles/ground_truth.csv', index_col=0)
@@ -96,8 +118,8 @@ ground_truth = pd.read_csv('user_profiles/ground_truth.csv', index_col=0)
 ranking_df = rename_rank_item(data)
 rank_matrix = iter_rank_ls(ranking_df, ground_truth)
 
-ndcg_ls = []
 # get mean ndcg for the ranking matrix of 50 researchers
+ndcg_ls = []
 for r in range(1,51,1):
     rank_list = rank_matrix['R{}'.format(r)]
     ndcg_r = get_ndcg(rank_list)
@@ -105,3 +127,9 @@ for r in range(1,51,1):
     print('the ndcg for researcher {} is: {}'.format(r,ndcg_r) )
 mean_ndcg = np.mean(ndcg_ls)
 print('the average ndcg for all researchers is: {}'.format(mean_ndcg))
+
+# ge average precision for the ranking result of 50 researcher
+average_precision = avg_precision(rank_matrix)
+for r in range(1,51,1):
+    print('the precision for researcher {} is: {}'.format(r, average_precision[1][r-1]))
+print('the average precision for all researchers is: {}'.format(average_precision[0]))
