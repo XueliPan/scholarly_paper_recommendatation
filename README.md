@@ -68,7 +68,15 @@ Python packages: pdfminer.six
 		
 5. Calculating similarity between *FV* for different candidate papers and *FV* for different researchers', get most 10 relervant candidate papers for each type of researchers' interest representation
 
-6. Evaluateing similar ranking results by metrics NDCG@10, MRR@10
+6. Evaluateing similar ranking results by metrics NDCG@10, P@10,MRR
+	* result of using researcher's most recent publication
+
+|       |        NDCG@10       |  P@10           |MRR  |
+|:-------------: | :-------------: | :-------------: | :-----:|
+|   particular word2vec model       |     0.3664     |  0.1334 |  |
+|    normal word2vec model on google news     |      0.3389     |       0.1080        | |
+
+
 
 ## Contributior
 * **Name**
