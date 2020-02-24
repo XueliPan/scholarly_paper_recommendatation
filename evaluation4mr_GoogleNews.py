@@ -1,9 +1,9 @@
 # python 3.7
 # -*- coding: utf-8 -*-
-
-# python 3.7
-# -*- coding: utf-8 -*-
-# @Author  : Xueli
+# Computing NDCG@10, P@10 and MRR when using user's most recent publication and word2vec model trained on normal
+# Google News corpus to generate top-10 recommend papers to each researcher
+# rank_result file: rank_result_rm/rank_result_mr_GoogleNews.csv
+# ground_truth file: user_profiles/ground_truth.csv
 
 import re
 import pandas as pd
@@ -113,8 +113,32 @@ def avg_precision(rank_matrix):
     avg_p = np.mean(p_ls)
     return avg_p,p_ls
 
+def reciprocal_rank(rank_list):
+    """ Computes the reciprocal rank.
+        rank_list: list, prediction [1,0,1,0,1,1,1], 1 denotes relevant item and 0 denotes irrelevant item
+    """
+
+    score = 0.0
+    for index,item in enumerate(rank_list):
+        if item == 1:
+            score = 1.0 / (index + 1.0)
+            break
+    return score
+
+def mean_reciprocal_rank(rank_matrix):
+    """
+    :param rank_matrix: a dataframe or a ndarray contains top-10 rank result for all users
+    :return: MRR scores and RR scores list for all users
+    """
+    rr_ls = []
+    for (k, v) in rank_matrix.items():
+        rr = reciprocal_rank(v)
+        rr_ls.append(rr)
+    mrr = np.mean(rr_ls)
+    return mrr,rr_ls
+
 # read ranking result for 50 researchers and the ground truth
-data = 'rank_result_rm/rank__result_mr_GoogleNews.csv'
+data = 'rank_result_rm/rank_result_mr_GoogleNews.csv'
 ground_truth = pd.read_csv('user_profiles/ground_truth.csv', index_col=0)
 
 # rename all
@@ -127,13 +151,20 @@ for r in range(1,51,1):
     rank_list = rank_matrix['R{}'.format(r)]
     ndcg_r = get_ndcg(rank_list)
     ndcg_ls.append(ndcg_r)
-    print('the ndcg for researcher {} is: {}'.format(r,ndcg_r) )
+    # print('the ndcg for researcher {} is: {}'.format(r,ndcg_r) )
 mean_ndcg = np.mean(ndcg_ls)
 print('the average ndcg for all researchers is: {}'.format(mean_ndcg))
 
 # ge average precision for the ranking result of 50 researcher
 average_precision = avg_precision(rank_matrix)
-for r in range(1,51,1):
-    print('the precision for researcher {} is: {}'.format(r, average_precision[1][r-1]))
+# for r in range(1,51,1):
+#     print('the precision for researcher {} is: {}'.format(r, average_precision[1][r-1]))
 print('the average precision for all researchers is: {}'.format(average_precision[0]))
+
+# get mean reciprocal rank for the ranking result of 50 researcher
+mrr = mean_reciprocal_rank(rank_matrix)
+# for r in range(1,51,1):
+#     print('the reciprocal rank  for researcher {} is: {}'.format(r, mrr[1][r-1]))
+print('the mean reciprocal rank for all researchers is: {}'.format(mrr[0]))
+
 

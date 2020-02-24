@@ -1,13 +1,20 @@
 #!/usr/bin/env python
 # coding: utf-8
-# using most recent publication of researchers as input to generate user profiles
+"""
+1. using most recent publication of researchers as input to generate user profiles
+2. pretrain word2vec model window_5.model.bin and candidate_paper.csv are available via google drive link,
+you can download the files and
+change the path in this script so as to run the script successfully.
+3. result saved in rank_result_rm/rank_result_mr_own_corpus.csv
+"""
+
 
 import sys
 from gensim.models.keyedvectors import KeyedVectors
 import numpy as np
 import pandas as pd
 
-# load pre-train model
+# load pre-train model on my own corpus
 model = '/Users/sherry/Downloads/window_5/window_5.model.bin'
 w2v_model = KeyedVectors.load_word2vec_format(model, binary=True)
 
@@ -88,5 +95,5 @@ for i in range(1,10,1):
     # get the top-10 ranklist
     df = df.head(10)
     new_df[r] = df.iloc[:, 0]
-# save ranking results for all researchers in rangking.csv
-new_df.to_csv('rank_result_rm/ranking.csv', index=False)
+# save ranking results for all researchers
+new_df.to_csv('rank_result_rm/rank_result_mr_own_corpus.csv', index=False)

@@ -34,6 +34,13 @@ The project use the [dataset 2](https://scholarbank.nus.edu.sg/handle/10635/1460
 
 Python packages: pdfminer.six
 
+Accessing to some data that could not provide in the repo via google drive, downloads ths files and alter the path when using this file in script:
+
+* [google news word2vec model](https://drive.google.com/open?id=0B7XkCwpI5KDYNlNUTTlSS21pQmM): load this model from local file or via API
+* [corpus for training my own word2vec model]()
+* [candidate papers to be recommended]()
+* [my own word2vec model]()
+
 ## Experiment pipelines
 
 1. Data preprocessing
@@ -71,11 +78,11 @@ Python packages: pdfminer.six
 6. Evaluateing similar ranking results by metrics NDCG@10, P@10,MRR
 	* result of using researcher's most recent publication (see evaluation\_metrics.py and evaluation4mr_GoogleNews.py)
 
-| |       |        NDCG@10       |  P@10           |MRR  |
-|:---:|:-------------: | :-------------: | :-------------: | :-----:|
-| using most recent paper|  particular word2vec model       |     0.3664     |  0.1334 |  |
-| using most recent paper |  normal word2vec model on google news     |      0.3389     |       0.1080        | |
-| using most recent paper|   TF-IDF    |              |             |  |
+|     |                | NDCG@10         |  P@10  |MRR     |
+|:---:|:-------------: | :-------------: | :----: | :-----:|
+| using most recent paper| particular word2vec model|0.3665 |0.1340 |0.2736 |
+| using most recent paper| normal word2vec model on google news|0.3389|  0.1080 |0.2747 |
+| using most recent paper|   TF-IDF    |    |    |  |
 
 
 
