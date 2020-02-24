@@ -37,9 +37,9 @@ Python packages: pdfminer.six
 Accessing to some data that could not provide in the repo via google drive, downloads ths files and alter the path when using this file in script:
 
 * [google news word2vec model](https://drive.google.com/open?id=0B7XkCwpI5KDYNlNUTTlSS21pQmM): load this model from local file or via API
-* [corpus for training my own word2vec model]()
-* [candidate papers to be recommended]()
-* [my own word2vec model]()
+* [corpus for training my own word2vec model](https://drive.google.com/file/d/12wYxounFPHThUgITpqq-ViGsWBLrpUy3/view?usp=sharing)
+* [candidate papers to be recommended](https://drive.google.com/file/d/1iVFhC7bcgls8o6PwIRTmlxXzFyI4Y4Qv/view?usp=sharing)
+* [my own word2vec model](https://drive.google.com/open?id=1-47kS8UgQAIKv6sEuDUlvWwvR53L7I84)
 
 ## Experiment pipelines
 
