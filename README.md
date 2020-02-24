@@ -44,12 +44,12 @@ Python packages: pdfminer.six
 		* There's one document/candidate paper per line, tokens separated by whitespace
 	
 2. Pretraining a  word2vec model based on the corpus of all candidate papers to recommend
-	* Corpus (see corpus.txt.zip)
-	* Key training parameters setting: min_count=5, size=300, window=5
+	* Corpus (see corpus.txt via google drive link)
+	* Key training parameters setting: **min_count=5, size=300, window=5**
 		* **min_count** It is for pruning the internal dictionary. Words that appear only once or twice in a billion-word corpus are probably uninteresting typos and garbage. In addition, there’s not enough data to make any meaningful training on those words, so it’s best to ignore them. Default value of min_count=5
 		* **size**: The number of dimensions (N) of the N-dimensional space that gensim Word2Vec maps the words onto. Bigger size values require more training data, but can lead to better (more accurate) models. Reasonable values are in the tens to hundreds.
 		* **window**: The maximum distance between a target word and words around the target word.
-	* Saving model in file ()
+	* Saving model
 
 3. Candidate papers representation ( *i from 1 to 95125* )
 	* Using the pretrain word2vec model to create feature vector for each candidate paper ( *FV<sub>pi</sub>* )
@@ -66,15 +66,16 @@ Python packages: pdfminer.six
 		* Using researcher's all publications with the same weight as input( *FV<sub>nsn</sub>* )
 		* Using researcher's all publications with the different weight stategy as input, the more recent the publication is, the more important ( *FV<sub>ndn</sub>* )
 		
-5. Calculating similarity between *FV* for different candidate papers and *FV* for different researchers', get most 10 relervant candidate papers for each type of researchers' interest representation
+5. Calculating similarity between *FV* for different candidate papers and *FV* for different researchers', get most 10 relervant candidate papers for each type of researchers' interest representation (see similarity\_calculation_mr.py)
 
 6. Evaluateing similar ranking results by metrics NDCG@10, P@10,MRR
-	* result of using researcher's most recent publication
+	* result of using researcher's most recent publication (see evaluation\_metrics.py and evaluation4mr_GoogleNews.py)
 
-|       |        NDCG@10       |  P@10           |MRR  |
-|:-------------: | :-------------: | :-------------: | :-----:|
-|   particular word2vec model       |     0.3664     |  0.1334 |  |
-|    normal word2vec model on google news     |      0.3389     |       0.1080        | |
+| |       |        NDCG@10       |  P@10           |MRR  |
+|:---:|:-------------: | :-------------: | :-------------: | :-----:|
+| using most recent paper|  particular word2vec model       |     0.3664     |  0.1334 |  |
+| using most recent paper |  normal word2vec model on google news     |      0.3389     |       0.1080        | |
+| using most recent paper|   TF-IDF    |              |             |  |
 
 
 
