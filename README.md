@@ -21,8 +21,8 @@ The project use the [dataset 2](https://scholarbank.nus.edu.sg/handle/10635/1460
 |:-------------: | :-------------: | :-------------: |
 | Min            | 2               |8              |
 | Max            | 31              |241            |
-| Avg            | 10.68           |74.56          |
-| Total          | 534	            |3728           |
+| Avg            | 10.7           |74.56          |
+## 1. * # | Total          | 535	        	q5     |3728           |
 
 
 	
@@ -47,7 +47,7 @@ Accessing to some data that could not provide in the repo via google drive, down
 	* Converting all papers (researchers's published papers and candidate papers to recommend) from pdf format to plain text format (pdf2text.py)
 	* Text cleaning (text_cleaning.py)
 	* Using all cleaned candidate papers to generate a corpus for word2vec model training
-		* The corpus contains 95,125 candidate papers after text cleaning (see corpus.txt.zip)
+		* The corpus contains 95,125 candidate papers after text cleaning (see corpus.txt via google drive link)
 		* There's one document/candidate paper per line, tokens separated by whitespace
 	
 2. Pretraining a  word2vec model based on the corpus of all candidate papers to recommend
@@ -73,16 +73,18 @@ Accessing to some data that could not provide in the repo via google drive, down
 		* Using researcher's all publications with the same weight as input( *FV<sub>nsn</sub>* )
 		* Using researcher's all publications with the different weight stategy as input, the more recent the publication is, the more important ( *FV<sub>ndn</sub>* )
 		
-5. Calculating similarity between *FV* for different candidate papers and *FV* for different researchers', get most 10 relervant candidate papers for each type of researchers' interest representation (see similarity\_calculation_mr.py)
+5. Calculating similarity between *FV* for different candidate papers and *FV* for different researchers', get most 10 relervant candidate papers for each type of researchers' interest representation (see similarity\_calculation_mr\_CP.py)
 
 6. Evaluateing similar ranking results by metrics NDCG@10, P@10,MRR
 	* result of using researcher's most recent publication (see evaluation\_metrics.py and evaluation4mr_GoogleNews.py)
 
-|     |                | NDCG@10         |  P@10  |MRR     |
+|     |vector representation model| NDCG@10 |  P@10  |MRR     |
 |:---:|:-------------: | :-------------: | :----: | :-----:|
 | using most recent paper| particular word2vec model|0.3665 |0.1340 |0.2736 |
 | using most recent paper| normal word2vec model on google news|0.3389|  0.1080 |0.2747 |
 | using most recent paper|   TF-IDF    |    |    |  |
+| using all papers| particular word2vec model|0.3731 |0.114 |0.3282 |
+
 
 
 
