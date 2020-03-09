@@ -81,10 +81,13 @@ Accessing to some data that could not provide in the repo via google drive, down
 
 |     |vector representation model| NDCG@10 |  P@10  |MRR     |
 |:---:|:-------------: | :-------------: | :----: | :-----:|
-| using most recent paper| particular word2vec model|0.3665 |**0.1340** |0.2736 |
-| using most recent paper| normal word2vec model on google news|0.3389|  0.1080 |0.2747 |
-| using all papers| particular word2vec model|**0.3731** |0.114 |**0.3282** |
-| using all papers| normal word2vec model on google news| 0.2376 | 0.074  |0.1921 |
+| using most recent paper| CP model|0.3665 |**0.1340** |0.2736 |
+| using most recent paper| GN model|0.3389|  0.1080 |0.2747 |
+| using all papers| CP model|**0.3731** |0.114 |**0.3282** |
+| using all papers| GN model| 0.2376 | 0.074  |0.1921 |
+| using all papers with different weight| CP model| 0.3709 | 0.132  |0.2969 |
+| using all papers with different weight| GN model| 0.3270 | 0.1119  |0.2666 |
+
 
 
 
