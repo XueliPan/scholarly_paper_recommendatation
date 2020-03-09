@@ -1,0 +1,877 @@
+Depth-of-Field Rendering with Multiview Synthesis
+
+Sungkil Lee
+
+Elmar Eisemann
+
+Hans-Peter Seidel
+
+Max-Planck-Institut f¨ur Informatik
+
+Saarland University / MPI Informatik
+
+Max-Planck-Institut f¨ur Informatik
+
+Figure 1: Our method achieves DOF blur effects comparable to accurate solutions in real time and avoids postprocessing artifacts.
+
+Abstract
+
+We present a GPU-based real-time rendering method that simulates
+high-quality depth-of-ﬁeld effects, similar in quality to multiview
+accumulation methods. Most real-time approaches have difﬁcul-
+ties to obtain good approximations of visibility and view-dependent
+shading due to the use of a single view image. Our method also
+avoids the multiple rendering of a scene, but can approximate dif-
+ferent views by relying on a layered image-based scene represen-
+tation. We present several performance and quality improvements,
+such as early culling, approximate cone tracing, and jittered sam-
+pling. Our method achieves artifact-free results for complex scenes
+and reasonable depth-of-ﬁeld blur in real time.
+
+CR Categories: I.3.3 [Computer Graphics]: Image Generation
+
+This paper presents a GPU-based real-time rendering method. Our
+method derives a layered image-based scene and computes an ac-
+curate DOF blur. We avoid repeated model rendering by synthesiz-
+ing new views. In contrast to single-image solutions, our principle
+stems from multiview sampling. Hence, we support varying visi-
+bility, an arbitrary aperture, and even view-dependent shading. Our
+solution leads to high quality comparable to the reference [Hae-
+berli and Akeley 1990], as shown in Figure 1. The real-time per-
+formance is achieved by using approximate cone tracing, jittered
+sampling (thereby reducing the number of necessary views), and
+early culling techniques.
+
+The major contributions are:
+(1) fast view synthesis for arbi-
+trary lens sampling; (2) a DOF-conform metric for our single-pass
+scene decomposition; (3) acceleration and quality improvements
+for higher performance; (4) support for view-dependent shading.
+
+1 Introduction
+
+2 Previous Work
+
+A ﬁnite aperture of a lens maps a 3D point to a circle of confusion
+(COC). The overlapped COCs introduce variations in blur in an im-
+age; objects in the limited depth of ﬁeld (DOF) appear to be clear,
+while the rest are blurred [Potmesil and Chakravarty 1981]. Such a
+blur dramatically improves photorealism and further mediates pic-
+torial depth perception [Mather 1996].
+
+To generate focal imagery in computer graphics, a number of tech-
+niques have been attempted in the past. Despite tremendous GPU
+advances, the accurate DOF blur still remains challenging due to
+the complexity of visibility changes. Previously, accurate solutions
+could only be achieved by multiview sampling methods [Cook et al.
+1984; Haeberli and Akeley 1990]. Since this implies rendering a
+scene repeatedly, their use has been limited to ofﬂine animation.
+
+ACM Reference Format
+Lee, S., Eisemann, E., Seidel, H. 2009. Depth-of-Field Rendering with Multiview Synthesis. 
+ACM Trans. Graph. 28, 5, Article 134 (December 2009), 6 pages. DOI = 10.1145/1618452.1618480 
+http://doi.acm.org/10.1145/1618452.1618480.
+
+Copyright Notice
+Permission to make digital or hard copies of part or all of this work for personal or classroom use is granted 
+without fee provided that copies are not made or distributed for proﬁ t or direct commercial advantage 
+and that copies show this notice on the ﬁ rst page or initial screen of a display along with the full citation. 
+Copyrights for components of this work owned by others than ACM must be honored. Abstracting with 
+credit is permitted. To copy otherwise, to republish, to post on servers, to redistribute to lists, or to use any 
+component of this work in other works requires prior speciﬁ c permission and/or a fee. Permissions may be 
+requested from Publications Dept., ACM, Inc., 2 Penn Plaza, Suite 701, New York, NY 10121-0701, fax +1 
+(212) 869-0481, or permissions@acm.org.
+© 2009 ACM 0730-0301/2009/05-ART134 $10.00 DOI 10.1145/1618452.1618480 
+http://doi.acm.org/10.1145/1618452.1618480
+
+The majority of the previous DOF rendering methods, except mul-
+tiview accumulation methods (detailed in Section 3), have relied on
+the postprocessing of a single-view image.
+
+Gather methods spatially ﬁlter images by the COC size at each
+pixel [Rokita 1996; Riguer et al. 2003; Scheuermann 2004;
+Bertalm´ıo et al. 2004; Earl Hammon 2007; Zhou et al. 2007; Lee
+et al. 2009]. This ﬁltering enables high performance, but often
+leads to intensity leakage (focused areas leaking into background).
+Anisotropic ﬁltering [Bertalm´ıo et al. 2004; Lee et al. 2009] par-
+tially addresses this issue, but remains approximate.
+
+Scatter methods [Potmesil and Chakravarty 1981] map source pix-
+els onto COC sprites and blend them from far to near. The required
+depth sorting is costly, even on modern GPUs, and the technique is
+mostly used in ofﬂine software [Demers 2004].
+
+Single-view methods lose hidden surfaces and lead to incorrect vis-
+ibility (particularly problematic for a blurred foreground). Mul-
+tilayer approaches decompose an image onto layers using pixel
+depths. They blur each layer using a Fourier Transform [Barsky
+et al. 2002], a pyramidal image processing [Kraus and Strengert
+2007], anisotropic diffusion [Kass et al. 2006; Kosloff and Barsky
+2007], splatting [Lee et al. 2008], or rectangle spreading [Kosloff
+et al. 2009], and the layers are alpha-blended. Most of them start
+from a single image and address partial visibility by color extrapo-
+
+ACM Transactions on Graphics, Vol. 28, No. 5, Article 134, Publication date: December 2009.Figure 2: The thin-lens model.
+
+lation into hidden areas. However, the extrapolation is approximate
+and cannot recover true scene information, which becomes appar-
+ent for a strong blur. Instead, Lee et al. [2008] used two-layer depth
+peeling [Everitt 2001] to address the partial visibility, but it fails if
+multiple layers need to be combined.
+
+Although the alpha blending approximates visibility well for sep-
+arated objects, discretization artifacts [Barsky et al. 2005] can ap-
+pear when objects are spread across multiple layers. A few meth-
+ods mitigated this problem using special image processing [Barsky
+et al. 2005], information duplication [Kraus and Strengert 2007],
+and depth variation [Lee et al. 2008], but the use of layers still re-
+mains difﬁcult. Although we also rely on layers, our solution is free
+from discretization artifacts because we correctly simulate multi-
+view visibility instead of using alpha blending.
+
+3 Thin-Lens Model and Basic Method
+
+In this section, we revisit the DOF discussion based on the thin-lens
+model [Potmesil and Chakravarty 1981; Cook et al. 1984], which
+ignores diffraction effects. While the majority of real-time work
+concentrated on the COC size, we focus on lens rays and the 3D
+and image points they intersect (see Figure 2).
+
+For a lens with focal length F and a focal plane F at depth df , the
+image plane I is situated at:
+
+uf =
+
+F df
+
+df − F
+
+for df > F.
+
+(1)
+
+There is a one-to-one mapping between points Pf on F and pixel
+positions pf on I. The mapping can be seen as a projection, or,
+equivalently, the intersection of the center ray through Pf and the
+center of the lens V0, with I. For an inﬁnitesimal lens, V0 is the
+camera’s pinhole. For a given pixel position pf , all lens rays pass
+through a lens sample V on the lens plane and Pf .
+
+We are interested in ﬁnding all 3D points P on a lens ray for a given
+pixel pf . We describe these points with a 3D position on the center
+ray and a 2D offset vector aligned along with F. Accordingly, we
+write a lens sample V := V0 + Ev, where E is the radius of the
+lens and v a 2D offset vector in a unit circle. For a given distance d
+of P, the 2D offset vector R becomes:
+(cid:18) df − d
+
+(cid:19)
+
+R = E
+
+v.
+
+df
+
+(2)
+
+There is a relationship with the COC when looking at the offset
+vector r of P’s projection from V0 on I:
+(cid:18) EF (d − df )
+(df − F )d
+
+v =: C(d)v.
+
+r = −
+
+uf
+d
+
+R =
+
+(3)
+
+(cid:19)
+
+Assuming |v| = 1, the classic COC radius is |C(d)|.
+
+The multiview accumulation methods [Cook et al. 1984] shoot N
+rays through Pf and lens samples {V1, ..., VN } for each pixel
+pf . Alternatively, for a given lens sample V, all pixels pf can be
+treated by rendering an image of the scene from V [Haeberli and
+
+Akeley 1990]. The images are accumulated to yield the ﬁnal result.
+Since the cost of repeated rendering heavily depends on the scene
+complexity and number of samples, these methods are generally
+considered inappropriate for real-time use.
+
+4 Method
+
+Our method starts by decomposing the scene into several layers. We
+discuss the layer spacing and basic idea of this decomposition (Sec-
+tion 4.1) before focusing on the implementation and layer creation
+(Section 4.2). The DOF blur is computed from this decomposition.
+For each image pixel, we shoot lens rays against the layered repre-
+sentation and accumulate their contributions (Section 4.3). Finally,
+we show how to improve rendering quality and/or performance by
+approximate cone tracing and jittering (Sections 4.4 and 4.5).
+
+4.1 Single-Pass Scene Decomposition
+
+The layered image-based scene representation is obtained in a sin-
+gle render pass. We use a pinhole camera whose center coincides
+with the lens center. In this conﬁguration, all 3D points on a center
+ray are projected onto a single image point. Consequently, the off-
+set vector r (Equation 3) deﬁnes a relative displacement in the view
+and facilitates the tracing of lens rays (Section 4.3).
+
+The distance to the lens is virtually divided into depth intervals,
+each representing one layer. In principle, a drawn fragment is out-
+put on layer L if its fragment depth falls into L’s depth interval.
+Each layer maintains an independent depth buffer. The resulting
+layer images are equivalent to standard renderings with clipping
+planes placed at the depth interval bounds of the layer and, hence,
+the layers capture hidden surfaces (see Figure 3 for example).
+
+The depth intervals could be chosen uniformly or be decreased near
+the focal plane [Kraus and Strengert 2007], but accuracy can be im-
+proved by spacing layers uniformly with respect to the signed COC
+radius C(d). By deﬁnition, any lens ray remains at the same relative
+position inside the COC. If the COC growth δ is constant from one
+layer to the next, so will, roughly, be the ray-travel distance in im-
+age space. Thereby, the probability of improper visibility handling
+is reduced. This can also be understood in terms of parallax. Near
+the observer/lens, small movements lead to large changes, whereas
+the farther scene appears to be mostly ﬂat.
+
+Computing the depth intervals starts from the near plane at dnear.
+The intervals are deﬁned using δ, the aforementioned ray-travel dis-
+tance in image space. The layer index for depth d is then given by:
+
+l =
+
+(cid:22) Kdf
+δ
+
+(cid:18) 1
+
+dnear
+
+−
+
+1
+d
+
+(cid:19)(cid:23)
+
+for dnear < d < dfar,
+
+(4)
+
+where K := EF/(df − F ). Figure 4 illustrates this spacing. The-
+oretically, we can deﬁne a budget of layers. The images shown in
+Figure 1 relied on only six layers leading to a δ of 10 pixels for a
+800 × 600 resolution. To ensure quality for arbitrary scenes, we
+choose the number of layers to fulﬁll a spacing requirement. This
+was done for all other images and videos. C(d) has an upper bound
+K and grows monotonically, but it is unbounded for d approaching
+zero (Figure 4). The latter is not a problem since d is bound by the
+near plane distance. Usually, even for a small δ (3 pixels), 16 layers
+are enough (see supplementary material for an analysis).
+
+4.2 Layer Creation
+
+On current hardware, multiple render targets do not allow indepen-
+dent z-buffers. Texture tiling is a work-around. However, it reduces
+performance, is difﬁcult to handle at boundaries, and the resolution
+
+Image PlaneLens PlaneFocal PlanePfPdfdufpfRV0EE vrcenter rayV134:2       •       S. Lee et al.ACM Transactions on Graphics, Vol. 28, No. 5, Article 134, Publication date: December 2009.Figure 3: An image-based scene representation that decomposes the leftmost scene onto ten layers ({L0, L1, .., L9}).
+
+For a given layer, we need to test the corresponding ray segment
+s. The two endpoints of s correspond to two texture positions with
+stored height values du and dl. In each step, our iterative method
+assumes that the height ﬁeld varies linearly along the ray. This
+means that the surface is initially deﬁned solely by du and dl. We
+intersect s with this linear approximation to get an intersection point
+I. Let ˆd be the height of I. At the corresponding texture position,
+a height value d is fetched. If d < ˆd, there is a surface intersection
+before reaching I. With a binary search, we can rapidly ﬁnd the
+accurate intersection. If d > ˆd, we split s at I and restart with the
+farther sub-segment. Figure 5(left) shows an example.
+
+Care has to be taken when layer pixels are empty. Depending on
+the ray’s orientation, we initialize their values either to the upper
+or lower bound of the layer’s depth interval to produce an intersec-
+tion within the layer boundaries (Figure 5(right)).
+In theory, the
+approximation does not perform well at boundaries, but the slight
+layer overlap and our spacing strategy remedy this to a large extent.
+Three iterations are usually enough for convergence. Figure 5 il-
+lustrates two examples. It is even more efﬁcient to initialize du and
+dl with the layer’s depth bounds and only perform the two initial
+lookups if the pixel underneath the ﬁrst intersection point is empty.
+
+Figure 4: The layers uniformly spaced in terms of C(d). Red por-
+tions represent the slight overlap at the layer boundaries.
+
+is limited by the maximal texture size. Our solution uses so-called
+layered rendering. Triangles are sent to a slice in an array of tex-
+tures, described in the DirectXTMarray texture. It supports inde-
+pendent depth buffers per entry. In the ﬁrst pass, a GPU geometry
+shader redirects each triangle to the layer according to the maxi-
+mum depth of its vertices. The second pass, applied to all pixels
+of the layer images, treats large triangles crossing multiple layers.
+We read a pixel depth, ﬁnd its corresponding layer L, and copy the
+pixel to L if its depth is smaller than the depth stored in L. This is
+a manual depth test and ensures that we keep the nearest fragment
+in each layer. The intuition for using the maximum vertex depth
+of each triangle is based on the observation that, if a triangle over-
+laps a layer boundary, it is already partly in the farther layer and
+its probability to be hidden in the nearer layer is potentially higher.
+Our choice thus favors closer hidden geometry. Our solution is ap-
+proximate because we do not split triangles at the layer boundaries.
+Consequently, boundary triangles can delete information by writing
+pixels in a layer they do not belong to. In practice, the differences
+to an accurate method are small, but the solution is more efﬁcient.
+
+The fragment copy step is also used to simultaneously make the
+layers slightly overlap by 10%. The overlap removes seam artifacts
+arising from pixel quantization. Further, the next section explains
+how our ray-tracing step also beneﬁts from this information.
+
+Figure 5: An example of the intersection test. The thick line is
+the layer’s height ﬁeld. We iteratively sample the surface at inter-
+val endpoints to reﬁne a piecewise-linear approximation to ﬁnd a
+possible intersection point.
+
+4.3 DOF Blur Using Layered Representation
+
+Given our scene representation, we compute the DOF blur. Con-
+ceptually, each image pixel evaluates one ray per lens sample. The
+resulting colors are then accumulated. We rely on Equation 2 to
+trace these rays and Equation 3 to sample the layer textures at the
+resulting 2D pixel position. Each layer corresponds to a depth inter-
+val to which we can associate a segment of the lens ray. The layers
+are sequentially tested against their corresponding lens-ray segment
+and the traversal is stopped once a surface is hit. All lens rays are
+treated iteratively in a fragment shader. The colors of the impact
+points are averaged to yield the ﬁnal color. There is no condition on
+the origin of rays nor on the way their contributions are averaged.
+This enables the generation of various bokeh aspects including large
+highlights, essential for realistic images [Buhler and Wexler 2002;
+Lee et al. 2008]. Further, using a Poisson disk sampling leads to an
+ideal distribution [Cook 1986].
+
+In each layer, our representation is a height ﬁeld
+Ray Traversal
+against which we test the lens rays. Precise rendering techniques
+exist [Baboud and D´ecoret 2006], but we apply a more efﬁcient
+iterative approximation inspired by the Method of False Position. It
+is feasible because our layer spacing ensures that rays are almost
+perpendicular and the height values are bound by the layer extents.
+
+Handling Off-Screen Pixels During the traversal, the ray might
+actually leave the layer image boundary. On the one hand, this
+problem can be solved by producing a decomposition of the scene
+from behind the lens with a viewport that encompasses all lens rays.
+On the other hand, this implies an increase of texture resolution to
+enable a sharp image on the focal plane. Therefore, we keep the
+decomposition from the lens center and discard all rays that leave
+the frustum. In practice, the degradation is hardly noticeable and
+only affects pixels in the periphery of the image, whereas the central
+screen part shows the highest image quality.
+
+Early Layer Culling The layering method incurs large blank im-
+age areas. Skipping intersection tests in such regions leads to sig-
+niﬁcant acceleration without a loss of quality. For a given distance,
+all lens rays will pass through the COC. The pixel region of interest
+can thus be bound by the maximum COC, which is always real-
+ized at one of the depth bounds of the layer. If a minimum depth
+value in this region is greater than the depth bounds of the layer, no
+intersection can occur and the layer is safely skipped.
+
+To ﬁnd the minimum depth, we rely on an N-Buffer [D´ecoret 2005],
+which is similar to a mipmap, except that each level has the same
+resolution as the source image. A pixel in the nth N-Buffer level
+stores the minimum value of all pixels in a square window of size
+
+L9L8L7L6L5L4L3L2L1L0Cnear+4δCnear+3δCnear+δCnearCnear+1δL3L2L1dL0C(d)dnear010 : intersection: lens ray segment: surface approximation: left/right surface samplenn23nlayer depth boundsI2I1d010I2I123Depth-of-Field Rendering with Multiview Synthesis       •       134:3ACM Transactions on Graphics, Vol. 28, No. 5, Article 134, Publication date: December 2009.Figure 6: Results without (upper row) and with (middle row) ap-
+proximate cone tracing and reference images (lower row).
+
+2n around the pixel. With this, it is possible to ﬁnd the minimum
+depth in an arbitrary square area with only four texture accesses
+corresponding to four overlapping squares. The accuracy is much
+higher than conventional mipmap tests.
+
+4.4 Approximate Cone Tracing
+
+Similarly to the multiview accumulation methods, our solution
+needs sufﬁcient lens samples for a strong blur because a single ray
+only results in one precise impact point. In other words, rays miss
+between the lens samples. We hence thicken the rays to cones
+whose radius is deﬁned by half the distance to its neighboring
+rays. This gives non-intersecting volumes, except for the focal point
+where all rays meet. These cones correspond to an inﬁnite ray set
+centered around the original ray and lead to higher quality.
+
+Tracing cones can be expensive. Instead of an accurate evaluation,
+we approximate the computation. We deﬁne the diameter of the
+cone around a lens ray at distance di as λ|C(di)|, where λ is the
+mean distance among the lens samples. Given an impact point at
+distance di, we consider all pixels lying in a window Wc accord-
+ing to the cone’s diameter. Then, we compute a coverage value
+(an approximation of the ratio of blocked rays to the total number
+rays) and an average color in Wc. For efﬁciency, we use a mipmap
+of the layer image where we augmented the initial color by an al-
+pha channel in which we indicate the absence or presence of data
+with the values zero and one, respectively. This can be achieved by
+clearing the layer image’s color and alpha to zero and render the
+scene’s fragments with an alpha of one during the decomposition.
+Consequently, the mipmapped alpha indicates the pixel coverage v1
+which is the ratio of pixels in Wc that received a color to those that
+remained empty during the decomposition. The average color c1
+in Wc can be obtained by dividing the mipmapped RGB by v1. If
+v1 equals one, the entire cone has been blocked and the color c1 is
+reported, else we assume that only a fraction (v1) of rays resulted in
+c1, whereas the other rays continued the traversal. We estimate the
+ray accumulation probabilistically, using v1c1 + (1 − v1)c2, where
+c2 is the future contribution obtained by continuing the traversal
+along the center ray of the cone.
+
+Artifacts usually associated to mipmaps are not introduced, because
+λ is much smaller than one. For instance, λ is 0.137 for 32 lens
+samples in our implementation which only results in a 4.4 pixel di-
+ameter (mipmap level of 2.1) for a 32-pixel COC radius. Figure 6
+shows the examples of synthesized images generated with and with-
+out the cone tracing. We see that it quickly removes the ﬁne grain
+and approaches the reference with many samples.
+
+4.5 Jittered Lens Sampling
+
+The accumulation buffer method [Haeberli and Akeley 1990] relies
+on multiview rendering which implies the use of the same sampling
+pattern for each pixel. Insufﬁcient sampling leads to visible aliasing
+
+Figure 7: Jittering avoids aliasing (yellow frame), and approaches
+the quality of higher sampling rates (green frame).
+It is a good
+strategy, even in complex scenes (red frame).
+
+artifacts, especially along object boundaries. Our method allows us
+to change sample distributions on a per-pixel basis, trading these
+artifacts for less objectionable noise. The quality of 32 jittered sam-
+ples approaches and even exceeds the quality of 64 samples to some
+extent (Figure 7).
+
+To improve upon the aliasing artifacts, one could compute k sam-
+ple sets and choose randomly amongst them for each pixel. Even
+though near-optimal sampling patterns could be produced, the use
+of shader variables to encode such sampling patterns would be
+expensive. The best sampling behavior resulted from Halton se-
+quences [Keller 1996]. If N samples are used per pixel, a precom-
+puted sequence of 2N samples allows us to obtain 2N differing,
+but overlapping sample sets by deﬁning an offset in [0, 2N − 1]
+per pixel. The quality is very high, but the performance penalty is
+huge, because shader compilers seem unable to optimize for con-
+stant shader values when the access pattern differs per pixel.
+
+The trade-off between performance and quality was the jittering of
+the lens rays by a value encoded in a noise texture. The four compo-
+nents of a texel allow 16 pairwise combinations. Each combination
+is applied to 1/16th of the lens samples. This solution performed
+three times faster than the previously mentioned jittering and has a
+marginal impact on the overall performance.
+
+5 Results
+
+Image Quality Our representative images shown in Figure 1
+demonstrate the artifact-free results of our method. Intensity leak-
+age, discretization, and bilinear magniﬁcation are avoided. To com-
+pare our results, we implemented three state-of-the-art approaches:
+Haeberli and Akeley’s [1990] accumulation buffer (reference), the
+multilayer approach by Kraus and Strengert [2007], and the gather
+solution by Lee et al. [2009]. To measure image quality, we eval-
+uate the peak signal-to-noise ratio (PSNR). To better compare per-
+ceptual quality, we rely on the structural similarity (SSIM) [Wang
+et al. 2004] (a rating of 0=worst to 1=best).
+
+We ﬁrst compare a scene that exhibits strong foreground blur (the
+ﬁrst row of Figure 8) to illustrate approximation differences. Our
+method qualitatively captures the varying visibility of the reference.
+Note the translucent foreground that partially reveals the left angel
+and details of the horse. For most rays correct intersections are
+found, outweighing the fewer erroneous intersections. Hence, the
+
+Ref.OurOur cone1 N=1 N=1 N=888161616323232Ref.OurPinhole viewReferenceOur816326432 samplesRef.Our32 samplesRef.64 samples8  samples134:4       •       S. Lee et al.ACM Transactions on Graphics, Vol. 28, No. 5, Article 134, Publication date: December 2009.Figure 8: From upper to lower row: foreground blur, distorted geometries, bokeh, and close-ups (green = four times difference to reference).
+
+integration of the rays leads to a good overall estimate. Wrong in-
+tersections are most problematic if several rays result in the same
+wrong color response. This happens mostly along silhouettes, near
+the focal plane. In theory, here the highest error occurs, but in prac-
+tice, this results in a difﬁcult-to-perceive small and smooth tran-
+sition (green zoom: error scaled four times). The other methods
+suffer from the lack of hidden surface information. The multi-
+layer method well approximates foreground boundaries and results
+in smooth variations, whereas the gather method suffers from ar-
+tifacts. Nevertheless, the extrapolation cannot reconstruct missing
+details. Our method shows the highest score (SSIM 0.97, PSNR
+30.84 dB) compared to the other two (0.91/22.28 and 0.88/19.53
+for multilayer and gather, respectively).
+
+We also investigated a challenging optical phenomenon. When the
+focal plane is situated between thin objects, the geometry appears
+distorted (see the red boxes in Figure 8); the two branches are cross-
+ing but appear separated. This effect can be reproduced with a real
+camera. The effect necessitates a close-to-physically accurate sim-
+ulation that cannot be obtained with the other two methods.
+
+The feasibility of our method for bokeh is illustrated in Figure 8
+(yellow boxes). Our sample distributions and variable blending
+weights allow us to express complex light distributions, whereas
+the other two methods rely on Gaussian blur to remain compatible
+with downsampling.
+
+Finally, in contrast to most real-time approaches, we can perform
+view-dependent evaluations. This is achieved by extracting not only
+color, but also surface properties during the decomposition step.
+Figure 9 shows an example with environment-map-based reﬂec-
+tions. We extracted diffuse, ambient lighting, normals and shininess
+exponents, to apply a Phong model when the ray hits the surface.
+For our cone tracing, we mipmap these values. Our view-dependent
+evaluation resulted in a score of (0.97/41.38), whereas our view-
+independent evaluation reached (0.93/27.68). As a reference, the
+standard pinhole image only reaches a value of (0.59/18.12).
+
+Rendering Performance We measured the rendering perfor-
+mance of all four methods in terms of frame rate (Table 1). The
+benchmark used the DirectX 10 API and a Pentium 2.83 GHz
+Core2Quad with an NVIDIA GTX285. Since each method depends
+on different parameters, we tested several conﬁgurations with re-
+spect to the number of views and layers.
+
+Figure 9: Reﬂective materials blurred with (b) view-independent
+and (c) view-dependent shading. (d) is the reference.
+
+The gather method [Lee et al. 2009] was the fastest due to its sim-
+plicity. For 32 lens samples, our method showed frame rates faster
+than the multilayer method, but it allows more than 30 fps even for
+many samples and layers. Even for the extreme cases (16 layers and
+256 samples), our method ran in more than 8 fps. Nonetheless, 32
+and 64 lens samples proved sufﬁcient in all our test scenes, each for
+dynamic and static scenes, respectively. The relatively high perfor-
+mance results from the early culling and ray termination (together
+up to 50% speed-up).
+In contrast, the reference method slowed
+down signiﬁcantly with increasing scene complexity and sampling.
+
+6 Discussion and Conclusion
+
+Our method is a faster alternative solution to the multiview accu-
+mulation method [Haeberli and Akeley 1990].
+It is highly scal-
+able with the number of views and layers. The major limitation is
+the discrete layer decomposition. We addressed this by a continu-
+ous surface capture inside each layer and a quality-favoring spac-
+ing metric, which also makes our method robust to animation (see
+video), avoiding temporal issues. Further, even if the entire scene
+were ﬂattened on a single layer, artifacts are limited (Figure 10).
+
+Another difference with [Haeberli and Akeley 1990] is the lack of
+anti-aliasing because our method uses an image-based representa-
+tion. Usually, the out-of-focus elements do not need anti-aliasing.
+A multisample shot could be produced and then blended separately
+for the focused elements. Alternatively, we could use multisample
+buffers which are available on newer graphics hardware.
+
+Although the current implementation already produces high-quality
+results, it could be modiﬁed by trading performance for even more
+accuracy. For instance, depth peeling can capture all hidden sur-
+faces, but implies several render passes and complex tracing. Brute-
+
+(a) Pinhole(b) Ref.(c) Our(d) Multilayer(e) Gather(f) Pinhole(g) Ref.(h) Our(i) Multilayer(j) Gather(a) Scene(b) View-indep.(c) View-dep.(d) Ref.Depth-of-Field Rendering with Multiview Synthesis       •       134:5ACM Transactions on Graphics, Vol. 28, No. 5, Article 134, Publication date: December 2009.Table 1: Performance comparison of the four methods in terms of frame rate. The benchmark was done at a resolution of 800 × 600.
+
+Gather
+
+Multilayer
+
+Reference
+
+Our method
+
+N (number of views)
+
+M (number of layers)
+
+Toys (67 K triangles)
+Dinosaurs (300 K triangles)
+Angels (1.76 M triangles)
+
+1
+
+1
+
+223
+175
+59
+
+1
+
+12
+
+38
+37
+26
+
+8
+
+54
+50
+33
+
+8
+
+16
+
+32
+
+64
+
+16
+
+29
+28
+21
+
+1
+
+75
+29
+4
+
+40
+14
+2
+
+21
+7
+1
+
+8
+
+102
+92
+43
+
+144
+59
+9
+
+8
+
+12
+
+82
+71
+38
+
+16
+
+12
+
+67
+57
+34
+
+16
+
+70
+60
+34
+
+8
+
+77
+72
+38
+
+32
+
+12
+
+48
+42
+28
+
+64
+
+12
+
+30
+27
+21
+
+256
+
+16
+
+9
+8
+8
+
+16
+
+26
+24
+19
+
+16
+
+40
+36
+25
+
+8
+
+38
+34
+24
+
+16
+
+56
+49
+31
+
+8
+
+62
+53
+32
+
+D ´ECORET, X. 2005. N-buffers for efﬁcient depth map query. In
+
+Proc. Eurographics, 393–400.
+
+DEMERS, J. 2004. Depth of ﬁeld: A survey of techniques. In GPU
+
+Gems. Addison-Wesley, ch. 23, 375–390.
+
+EARL HAMMON, J. 2007. Practical post-process depth of ﬁeld. In
+
+GPU Gems 3. Addison-Wesley, ch. 28, 583–606.
+
+EVERITT, C. 2001.
+
+Interactive order-independent transparency.
+
+White paper, NVIDIA 2, 6, 7.
+
+HAEBERLI, P., AND AKELEY, K. 1990. The accumulation buffer:
+Hardware support for high-quality rendering. Proc. ACM SIG-
+GRAPH, 309–318.
+
+KASS, M., LEFOHN, A., AND OWENS, J. 2006. Interactive depth
+
+of ﬁeld using simulated diffusion on a GPU. Tech. rep., Pixar.
+
+KELLER, A. 1996. The fast calculation of form factors using low
+discrepancy sequences. In Proc. Spring Conf. on CG, 195–204.
+
+Figure 10: The effect of the number of layers on the ﬁnal result.
+
+force scanning ﬁnds accurate intersection points, but necessitates
+more texture lookups. Enlarging the viewport can cover off-screen
+areas, but requires a higher resolution rendering.
+
+KOSLOFF, T., AND BARSKY, B. 2007. An algorithm for rendering
+generalized depth of ﬁeld effects based on simulated heat diffu-
+sion. In Proc. ICCSA, 1124–1140.
+
+In summary, our method is a good alternative to traditional solu-
+tions and produces high-quality DOF blur in real time. It is of in-
+terest for ofﬂine productions, as well as, interactive scenarios.
+
+KOSLOFF, J., TAO, W., AND BARSKY, A. 2009. Depth of ﬁeld
+postprocessing for layered scenes using constant-time rectangle
+spreading. In Proc. Graphics Interface, 39–46.
+
+Acknowledgements: We thank the anonymous reviewers, H. Bez-
+erra, L. Baboud, and R. Herzog for their comments. The 3D models
+and HDR map are courtesy of the Large Geometric Models Archive
+at Georgia Tech, AIM@Shape, INRIA GAMMA, Taschen Books
+(500 3D Objects), Sven D¨annart, and SolidWorks Labs. This work
+was supported by the Cluster of Excellence MMCI (www.m2ci.org).
+
+References
+
+BABOUD, L., AND D ´ECORET, X. 2006. Rendering geometry with
+
+relief textures. In Proc. Graphics Interface, 195–201.
+
+BARSKY, B., BARGTEIL, A., GARCIA, D., AND KLEIN, S. 2002.
+In Proc. Eurographics
+
+Introducing vision-realistic rendering.
+Rendering Workshop, 26–28.
+
+BARSKY, B., TOBIAS, M., CHU, D., AND HORN, D. 2005. Elim-
+ination of artifacts due to occlusion and discretization problems
+in image space blurring techniques. Graph. Models 67, 584–599.
+
+BERTALM´IO, M., FORT, P., AND S ´ANCHEZ-CRESPO, D. 2004.
+Real-time, accurate depth of ﬁeld using anisotropic diffusion and
+programmable graphics cards. In Proc. 3DPVT, 767–773.
+
+BUHLER, J., AND WEXLER, D. 2002. A phenomenological model
+
+for bokeh rendering. In Sketch program ACM SIGGRAPH.
+
+COOK, R. L., PORTER, T., AND CARPENTER, L. 1984. Dis-
+
+tributed ray tracing. Computer Graphics 18, 3, 137–145.
+
+COOK, R. L. 1986. Stochastic sampling in computer graphics.
+
+ACM Trans. Graphics 5, 1, 51–72.
+
+KRAUS, M., AND STRENGERT, M. 2007. Depth-of-ﬁeld rendering
+In Proc. Eurographics, 645–
+
+by pyramidal image processing.
+654.
+
+LEE, S., KIM, G. J., AND CHOI, S. 2008. Real-time depth-of-
+ﬁeld rendering using splatting on per-pixel layers. Computer
+Graphics Forum 27, 7, 1955–1962.
+
+LEE, S., KIM, G. J., AND CHOI, S. 2009. Real-time depth-of-
+ﬁeld rendering using anisotropically ﬁltered mipmap interpola-
+tion. IEEE Trans. Vis. and CG 15, 3, 453–464.
+
+MATHER, G. 1996. Image blur as a pictorial depth cue. Biological
+
+Sciences 263, 1367, 169–172.
+
+POTMESIL, M., AND CHAKRAVARTY, I. 1981. A lens and aper-
+ture camera model for synthetic image generation. Proc. ACM
+SIGGRAPH 15, 3, 297–305.
+
+RIGUER, G., TATARCHUK, N., AND ISIDORO, J. 2003. Real-time
+
+depth of ﬁeld simulation. In ShaderX2. 529–556.
+
+ROKITA, P. 1996. Generating depth-of-ﬁeld effects in virtual real-
+
+ity applications. IEEE CG and its Application 16, 2, 18–21.
+
+SCHEUERMANN, T. 2004. Advanced depth of ﬁeld. In GDC.
+
+WANG, Z., BOVIK, A. C., SHEIKH, H. R., AND SIMONCELLI,
+E. P. 2004. Image quality assessment: From error visibility to
+structural similarity. IEEE Trans. Image Proc. 13, 4, 600–612.
+
+ZHOU, T., CHEN, J., AND PULLEN, M. 2007. Accurate depth of
+
+ﬁeld simulation in real time. Computer Graphics Forum 26, 1.
+
+1 layer2 layers3 layers4 layers134:6       •       S. Lee et al.ACM Transactions on Graphics, Vol. 28, No. 5, Article 134, Publication date: December 2009.

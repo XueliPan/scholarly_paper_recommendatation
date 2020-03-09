@@ -1,0 +1,2991 @@
+Communication-Efﬁcient Distributed
+Monitoring of Thresholded Counts
+
+Ram Keralapura ∗
+
+ECE Department
+
+University of California, Davis
+rkeralapura@ucdavis.edu
+
+Graham Cormode
+
+Bell Laboratories
+Murray Hill, NJ
+
+cormode@lucent.com
+
+Jai Ramamirtham
+
+Bell Laboratories
+Bangalore, India
+jai@lucent.com
+
+ABSTRACT
+Monitoring is an issue of primary concern in current and next gen-
+eration networked systems. For example, the objective of sensor
+networks is to monitor their surroundings for a variety of differ-
+ent applications like atmospheric conditions, wildlife behavior, and
+troop movements among others. Similarly, monitoring in data net-
+works is critical not only for accounting and management, but also
+for detecting anomalies and attacks. Such monitoring applications
+are inherently continuous and distributed, and must be designed to
+minimize the communication overhead that they introduce. In this
+context we introduce and study a fundamental class of problems
+called “thresholded counts” where we must return the aggregate
+frequency count of an event that is continuously monitored by dis-
+tributed nodes with a user-speciﬁed accuracy whenever the actual
+count exceeds a given threshold value.
+
+In this paper we propose to address the problem of thresholded
+counts by setting local thresholds at each monitoring node and initi-
+ating communication only when the locally observed data exceeds
+these local thresholds. We explore algorithms in two categories:
+static thresholds and adaptive thresholds.
+In the static case, we
+consider thresholds based on a linear combination of two alternate
+strategies, and show that there exists an optimal blend of the two
+strategies that results in minimum communication overhead. We
+further show that this optimal blend can be found using a steep-
+est descent search.
+In the adaptive case, we propose algorithms
+that adjust the local thresholds based on the observed distributions
+of updated information in the distributed monitoring system. We
+use extensive simulations not only to verify the accuracy of our
+algorithms and validate our theoretical results, but also to evalu-
+ate the performance of the two approaches. We ﬁnd that both ap-
+proaches yield signiﬁcant savings over the naive approach of per-
+forming processing at a centralized location.
+
+1.
+
+INTRODUCTION
+
+Many emerging systems are fundamentally distributed in nature.
+The current and next generation of networks are large-scale, and
+∗This work was done when Ram Keralapura was an intern in Bell
+Labs Research, India
+
+widespread. Within this distributed networked systems, a princi-
+pal concern is monitoring: either monitoring the environment sur-
+rounding each of the network nodes, or monitoring the behavior of
+the network itself. Two prototypical applications are in: (i) Sensor
+networks, whose raison d’etre is for monitoring and collating in-
+formation on atmospheric conditions, wildlife behavior, and troop
+movements in military applications among others, and (ii) Net-
+work trafﬁc monitoring in (wired or wireless) data networks, for
+trafﬁc management, routing optimization, and anomaly and attack
+detection.
+
+Over the past few years, the deﬁning characteristics of these ap-
+plications have been identiﬁed to pose new challenges that are not
+answered by traditional data management systems. The challenges
+in monitoring arise mainly because the systems are fundamentally:
+
+• Continuous: Unlike the traditional database “on-demand”
+view of the world, where queries are posed in SQL and an
+answer returned to the user, queries in these monitoring situ-
+ations are typically long running queries over the data, which
+must continuously run and return answers as and when they
+are found.
+
+• Distributed: The data required to answer the monitoring queries
+
+is distributed throughout the network. Typically, a query re-
+quires information to be collated and aggregated from many,
+if not all, nodes in the network.
+
+• Resource-constrained: Efﬁciency of operation is absolutely
+vital in the distributed monitoring world. In sensor networks,
+we must ensure that the life of the network is extended as
+long as possible by minimizing the energy drain of running
+the monitoring protocol; in data networks, we must ensure
+that the protocol does not hinder the principal operation of
+the network, allowing the delivery of messages unencum-
+bered by the monitoring overhead. These concerns manifest
+themselves principally as a requirement to minimize (to the
+extent possible) the communication cost of the monitoring
+protocols: communication is the principal energy drain for a
+sensor, and excess communication in a data network reduces
+the capacity for normal operation. As a secondary concern,
+computation and memory usage should also be minimal for
+efﬁcient execution of the monitoring.
+
+Permission to make digital or hard copies of all or part of this work for
+personal or classroom use is granted without fee provided that copies are
+not made or distributed for proﬁt or commercial advantage and that copies
+bear this notice and the full citation on the ﬁrst page. To copy otherwise, to
+republish, to post on servers or to redistribute to lists, requires prior speciﬁc
+permission and/or a fee.
+SIGMOD 2006, June 27–29, 2006, Chicago, Illinois, USA.
+Copyright 2006 ACM 1-59593-256-9/06/0006 ...$5.00.
+
+Thresholded Counts. Within this framework of continuous, dis-
+tributed, and resource-constrained systems, there are many possi-
+ble types of monitoring queries that can be posed. Prior work has
+looked at particular query types such as top-k monitoring [3], set
+expression cardinality [12], and holistic aggregates such as quan-
+tiles [8]. But many queries rely at heart on monitoring sums or
+counts of values, in combination with thresholds (lower bounds).
+Consider the following queries from a variety of different domains:
+
+• (from [22]) Report when at least 40 soldiers have crossed a
+
+speciﬁed boundary.
+
+• Raise an alert when the total number of cars on the highway
+
+exceeds 4000 and report the number of vehicles detected.
+
+• Which species have more than 50 members within a certain
+
+region for more than an hour?
+
+• Identify all destinations that receive more than 2GB of trafﬁc
+from the monitored network in a day, and report their transfer
+totals
+
+• (Query Q1 of [21]) Monitor the volume of remote login (tel-
+net, ssh, ftp etc.) request received by hosts within the orga-
+nization that originate from the external hosts.
+
+• Which users within the monitored network receive more than
+
+1000 different connections?
+
+In each case there are two parts to the query: a request for a sum
+or count of a particular quantity (vehicles, animals, network con-
+nections etc.), and a minimum threshold, or trigger, for when we
+need to know this information. Such thresholds are vital in focusing
+the information returned to the user, and in reducing the monitoring
+burden on the network. In almost every application involving mea-
+suring quantities like these, it is only important to know the quan-
+tities when they exceed a speciﬁed level. Small counts (of remote
+logins, human activity, network trafﬁc) are prevalent and can be ig-
+nored to reduce the reporting burden on the monitoring system. But
+in all the above situations we can deﬁne a threshold, such that it is
+critical to know when this threshold has been crossed. Our focus
+in this paper is on designing protocols and algorithms to monitor
+such sums and counts with thresholds. In the extreme case, these
+thresholds can be trivial (i.e. zero or one), but in all the scenarios
+we have outlined, there exists a non-trivial threshold which can be
+used to reduce the communication cost. In general, the thresholds
+can be speciﬁed either as part of the query, or learned by the system
+in response to the observed data. For this work, without loss of gen-
+erality we assume that the threshold is ﬁxed a priori and focus on
+answering queries for thresholded counts given such a threshold;
+dynamic thresholds can be accommodated, but we do not discuss
+them here.
+
+The second component of these types of queries is to return a
+count of a particular set of values. Here, one can make the obser-
+vation that an application rarely needs to know the exact count so
+long as the answer is given with reasonable precision: it is not nec-
+essary to know whether the number of cars on the highway is 4237
+or 4251, if either answer is accurate to within 1%. So instead of
+demanding exact results, we can explore the tradeoff between ac-
+curacy and communication: clearly, allowing larger uncertainties
+about counts allows monitoring sites to be more conservative about
+when they send their updates to a central monitor. This beneﬁt be-
+comes clear in our experiments, which show signiﬁcant savings as
+the allowable uncertainty increases.
+
+Our Contributions. We address the problem of continuously mon-
+itoring thresholded counts in a distributed environment. Our con-
+tributions are as follows:
+
+1. We introduce and formalize the thresholded counting prob-
+lem, which is fundamental to several distributed monitoring scenar-
+ios. We give guaranteed solutions to the problem based on monitors
+comparing their local counts to local thresholds, and postponing
+communication until these thresholds are violated. We consider
+two approaches, depending on whether the thresholds are deter-
+mined statically in advance, or can be allocated adaptively as the
+distribution of updated information is observed.
+
+2. In the static case, we show two different fundamental tech-
+niques for setting the local thresholds. We introduce a blended
+
+approach, based on a linear combination of the two fundamental
+methods while retaining the correctness guarantee. We give a care-
+ful and detailed analysis of the optimal setting of this blend which
+depends only on coarse properties of the total count.
+
+3. In the adaptive case, we introduce a variety of increasingly
+sophisticated algorithms that attempt to capture the observed dis-
+tribution of count updates, and hence reduce the overall number of
+messages sent within the system.
+
+4. We show that our static and adaptive algorithms can be easily
+extended to include negative updates, sliding windows, approxi-
+mate counts, and time-dependent threshold values.
+
+5. We conduct a thorough and detailed set of experiments to
+verify the efﬁcacy of our methods for giving a low cost monitoring
+scheme for thresholded queries. We compare to applications of
+prior work on a variety of real and synthetic data, and show that
+there are signiﬁcant savings for using our methods.
+
+Outline. In Section 2, we review prior work in continuous, distrib-
+uted monitoring. We formally deﬁne the problem of thresholded
+counts in Section 3. We propose algorithms which set static thresh-
+olds in Section 4, and adaptive thresholds in Section 5. We discuss
+some extensions to our current work in Section 6. We present re-
+sults from our experimental evaluation in Section 7 and conclude
+in Section 8.
+
+2. RELATED WORK
+
+Our work is related to the design and construction of systems
+to handle large streams of data. There are several general pur-
+pose “Data Stream Management Systems” (DSMSs), such as Au-
+rora [1], Stream [2], and Telegraph [4], and special purpose sys-
+tems (such as for network data streams) including Gigascope [11]
+and Tribeca [23]. However, our problem is inherently distributed,
+whereas these systems are primarily focused on centralized moni-
+toring. Recently, distributed data stream management systems have
+been proposed such as Borealis [14] and Medusa [24, 5]. The main
+focus of these systems is how to effectively distribute the work of
+the system, and hence balance the load; it is therefore assumed pos-
+sible to redirect data streams. In our model, we explicitly rule out
+the possibility of sending all observed data to a different processor:
+in resource constrained situations, our only possibility is to process
+the stream of data at the monitor where it is observed. (In our ex-
+periments, we are able to improve on the cost of sending the whole
+data stream by three orders of magnitude by processing at the point
+of observation).
+
+The model of continuous distributed computation has been adopted
+
+by a series of papers over recent years. Within this context, a num-
+ber of different problems have been addressed, including monitor-
+ing the (exact) top-k set [3], evaluating set expressions [12], and
+quantiles and heavy hitters [8, 16]. Techniques have been proposed
+which allow the continuous, distributed monitoring of a variety of
+queries based on using sketches [7] (from which join-sizes and
+many other functions can be estimated accurately) and based on
+techniques that are resilient to duplication of information [10].
+
+The problem we consider, of maintaining accurate counts above
+a threshold, is not covered by any of these approaches. We now
+discuss previous work that is closer to this problem. Various works
+have considered accurate maintenance of sums and counts in a dis-
+tributed sensor network setting, but these are typically for duplicate-
+resilient “on-demand” computations, rather than continuous [19,
+17, 6]. The “heavy hitters” problem is to ﬁnd all items whose count
+is above some fraction φ of the count of all items (e.g. users in a
+wired network consuming more than 1% of the total bandwidth).
+While semantically related to our threshold based problem, con-
+
+Coordinator
+
+site
+
+Remote
+site, 1
+
+Remote
+site, i
+
+Remote
+site, m
+
+Figure 1: Distributed Monitoring Architecture
+
+tinuous monitoring of the heavy hitters is a somewhat easier prob-
+lem, since there can be at most 1/φ heavy hitters at any one time,
+whereas there can be an unbounded number of monitored counts
+exceeding their thresholds. The permitted error for Heavy Hitters
+also scales with the sum of the counts, rather than the count of
+the individual item, as we demand in our formal deﬁnition of this
+problem (see next section). A continuous, distributed algorithm for
+heavy hitters follows as a special case of quantile monitoring [8],
+but this cannot be applied to our problem since the guarantees are
+insufﬁcient to meet our requirements.
+
+More closely related to our problem is the work of Jain et al [15],
+which considers triggers. The authors make a compelling argument
+for continuous distributed monitoring of trigger conditions based
+on local counts fi, and suggest some potential approaches. The
+i fi > C, i.e.
+method outlined relates to triggers of the form
+the trigger should be raised if the total of the fis at different sites
+exceeds the threshold C. This is clearly a simpliﬁed version of our
+problem. The algorithms given are randomized, and in expectation
+give errors of constant factors times C, which are much larger than
+the δ guarantees we provide.
+
+(cid:0)
+
+(cid:0)
+
+Olston et al [21] propose a ﬁlter based approach to maintaining
+accurate counts. There, the central site wishes to know each sum
+Fj =
+i fi,j with uncertainty at most δj for a ﬁxed δj. The ap-
+proach is to allocate “ﬁlters” (allowable ranges) at each site, and
+when values are observed that lie within these ﬁlters, no action is
+taken; if they fall outside the range, then they are passed up to the
+central site. To adapt to the observed distribution, ﬁlters are peri-
+odically resized based on how long the ﬁlter has been valid. This
+approach can be modiﬁed to apply to our problem, and we compare
+against this algorithm in our experimental section.
+
+Most recently, an approach to monitoring general functions has
+been proposed by Sharfman et al [25]. Applied to our problem,
+their technique gives algorithms of a similar nature to those we
+propose, however our algorithms are designed to take advantage of
+speciﬁc features of our problem. It will be of interest to compare
+the two in future.
+
+3. PROBLEM DEFINITION AND APPROACH
+
+We deﬁne the problem of efﬁciently maintaining approximate
+counts in a distributed scenario in this section and describe our ap-
+proach.
+
+3.1 System Architecture
+
+We consider a distributed monitoring system as shown in Fig-
+ure 1. The system consists of m remote sites and a central co-
+ordinator site. The remote sites observe a continuous stream of
+updates, which taken together deﬁne a distribution of values. The
+remote sites can communicate with the coordinator in order to en-
+sure that the coordinator is able to accurately answer queries over
+the union of the update streams. In general, the remote sites can
+communicate amongst themselves as well as with the coordinator;
+
+however, in line with previous work, we only consider protocols
+that have (pairwise) communications between the coordinator and
+remote sites. This is the model that is adopted in most prior work
+on continuous, distributed monitoring problems [3, 21, 12, 8, 7]1.
+Each site i ∈ {1 . . . m} monitors a set of k values Nv,i, v ∈
+{1 . . . k}, which are deﬁned incrementally. We model each stream
+of updates observed at the remote site i as a sequence of tuples
+(cid:3)i, v, t, ci,v,t(cid:4). This is interpreted as an update of ci,v,t to Nv in
+site i at time t. We assume that updates are ordered by timestamp,
+and site i only sees updates to itself2. Then Nv,i(t), the value of the
+count in site i at time t, is deﬁned as Nv,i(t) =
+t(cid:2)<t ci,v,t(cid:2) . The
+global count, Nv(t), is deﬁned as Nv(t) =
+i∈{1...m} Nv,i(t).
+(cid:0)
+Our goal is to monitor the value of each Nv(t) within speciﬁed ac-
+curacy bounds. Since we are interested only in the “current” value
+of counts, in the rest of the paper we drop reference to t and use Nv
+and Nv,i to represent the global and local counts.
+
+(cid:0)
+
+This model accurately captures the scenarios we described in the
+introduction. For example, in network trafﬁc monitoring, each up-
+date might correspond to the observation of a packet at a remote site
+(or monitor). In this context, t is the current time, i is the identiﬁer
+of the monitor, and v and ci,v,t are properties of the packet, such
+as destination IP address and size of packet, respectively. Based on
+the inputs from all the remote sites, the coordinator tracks the ag-
+gregate trafﬁc to various destinations and raises an alarm when the
+total trafﬁc becomes high, indicative of an unusual activity (like a
+DDoS attack). Monitoring in sensor networks can also be mapped
+onto this model in a natural way.
+
+In general, the updates, ci,v,t, can be negative (corresponding to
+a decrease in Nv,i, such as temperature updates in sensor networks)
+or fractional (like rainfall measurements). All our methods will
+handle such settings, but for clarity we focus on the case where
+ci,v,ts are positive integers, and postpone discussion of negative
+updates to Section 6.
+
+3.2 The Thresholded Count Problem
+
+Our focus is on monitoring the Nv at the central coordinator.
+Since Nv is deﬁned by updates to remote sites, if we require to
+know Nv exactly, then we must eagerly send every update from a
+remote site to the coordinator as soon as it is observed. This en-
+sures accurate values at the coordinator at all times, but comes with
+huge communication overhead. As observed in Section 1, such ﬁne
+accuracy is not needed in practice. Another possibility is for the re-
+mote sites to send their counts periodically to the coordinator site.
+This reduces the communication burden, but still has some issues
+in practice: updates in real systems are typically bursty, i.e., counts
+change rapidly in some time periods while it may hardly change in
+others. The former results in inaccurate values at the coordinator,
+while the latter results in unnecessary communications. In this pa-
+per, we deﬁne the problem of continuously monitoring thresholded
+counts, which ensures that the coordinator always has an accurate
+count with minimal delay3.
+
+DEFINITION 1. Given a threshold Tv and an error guarantee
+δv, the δv-deﬁcient thresholded count, ˆNv satisﬁes the following
+1 As in the cited prior work, we concentrate on the key algorith-
+mic challenges in designing effective protocols for this setting, and
+hence we do not consider issues of message loss. Instead, we as-
+sume that there are sufﬁcient mechanisms in place such as mes-
+sage acknowledgments, retransmissions, and timestamping to en-
+sure that the correct behavior is observed.
+2This is not a strong assumption; typically, the site observes only
+the pair v, ci,v,t, and supplies t and i itself.
+3Since network delay from remote sites to coordinator is unavoid-
+able, every tracking algorithm must incur some minimum delay.
+
+properties
+
+• 0 ≤ ˆNv < Tv when Nv < Tv
+• Nv(1 − δv) < ˆNv < Nv when Nv ≥ Tv
+
+Where it is clear from context, we will drop the qualiﬁcation v
+and refer to N, T, δ. Note that this deﬁnition is distinct from the
+Heavy Hitter deﬁnition in data streams [18], which requires an ad-
+ditive error that scales as the sum of all monitored counts; instead,
+we have a much more demanding requirement to monitor all counts
+with relative error on each count, above the threshold. Without a
+threshold, T , the communication overhead is high to begin with,
+as low counts require every update to be pushed to the coordinator
+in order to maintain the error guarantee δ. Since low counts are
+typically uninteresting for monitoring applications, by supressing
+communication for these counts, the overhead of the monitoring
+can be kept low.
+
+The value of the threshold depends on individual applications.
+For applications in network monitoring that track anomalous be-
+havior, like DDoS attacks, the value of the threshold can be high,
+while applications like trafﬁc accounting [13] that count the trafﬁc
+sent by hosts or networks beyond a certain initial minimum can use
+a lower threshold value.
+
+3.3 Our Approach
+
+(cid:0)
+
+m
+i=1
+
+ti,f (i).
+
+Our basic approach is to set local thresholds at each remote site
+such that the current count is bounded by the local threshold. When
+a local threshold in a remote site is violated, the remote site will
+communicate this to the coordinator and sets a new threshold. The
+ith remote site maintains local thresholds, ti,j, j = 0, 1, . . . , and
+ensures that ti,f (i) ≤ Nv,i < ti,f (i)+1 for some threshold f (i) that
+is known to the coordinator. If the ith remote site’s count violates
+this condition, it sends an update to the coordinator with a new
+f (cid:4)
+(i) and ti,f (cid:2)(i) such that ti,f (cid:2)(i) ≤ Nv,i < ti,f (cid:2)(i)+1 for the
+current value of Nv,i. The coordinator can use the set of ti,f (i)s to
+estimate any global count as ˆNv =
+
+Note that while the count at a remote site obeys the ti,f (i) ≤
+Nv,i < ti,f (i)+1 bounds, the remote site does not send any up-
+dates until the count is outside these bounds. Until the coordi-
+nator receives the next threshold update the actual count can lie
+anywhere between the two threshold values. Hence, the maximum
+error contributed to the global count error by remote site i is given
+by ti,f (i)+1 − ti,f (i). An algorithm that tracks counts must ensure
+that the error is within the δ-deﬁcient requirement when the count
+is greater than the speciﬁed threshold. Formally, we must ensure
+that 0 <
+i∈{1...m} ti,f (i)+1 − ti,f (i) < δNv when Nv > T .
+Thus, adjacent thresholds need to be chosen to be close enough to
+satisfy this requirement. The total number of updates sent from re-
+mote sites to the coordinator corresponds to the number of thresh-
+old boundaries crossed at the remote sites. This means we want
+to set the local thresholds as far apart as possible to minimize the
+communication overhead.
+
+Algorithms that track the δ-deﬁcient thresholded count of an
+item need to balance the error requirement with minimal communi-
+cation overhead. We consider two fundamental categories for set-
+ting threshold: static thresholding, and adaptive thresholding. In
+static thresholding methods, each remote site is assigned a prede-
+termined set of thresholds that do not change over the entire course
+of tracking the count. It simply tracks between which pair of thresh-
+olds its count currently lies, and informs the coordinator when this
+changes. In the adaptive case, when old thresholds are violated,
+new thresholds at the remote sites are chosen by the central site
+according to the observed conditions, to dynamically reduce the
+communication overhead.
+
+(cid:0)
+
+While the adaptive thresholding methods can be expected to per-
+form better than the static methods, the static methods are desir-
+able when the capabilities of the remote sites and the coordinator
+are limited. The adaptive thresholding places additional process-
+ing overhead and additional functional requirements on the remote
+sites and the coordinator. The coordinator needs to recompute new
+thresholds and export them to the remote sites, in addition to process-
+ing updates from the remote sites to maintain the count. In cer-
+tain cases, like sensor networks or high speed routers, this addi-
+tional processing overhead may be too expensive to accommodate.
+A further practical issue with using adaptive thresholding is that
+the system has to be more resilient to network delays. Speciﬁ-
+cally, the coordinator may need to collect current values from sites,
+and send out many new thresholds, which incurs appreciable delay
+where the current counts may be outdated. The static thresholding
+scheme does not have this problem because the communication is
+performed from the remote site to the coordinator only. Thus the
+choice of adaptive or static thresholds will depend not only on their
+relative cost (which we analyze in detail in subsequent sections),
+but also on the underlying network properties and performance.
+
+4. STATIC THRESHOLDS
+
+We now describe the static thresholding scheme to maintain the
+δ-deﬁcient thresholded counts. In these schemes, the threshold val-
+ues in the remote sites are predetermined and do not change over
+the period of tracking. We present three such threshold assign-
+ment regimes to determine the local threshold values at the remote
+sites and discuss their complexity in terms of communication over-
+head. In this work we consider all the remote sites to be symmetric
+and hence use the same set of static threshold values. Our focus is
+on determining the local threshold values in the remote sites for a
+given value of δ and T . The static threshold assignment problem
+can be formally stated as:
+
+DEFINITION 2. Given m remote sites, a global threshold T , an
+error guarantee δ, and f (i) (the current threshold level at site i),
+determine threshold values, tj, j = [0, ∞), such that the following
+constraints are satisﬁed
+
+• ∀j ≥ 0 : tj+1 > tj, and t0 = 0
+• ∀f ∈ Nm
+
+:
+
+m
+i=1
+tf (i)+1 ≥ T
+(cid:0)
+
+m
+i=1
+
+tf (i)+1 − tf (i) ≤ δ
+
+(cid:0)
+
+m
+i=1
+
+tf (i), when
+
+(cid:0)
+
+The ﬁrst constraint ensures that the threshold values are increas-
+ing. The second constraint captures the error requirement of the
+thresholded count problem. The maximum error in the ith remote
+site when f (i) is the threshold in force at site i is tf (i)+1 − tf (i).
+Thus, the second constraint states that the total error in the count at
+the coordinator must satisfy the thresholded error guarantee for all
+possible threshold values at the remote sites.
+
+4.1 Uniform Threshold Assignment
+
+jδT
+
+(cid:0)
+
+m
+i=1
+
+The simplest solution is to keep the maximum global error level
+at δT at all times even when the global count, N , is much greater
+than T . This can be accomplished by setting the threshold levels
+in each monitor as tj =
+m . When N ≥ T , we have the total
+tf (i)+1 − tf (i) ≤ δT ≤ δN , thus satisfying the δ-
+error
+deﬁcient thresholded count constraints. If the global count is N ,
+the maximum number of updates sent to the coordinator is given
+by (cid:9) mN
+(cid:10). This simplicity comes at a price. The method works
+δT
+well for counts that are small (below T or only above T by a small
+amount), since the threshold gaps are relatively large. But as N
+increases above T , the cost scales linearly with N , as the overly
+tight error guarantee is maintained. In summary,
+
+LEMMA 1. The total number of messages from all remote sites
+δT ).
+
+to the coordinator with uniform threshold assignments is O( mN
+
+Thus, the total error in the global count is given by
+
+tf (i)+1 − tf (i) = αδ(
+
+m
+i=1
+
+tf (i)) + (1 − α)δT
+
+m
+i=1
+
+(cid:0)
+
+≤ αδN + (1 − α)δT
+≤ δN, when N > T
+
+(cid:0)
+
+4.2 Proportional Threshold Assignment
+
+A more scalable solution is to assign threshold values propor-
+tional to the local count at the remote site. The thresholds at the re-
+mote sites are assigned as tj = (1 + δ)tj−1 and t0 = 0, t1 = 1. If
+the threshold value reported by site i to the coordinator is tf (i), the
+maximum possible error from the site is tf (i)+1 − tf (i) = δtf (i).
+The maximum error at the coordinator is:
+
+m
+
+(cid:2)i=1
+
+tf (i)+1 − tf (i) =
+
+δtf (i) ≤ δ
+
+Ni = δN
+
+m
+
+(cid:2)i=1
+
+m
+
+(cid:2)i=1
+
+where N is the global count. This assignment satisﬁes the error
+requirement even when the global count is less than the threshold
+T .
+
+LEMMA 2. The total number of messages from all remote sites
+to the coordinator with proportional threshold assignments is O( m
+
+δ log N
+
+m ).
+
+f (i) =
+
+PROOF. If tf (i) ≤ Ni < tf (i)+1, the number of updates from
+f (i)−1 we get
+
+remote site i is given by f (i). Since tf (i) = (1 + δ)
+log(Ni)
+log(1 + δ)
+
+log(tf (i))
+log(1 + δ)
+
+f (i) = 1 +
+
+≤ 1 +
+
+The total number of messages is bounded by
+
+m
+
+(cid:2)i=1
+
+f (i) ≤ m +
+
+We use the fact that
+
+m
+
+(cid:2)i=1
+m
+i=1
+
+log(Ni)
+log(1 + δ)
+
+Ni = N ,
+
+and
+log
+
+m
+i=1
+
+Ni is maximized when ∀i : Ni = N
+δ ), the stated bound follows.
+
+−1(1 + δ) = O( 1
+(cid:5)
+
+(cid:0)
+
+(cid:0)
+
+≤ m + m
+
+N
+m
+
+log
+log(1 + δ)
+(cid:4)
+
+(cid:3)
+
+m
+
+i=1 log Ni = log
+
+m
+i=1
+m . Since for δ < 1,
+
+(cid:3)(cid:5)
+
+Ni
+
+,
+(cid:4)
+
+This method of assignment performs well when N (cid:11) T . The
+relative cost of the uniform assignment to the proportional assign-
+ment is O(m/δ log(N/m))/O(N m/(δT )) = O(T /N log(N/m)).
+When T is greater than N , the uniform spread assignment performs
+better, but as N increases above T , the proportional assignment re-
+quires fewer communications.
+
+4.3 Blended Threshold Assignment
+
+The main idea of blended threshold assignment is to exploit the
+best features of the previous two assignments and provide a mech-
+anism to tune the performance for different values of N .
+
+DEFINITION 3. The blended assignment sets the local thresh-
+
+old values as
+
+• tj = (1 + αδ)tj−1 + (1 − α) δT
+• t0 = 0, and when α = 1, t1 = 1
+
+m , for a parameter 0 ≤ α ≤ 1
+
+Note that α = 0 corresponds to the uniform assignment while
+α = 1 corresponds to the proportional assignment. Varying the
+value of α helps in tuning the threshold values to combine uniform
+and proportional thresholds.
+
+THEOREM 4. The blended threshold assignment satisﬁes the δ-
+
+deﬁcient thresholded error guarantee for all values of α ∈ [0, 1].
+
+PROOF. Using the blended threshold assignment, the maximum
+
+error in the ith remote site is
+
+tf (i)+1 − tf (i) = αδtf (i) + (1 − α)
+
+δT
+m
+
+LEMMA 3. The total number of messages from all remote sites
+to the coordinator with blended threshold assignments and 0 <
+α < 1 is O( m
+
+αδ log(1 + α( N
+
+− 1)))
+
+T
+
+PROOF. The threshold values using the blended assignment for
+
+α ∈ (0, 1) can be written as
+
+tj =
+
+(1 + αδ)
+αδ
+
+(cid:6)
+
+j − 1
+
+(1 − α)δT
+
+(cid:7)
+
+m
+
+Thus, the number of updates from remote site i when the threshold
+value exceeded is f (i) is
+log(1 + tf (i)
+
+αm
+
+(1−α)T )
+
+log(1 + αδ)
+αm
+
+log(1 + Ni
+
+(1−α)T )
+
+log(1 + αδ)
+
+≤
+
+=
+
+, since tf (i) ≤ Ni
+
+log(1 + αhi) − log(1 − α)
+
+log(1 + αδ)
+
+, where hi =
+
+Nim
+
+T
+
+− 1
+
+Note that given
+
+m
+i=1
+
+hi = Nm
+T
+
+−m, the expression
+
+m
+
+i=1 (1 + αhi)
+
+is maximized when ∀i : hi = h = N
+T
+updates from all remote sites is
+
+(cid:0)
+
+− 1. The total number of
+
+(cid:5)
+
+m
+
+(cid:2)i=1
+
+f (i) =
+
+log(
+
+m
+
+i=1 (1 + αhi)) − m log(1 − α)
+
+(cid:5)
+
+log(1 + αδ)
+
+≤m log(1 + αh) − log(1 − α)
+
+log(1 + αδ)
+
+(1)
+
+(2)
+
+Upper bounding this expression gives the stated worst case bound.
+
+Determining the optimum value of α. For small values of N <
+T , α = 0 gives us the best possible assignment and for large values
+of N (cid:11) T , α = 1 gives us the best assignment. For intermediate
+values of N , the best value of α can be determined by minimizing
+the number of updates.
+
+Note that the communication cost in Lemma 3 is dependent on
+the global count, N . Hence, the optimal value of α depends on
+N . We advocate two approaches to determining the best value of
+α. The ﬁrst approach is to track the global count and determine
+an expected value of N , Ne after a long period of observation,
+and use this value to determine the optimal value of α. This can be
+expected to result in good performance if the actual value of N does
+not vary a lot from the estimate Ne. A more sophisticated approach
+is to track the distribution of N over a large set of observations and
+determine the value of α that minimizes the expected number of
+update messages over this distribution.
+
+THEOREM 5. The total number of updates (from Eqn 2), KN =
+is a convex function in α in the range
+
+m log(1 + αh) − log(1 − α)
+α ∈ (0, 1) for small values of δ.
+
+log(1 + αδ)
+
+The proof of this theorem is presented in Appendix A.
+
+THEOREM 6. Given an expected value of N or a discrete prob-
+ability distribution of N , we can ﬁnd a value of α that minimizes
+the number of messages with blended threshold assignments.
+
+(cid:0)
+
+PROOF. First, observe that if p(N ) is the probability density
+function of N , then the expected maximum number of updates
+given by K =
+p(N )KN is a convex function in α in the
+range α ∈ (0, 1). Since K is a convex combination of convex
+functions KN , K is itself convex.
+
+∞
+N =1
+
+Since K and KN are convex functions in α in the range (0, 1),
+there exists a single minimum for K and KN that can be searched
+by using techniques like gradient descent. The descent algorithm
+can be used to determine the optimal values of α for both the pro-
+posed approaches. In the ﬁrst approach where we are given the ex-
+pected value Ne, we determine the optimal value of α by minimiz-
+ing KNe . In the second approach where we are given the distribu-
+tion of N , we can use the descent method to determine the optimal
+value of α by minimizing the function K as deﬁned above.
+
+5. ADAPTIVE THRESHOLDS
+
+Unlike the static thresholding scheme, in the adaptive threshold-
+ing scheme the thresholds in the monitoring nodes are adaptively
+set by the coordinator every time there is a threshold violation in a
+node. In other words, the coordinator not only receives the thresh-
+old violations from the monitoring nodes, but also reacts to them
+by sending new thresholds back. This gives the coordinator more
+power to set thresholds based on more information about how the
+distributions at each site are evolving, and hence try to reduce the
+number of threshold violations. In a general scenario, the coordi-
+nator may wait for multiple violations before resetting thresholds,
+and may reset thresholds for arbitrary subsets of the nodes based
+on a complete history of past violations. In this work, we react to
+each threshold violation, and consider only recent history.
+
+5.1 Adaptive Threshold Assignment Problem
+In the adaptive thresholding scheme, two levels of thresholds,
+lower and higher thresholds, are maintained at every node at all
+times. The lower threshold at node i is denoted by tiL, and the
+higher threshold by tiH , so that at all times tiL ≤ Ni < tiH . If
+these thresholds are violated, i.e. if this condition is no longer true,
+then the site i contacts the coordinator site with its current count
+Ni, and it resets its lower threshold tiL = Ni. The coordinator es-
+timates the count as the sum of the reported counts from the remote
+sites, ˆN =
+tiL. The coordinator then updates the tiH for
+node i, and possibly those of other nodes, to ensure that its count
+still meets the δ-deﬁcient requirement. To minimize the communi-
+cation in the system, the coordinator needs to set the upper thresh-
+olds to as high a value as possible. Note that the maximum error
+contributed by site i is tiH − tiL.
+
+m
+i=1
+
+(cid:0)
+
+The problem of setting the upper thresholds of the remote sites
+
+by the coordinator can be formally stated as follows.
+
+DEFINITION 7. Given m remote monitoring nodes, a global
+threshold T , an error guarantee δ, and a threshold violation from
+node j, our objective is to determine the higher threshold values,
+tiH , in all m monitoring nodes such that the number of messages in
+the monitoring system is kept as low as possible, and the following
+constraints are satisﬁed:
+
+• ∀1 ≤ i ≤ m, tiH > tiL
+•
+
+tiH − tiL ≤ δ
+
+m
+i=1
+
+m
+i=1
+
+tiL, when
+
+m
+i=1
+
+tiH ≥ T
+
+(cid:0)
+
+(cid:0)
+
+(cid:0)
+
+Similar to the static thresholding scheme, the ﬁrst constraint en-
+sures that the higher thresholds are greater than the lower thresholds
+in all the nodes and the second constraint ensures that the total er-
+ror in the count at the coordinator must satisfy the thresholded error
+guarantee.
+
+if (( ˆN < (1 − δ)T ) and ( ˆN + Ni − tiL ≥ (1 − δ)T )) then
+poll all sites j for Nj; tjL ← Nj; send tjH ← (1+δ)tjL;
+
+m ; ˆN ← 0
+
+BASICADAPT(δ, T, m)
+1: tiL ← 0; tiH ← T
+2: loop {receive update (i, Ni); }
+3:
+4:
+5:
+6:
+7:
+8:
+9:
+
+m
+tiL ← Ni; ˆN ←
+j=1
+if ( ˆN < (1 − δ)T ) then
+
+for all j send tjH ← tjL
+
+send tiH ← tiL(1 + δ) to i
+
+Nj;
+
+else
+
+(cid:0)
+
+T
+
+ˆN to j;
+
+Figure 2: Basic Adaptive Thresholding Algorithm
+
+In the static threshold method, the remote sites do not know if
+the current global count is greater than T or lesser at any time.
+Hence, the thresholds need to be set to handle both these cases.
+A key advantage of the adaptive algorithm is that when the global
+count is less than the threshold, the coordinator can afford to set
+higher thresholds at the remote sites than in the static algorithm.
+To illustrate this, deﬁne the slack in the system as the difference
+between the threshold and the current estimate of the global count,
+S = T − ˆN . The coordinator can now split this slack among
+the remote sites in any manner and still be able to satisfy the δ-
+deﬁcient error requirement. Assume that the slack is split among
+the remote sites as ηi, i = 1, . . . , m, such that
+ηi ≤ S.
+Thus, tiH = tiL + ηi. If the counts at all the remote sites are less
+than their respective upper thresholds, then the global count must
+be lesser than the global threshold because N <
+tiH ≤ T .
+If at any point the global count exceeds the threshold, at least one
+of the thresholds in the remote sites will be exceeded. This allows
+the coordinator to determine when the count exceeds the threshold
+and switch to the case when N ≥ T and track the count closely to
+satisfy the δ-deﬁcient error requirement.
+
+m
+i=1
+
+m
+i=1
+
+(cid:0)
+
+(cid:0)
+
+5.2 Basic Adaptive Algorithm
+
+When the total count estimated at the central site, ˆN , is less than
+T , a naive approach is to split the slack equally among all the nodes;
+instead, we propose to split the difference proportional to the cur-
+rent count in the nodes, since nodes that have larger counts than
+others are likely to grow larger. We set the new tiH = tiL +
+(T −(cid:0)
+(cid:0)
+
+m
+j=1 tjL)tiL
+m
+j=1 tiL
+
+= tiL
+
+T
+ˆN .
+
+If ˆN ≥ (1 − δ)T , we set tiH − tiL = δtiL, so that the maximum
+error in each node is δtiL. This approach is similar to the propor-
+tional spread threshold assignment algorithm for static thresholding
+problem presented in Section 4.2. The adaptive thresholding algo-
+rithm is presented in Figure 2. Line 7 performs the proportional
+split when the counts are small, and line 9 performs the propor-
+tional growth when the counts are large. Lines 3 and 4 handle the
+case when we switch from having ˆN < (1−δ)T to ˆN ≥ (1−δ)T .
+
+LEMMA 4. The adaptive thresholding assignment algorithm pre-
+sented in Figure 2 satisﬁes the δ-deﬁcient thresholded count con-
+straints.
+
+(cid:0)
+
+(cid:0)
+
+m
+i=1
+
+m
+i=1
+
+Ni <
+
+m
+i=1
+tiH = T
+ˆN
+
+PROOF. When ˆN =
+m
+i=1
+
+tiL < (1 − δ)T , we have that N =
+tiL = T , so we know that the
+total count is less than the threshold T . When ˆN ≥ (1 − δ)T , we
+(cid:0)
+know that the total count exceeds (1 − δ)T and the algorithm is
+similar to the proportional spread threshold assignment algorithm
+for the static thresholding scheme. In this case, tiH − tiL = δtiL
+and so
+
+i=1(tiH − tiL) = δ ˆN ≤ δN , as required.
+
+(cid:0)
+
+m
+
+(cid:0)
+
+if ( ˆN < (1 − δ)T ) and ( ˆN − tiL + Ni ≥ (1 − δ)T ) then
+poll all sites j for Nj; tjL ← Nj; send tjH ← (1+δ)tjL;
+
+m ; R ← ∅; ˆN = 0;
+
+if (R = ∅) then
+
+for j = 1 to m do
+
+MODIFIEDADAPT(δ, T, m)
+1: tiL ← 0; tiH ← T
+2: loop {receive update (i, Ni); }
+3:
+4:
+5:
+6:
+7:
+8:
+9:
+10:
+11:
+12:
+13:
+14:
+15:
+
+S ←
+for all j ∈ E do
+if tmin < δT
+else send tjH ← tjL +
+
+m
+r=1
+
+(cid:0)
+
+else send tiH ← (1 + δ)tiL to i;
+
+Poll site j for Nj; tjL ← Nj; sj ← max{tjL, δT
+m
+if Nj < δT
+tiL ← Ni; ˆN ←
+if ( ˆN < (1 − δ)T ) then
+
+j tjL; si ← tiL; R ← R ∪ {i};
+
+m then send tjH ← δT
+
+m to j
+
+(cid:0)
+
+};
+
+sr; tmin ← minj{
+
+tjL
+
+(cid:0)r∈R trL (T − S)};
+
+m then send tjH ← δT
+
+m to j;
+
+tjL
+
+(cid:0)r∈S trL (T − S)} to j
+
+Figure 3: Modiﬁed Adaptive Thresholding Algorithm
+
+Although this algorithm is simple and intuitive, it has some draw-
+backs: The ﬁrst time there is a threshold violation from some re-
+mote site i, the tiH value at the node is set to T while the value at
+all other nodes will be set to 0, since Nj = 0 at the coordinator
+site initially. This could unnecessarily trigger a lot of communi-
+cations especially when several nodes have non-zero counts. Sec-
+ondly, when the estimated aggregate count at the central node is
+close to T the new threshold will be very close to the old thresh-
+old, thus triggering a lot of threshold violations. In the following
+section we present a modiﬁed algorithm that addresses the above
+shortcomings.
+
+5.3 Modiﬁed Adaptive Algorithm
+
+m are initialized to δT
+
+In order to avoid the problems in the original algorithm for adap-
+tive thresholds we modify the original algorithm, which is illus-
+trated in Figure 3. There are two main differences between the
+original and modiﬁed algorithms: (a) As soon as the central node
+receives the ﬁrst threshold violation the tiH values in all the nodes
+whose counts Ni are below δT
+m , and (b) when
+the difference between global threshold and the estimated aggre-
+gate count is small (i.e., below δT
+m ), instead of using the adaptive
+strategy of distributing the difference to all the nodes, we maintain
+a constant difference between the upper and lower thresholds, i.e.,
+tiH − tiL = δT
+m . In our algorithm in Figure 3, we maintain a set
+R of nodes whose count exceeds δT
+m . Lines 5–9 deal with the ﬁrst
+threshold violation, by polling all nodes to initialize S, and setting
+upper bounds for the nodes not in R. If the total count is sufﬁ-
+ciently below T , lines 10-14 allocate the slack in proportion to the
+counts; however, we ensure that the difference between higher and
+lower thresholds is at least δT
+m , using extra variables si, to ensure
+that the total amount of slack allocated stays within the permitted
+bounds. Lines 3–4 deal with the case when the count ﬁrst exceeds
+T , and from that point on, we switch to proportionally increasing
+counts (line 15) as before.
+
+LEMMA 5. The modiﬁed adaptive thresholding assignment al-
+gorithm presented in Figure 3 satisﬁes the δ-deﬁcient thresholded
+count constraints.
+
+PROOF. Consider the case when ˆN < (1 − δ)T . If a remote
+m . In line 11, the rest
+
+site i does not belong to R (i /∈ R), tiH = δT
+
+m
+i=1
+
+tiH = ˆN +
+
+of the available slack, T − S, is proportionally divided to the rest
+of the sites ∈ R. tmin denotes the minimum of the slack values. If
+tmin < δT
+m , then all sites ∈ R are allocated a slack of δT
+m in line 13
+m
+of the algorithm. Hence N <
+< T .
+i=1
+If tmin > δT
+m , then the slacks are proportionally allocated to the
+sites. Hence N <
+tiH = T , because the algorithm allo-
+cates the slack in the system to the sites. Thus, if ˆN < (1 − δ)T ,
+N < T . When ˆN ≥ (1 − δ)T , the total count exceeds (1 − δ)T
+and the algorithm follows the proportional spread threshold assign-
+ment in the static scheme, and the proof is the same as the previous
+Lemma. Thus, the modiﬁed algorithm satisﬁes the δ-deﬁcient error
+constraints.
+
+m
+i=1
+
+δT
+m
+
+(cid:0)
+
+(cid:0)
+
+(cid:0)
+
+m )) when N > T , and O( m2N
+
+THEOREM 8. The total number of messages from all remote
+sites to the coordinator using the modiﬁed adaptive algorithm is
+δ (m + log( N −T
+O( m
+δT ) when N ≤ T .
+PROOF. We split our analysis into two parts, ﬁrst when the total
+count is less than T , and the second when it exceeds T .
+In the
+ﬁrst part, the algorithm ensures that the “slack” in each threshold,
+i.e. tiH − tiL is always at least δT
+m . Thus, there can be at most
+mN
+δT threshold violations before the count reaches T , simplifying
+to m
+δ when N ﬁrst exceeds T . Each threshold violation causes at
+most O(m) messages to be sent, to inform the sites of their new
+high thresholds tiH . When the count is above T , the algorithm
+mimics the proportional threshold assignment case in Section 4.2,
+and adapting Lemma 2, the number of messages between remotes
+sites and the central site to go from T to N is O( m
+m ). The
+result follows by summing these two bounds.
+
+δ log N −T
+
+δ log N −T
+
+m , then setting m
+
+Note that one can easily force Ω(m2+ m
+
+m ) messages by
+ﬁrst making one site have count T
+2 counts Ni = δT
+m
+(to set up the adaptive thresholds). Then for each of the same m
+2
+sites in turn, set their local count to Ni = T
+m : each of these settings
+causes θ(m) messages, over m
+2 sites gives the Ω(m2) bound. Us-
+ing the remaining m
+2 sites (currently with zero local count each),
+one can then elicit the m
+m ))
+cost from the proportional threshold settings. However, in general,
+we expect to do much better than this worst case bound, since the
+analysis is somewhat pessimistic.
+
+log(1+δ) = Ω( m
+
+δ log( N −T
+
+2 + m
+
+2(N −T )
+
+log
+
+m
+
+2
+
+6. EXTENSIONS
+Negative Updates. Thus far we have assumed that all updates re-
+ceived at remote sites are non-negative. However, a simple ob-
+servation is that our static protocols remain correct when negative
+updates are permitted. Instead of checking for thresholds being ex-
+ceeded, we must check that the upper threshold remains an upper
+bound, and also that the lower threshold remains a lower bound.
+Similarly, our adaptive protocols can also handle negative updates
+with minor modiﬁcations. The analysis in previous sections that
+relates the cost of the protocol to the value of the global count no
+longer applies: positive and negative updates can cause a lot of
+communication but leave the global count quite low, thus the com-
+munication bound cannot still hold. Indeed, if the updates cause
+counts to repeatedly cross the same threshold boundaries (in the
+static case), then the best bound we can state is one that is linear in
+the number of updates. In the adaptive case, this adverse outcome
+can be avoided.
+
+Sliding Windows. Being able to handle negative updates means
+that we can apply our methods to other models of computing counts.
+Typically, we do not want to monitor counts which increase indeﬁ-
+nitely. Indeed, in several of the queries outlined in the Introduction,
+
+time windows were implicitly given in the form of “within an hour”
+or “in a day”. There are several models for dealing with such time-
+windowed queries: (a) Periodic reset. After the time period has
+elapsed, reset all counts to zero, and restart the protocol. (b) Slid-
+ing window. Ensure that the current count covers exactly the last
+hour, for example, by keeping track of past updates, and applying
+updates older than one hour as negative updates. In the case that
+there is insufﬁcient storage to retain this many updates, then ap-
+proximate information can be kept, as explained below. (c) Over-
+lapping window. A compromise between periodic reset and sliding
+window is to apply the overlapping window approach: for exam-
+ple, the window consists of one hour’s data, and the start of the
+window is advanced by ﬁve minute intervals every ﬁve minutes (so
+the window contains between 1 hour and 1 hour and ﬁve minutes
+of updates). Now we just have to record the sum of updates in each
+ﬁve minutes and apply these as a single negative update when the
+start of the window is advanced.
+
+Approximate Counts. So far we have assumed that there is suf-
+ﬁcient storage capacity at the remote nodes to store all local count
+values. But in the case when there are very many updates of dif-
+ferent values (for example, tracking network activity), we cannot
+make this assumption. We may use the same (static) thresholds and
+δ value for all counts to reduce space usage, but still there may be
+too many counts to store. The natural solution is to adopt an ap-
+proximate way of storing the counts, such as Lossy Counting [18]
+or Count-Min sketch [9]. However, using such approximate struc-
+tures mean that the guarantees that we can give are much weaker:
+instead of the δ-deﬁcient guarantee, we must now give a guarantee
+relative to δNv + (cid:7)
+v Nv, since the approximate counting meth-
+ods return counts of each item with error (cid:7)
+v Nv. Although we
+can reduce (cid:7) (at the cost of more space), in general it is not possi-
+ble to set a non-zero value of (cid:7) that gives a δ-deﬁcient guarantee.
+Hence, the result appear more in line with those that follow for
+Heavy-hitter style problems [8].
+
+(cid:0)
+
+(cid:0)
+
+Time-dependent Thresholds. Prior work has built models of how
+data varies with time in order to reduce the communication cost
+further [8, 7]. We could apply a similar approach to our methods:
+the result is time-dependent local thresholds. Now we would set
+our thresholds so that they can increase or decrease as time passes,
+so that we ensure that the total uncertainty still remains within the
+same bounds. The idea is that the varying thresholds predict where
+the true count will lie at time t; if this prediction is correct, then no
+communication cost is incurred. If any (now time dependent) local
+threshold is broken, then communication is triggered with the coor-
+dinator, and the model can be recalibrated with the recent history.
+We hope to investigate such extensions in future work.
+
+7. EXPERIMENTAL STUDY
+
+In this section we present the experimental evaluation of our sta-
+tic and adaptive algorithms. We also compare the performance of
+these algorithms with a technique proposed by Olston et al in [21]
+(referred to as the OJW algorithm in the rest of this work) where
+the authors try to minimize communication overhead while main-
+taining a certain accuracy for continuous queries over a distributed
+data stream.
+
+We begin by presenting our experimental setup in Section 7.1.
+We then experimentally show that our algorithms always satisfy
+the problem requirements. We also validate our blended approach
+for static thresholds by comparing the theoretical results from the
+model with the results from our experiments. Then we present
+some observations that provide more insights about the usefulness
+of our algorithms.
+
+7.1 Experimental Setup
+
+To gain a better understanding of our theoretical analysis, we
+
+built a simulator with m monitoring nodes and one central node.
+
+Data Sets. Although the deﬁnition of thresholded counts problem
+is applicable in a variety of different scenarios (as pointed out in
+Section 1), our focus in the experiments is on a distributed network
+monitoring system. In this scenario, every node monitors trafﬁc on
+a link for all the registered events and increments the count for all
+the events that are observed. We deﬁne an event as the occurrence
+of a combination of destination IP address and the destination port
+number in a packet seen by a monitoring node.
+
+We use publicly available link traces from NLANR [20] as input
+to our distributed monitoring system. These traces are for a single
+ingress link, and we transform this data for our distributed system
+by assigning a probability distribution for distributing packets ran-
+domly to the various monitors. By using different probability dis-
+tributions, we can simulate various scenarios that can occur in real
+networks. For example, a skewed probability distribution function
+represents a scenario where a few nodes (that are monitoring large
+inter-domain “peering” links) receive large number of events while
+others do not. Similarly, a uniform distribution represents a sce-
+nario where events are equally likely to occur in any of the mon-
+itoring nodes. Although we track all the events that occur in the
+link traces from NLANR, for the ease of illustration, we present
+the results for tracking one event whose overall count was 960000.
+
+Implementation Issues. We implemented the static and adaptive
+algorithms described earlier in Sections 4 and 5. Since the OJW al-
+gorithm was not proposed to address the thresholded counts prob-
+lem, we need to set certain parameters of the algorithm in [21] to
+apply it to our problem. The main issues are:
+
+• The OJW algorithm assumes that a single node can monitor
+all the updates for a given object/event and a single query can
+include multiple objects. Since we are interested in tracking
+the same objects/events in multiple monitors, we treat each
+item in each site as a separate object/event that is the subject
+of a single query.
+
+• In the thresholded counts problem deﬁnition, the error values
+are relative, i.e., the maximum error allowed for an event in
+the system depends on its current count. The original OJW
+algorithm uses absolute errors (i.e., the total error in the sys-
+tem is required to be below a certain constant value), so to
+apply to our problem, we set the maximum allowed error for
+each count to be ﬁxed at δT , divided evenly between all sites
+where it can occur.
+
+These parameter settings of the OJW algorithm are our best ef-
+fort to make the algorithm apply to our δ-deﬁcient thresholded
+count problem. They ensure that the algorithm generates results
+that are correct according to our problem deﬁnition (and the algo-
+rithm falls into our class of adaptive algorithms); however, we will
+see that the cost is much higher than our algorithms that were de-
+signed for this problem.
+
+7.2 Performance Accuracy
+
+Count Accuracy. In Figure 4(a) we examine the total error in the
+distributed monitoring system as packets arrive at various monitor-
+ing nodes while using the blended static threshold assignment. We
+set the values of T , δ, and m to be 10000, 5%, and 20 respectively.
+When the count of the event is less than T the error in the system
+can be as high as 50%, but after the count exceeds the value of T
+the error is always less than the value speciﬁed by δ (indicated by
+
+0.5
+
+1
+
+1.5
+
+2
+
+# of packets seen by the distributed monitoring system 
+
+(a) N Vs Error percentage in the static case
+
+2.5
+
+x 104
+
+(cid:24)
+
+(cid:20)(cid:19)
+
+(b) N Vs Error percentage in the adaptive case
+
+Figure 4: Testing accuracy for static and adaptive cases
+
+50
+
+40
+
+30
+
+20
+
+10
+
+0  
+0
+
+)
+
+%
+
+t
+
+(
+ 
+e
+g
+a
+n
+e
+c
+r
+e
+P
+
+ 
+r
+o
+r
+r
+
+E
+
+(cid:3)
+(cid:85)
+(cid:82)
+
+(cid:73)
+(cid:3)
+
+(cid:79)
+
+(cid:72)
+(cid:88)
+(cid:68)
+(cid:89)
+(cid:3)
+(cid:68)
+
+(cid:3)
+
+(cid:87)
+
+(cid:71)
+(cid:72)
+(cid:68)
+(cid:80)
+
+(cid:76)
+(cid:87)
+(cid:86)
+(cid:40)
+
+(cid:3)
+(cid:3)
+(cid:3)
+(cid:3)
+(cid:3)
+
+(cid:81)
+(cid:82)
+
+(cid:76)
+(cid:87)
+
+(cid:76)
+
+(cid:68)
+(cid:70)
+(cid:81)
+(cid:88)
+(cid:80)
+(cid:80)
+(cid:82)
+(cid:70)
+(cid:3)
+(cid:80)
+(cid:88)
+(cid:80)
+(cid:81)
+(cid:80)
+
+(cid:76)
+
+(cid:76)
+
+(cid:3)
+(cid:3)
+(cid:3)
+(cid:3)
+(cid:3)
+(cid:3)
+(cid:3)
+(cid:3)
+(cid:3)
+(cid:3)
+(cid:3)
+
+(cid:80)
+(cid:88)
+(cid:80)
+(cid:81)
+(cid:48)
+
+(cid:76)
+
+(cid:76)
+
+(cid:87)
+(cid:86)
+(cid:82)
+(cid:70)
+(cid:3)
+(cid:81)
+(cid:82)
+
+(cid:76)
+(cid:87)
+
+(cid:76)
+
+(cid:68)
+(cid:70)
+(cid:81)
+(cid:88)
+(cid:80)
+(cid:80)
+(cid:82)
+(cid:70)
+
+(cid:20)
+
+(cid:19)(cid:17)(cid:27)
+
+(cid:19)(cid:17)(cid:25)
+
+(cid:19)(cid:17)(cid:23)
+
+(cid:19)(cid:17)(cid:21)
+
+(cid:19)
+(cid:19)
+
+(cid:20)(cid:24)(cid:19)(cid:19)
+
+(cid:20)(cid:19)(cid:19)(cid:19)
+
+(cid:24)(cid:19)(cid:19)
+
+(cid:19)
+(cid:19)
+
+T = 10000     
+δ = 0.05 
+m=20          
+
+α=0.0
+α=0.3
+α=0.7
+α=1.0
+
+Error = 5% 
+
+(cid:55)(cid:75)(cid:72)(cid:82)(cid:85)(cid:72)(cid:87)(cid:76)(cid:70)(cid:68)(cid:79)
+(cid:54)(cid:76)(cid:80)(cid:88)(cid:79)(cid:68)(cid:87)(cid:76)(cid:82)(cid:81)
+
+(cid:24)(cid:19)
+
+(cid:20)(cid:19)(cid:19)
+
+(cid:20)(cid:24)(cid:19)
+
+(cid:39)(cid:76)(cid:73)(cid:73)(cid:72)(cid:85)(cid:72)(cid:81)(cid:87)(cid:3)(cid:83)(cid:68)(cid:85)(cid:68)(cid:80)(cid:72)(cid:87)(cid:72)(cid:85)(cid:3)(cid:86)(cid:72)(cid:87)(cid:87)(cid:76)(cid:81)(cid:74)(cid:86)
+
+(cid:55)(cid:75)(cid:72)(cid:82)(cid:85)(cid:72)(cid:87)(cid:76)(cid:70)(cid:68)(cid:79)
+(cid:54)(cid:76)(cid:80)(cid:88)(cid:79)(cid:68)(cid:87)(cid:76)(cid:82)(cid:81)
+
+(cid:24)(cid:19)
+
+(cid:20)(cid:19)(cid:19)
+
+(cid:20)(cid:24)(cid:19)
+
+(cid:39)(cid:76)(cid:73)(cid:73)(cid:72)(cid:85)(cid:72)(cid:81)(cid:87)(cid:3)(cid:83)(cid:68)(cid:85)(cid:68)(cid:80)(cid:72)(cid:87)(cid:72)(cid:85)(cid:3)(cid:86)(cid:72)(cid:87)(cid:87)(cid:76)(cid:81)(cid:74)(cid:86)
+
+Figure 5: Comparing the optimal theoretical values of α with
+the results obtained from simulation. The x-axis represents dif-
+ferent combinations of T , δ, and N . Each combination is re-
+ferred to as a “parameter setting” and represents a point on
+the x-axis.
+
+the heavy line on the ﬁgure). Different parameter settings yielded
+similar results.
+
+The results for the same experiment performed with the adaptive
+algorithms (but varying values of T ) are shown in Figure 4(b). The
+distinctive shape of the curve for the modiﬁed adaptive algorithm
+is explained by the different parts of the algorithm: the initial high
+error is due to allocating tiH = T
+m in the initial phase of the al-
+gorithm. The error drops to zero when the central node polls all
+the monitoring nodes and hence has accurate count information.
+The error gradually increases when nodes are allocated adaptive
+thresholds, which allows the total error to grow (within the allowed
+bounds), until the count reaches (1 − δ)T . Finally, the algorithm
+switches to proportionally growing thresholds, which keep the frac-
+tional error within the necessary bounds. Thus we observe that the
+total error in the system is less than the value speciﬁed by δ after
+the total count exceeds T . Meanwhile, the basic adaptive algorithm
+
+(cid:87)
+
+(cid:72)
+(cid:74)
+(cid:68)
+(cid:81)
+(cid:72)
+(cid:70)
+(cid:85)
+(cid:72)
+(cid:51)
+
+(cid:3)
+(cid:85)
+(cid:82)
+(cid:85)
+(cid:85)
+
+(cid:40)
+
+(cid:87)
+
+(cid:72)
+(cid:74)
+(cid:68)
+(cid:81)
+(cid:72)
+(cid:70)
+(cid:85)
+(cid:72)
+(cid:51)
+
+(cid:3)
+(cid:85)
+(cid:82)
+(cid:85)
+(cid:85)
+
+(cid:40)
+
+(cid:20)(cid:19)(cid:19)(cid:3)(cid:3)
+
+(cid:24)(cid:19)
+
+(cid:19)(cid:3)(cid:3)
+(cid:19)
+
+(cid:20)(cid:19)(cid:19)(cid:3)(cid:3)
+
+(cid:24)(cid:19)
+
+(cid:19)(cid:3)(cid:3)
+(cid:19)
+
+(cid:20)(cid:19)(cid:19)
+
+(cid:24)(cid:19)
+
+(cid:19)(cid:3)(cid:3)
+(cid:19)
+
+(cid:87)
+
+(cid:72)
+(cid:74)
+(cid:68)
+(cid:81)
+(cid:72)
+(cid:70)
+(cid:85)
+(cid:72)
+(cid:51)
+
+(cid:3)
+(cid:85)
+(cid:82)
+(cid:85)
+(cid:85)
+
+(cid:40)
+
+(cid:55)(cid:3)(cid:32)(cid:3)(cid:20)(cid:19)(cid:19)(cid:19)(cid:19)(cid:3)(cid:3)(cid:3)(cid:3)(cid:3)
+δ(cid:3)(cid:32)(cid:3)(cid:19)(cid:17)(cid:19)(cid:24)(cid:3)
+
+(cid:40)(cid:85)(cid:85)(cid:82)(cid:85)(cid:3)(cid:32)(cid:3)(cid:24)(cid:8)(cid:3)
+
+(cid:48)(cid:82)(cid:71)(cid:76)(cid:73)(cid:76)(cid:72)(cid:71)(cid:3)(cid:36)(cid:71)(cid:68)(cid:83)(cid:87)(cid:76)(cid:89)(cid:72)
+(cid:37)(cid:68)(cid:86)(cid:76)(cid:70)(cid:3)(cid:36)(cid:71)(cid:68)(cid:83)(cid:87)(cid:76)(cid:89)(cid:72)
+
+(cid:20)
+
+(cid:21)
+
+(cid:21)
+
+(cid:23)
+
+(cid:55)(cid:3)(cid:32)(cid:3)(cid:24)(cid:19)(cid:19)(cid:19)(cid:19)(cid:3)(cid:3)(cid:3)(cid:3)(cid:3)
+δ(cid:3)(cid:32)(cid:3)(cid:19)(cid:17)(cid:19)(cid:24)(cid:3)
+
+(cid:40)(cid:85)(cid:85)(cid:82)(cid:85)(cid:3)(cid:32)(cid:3)(cid:24)(cid:8)(cid:3)
+
+(cid:22)
+
+(cid:25)
+
+(cid:23)
+
+(cid:27)
+
+(cid:55)(cid:3)(cid:32)(cid:3)(cid:20)(cid:19)(cid:19)(cid:19)(cid:19)(cid:19)(cid:3)(cid:3)(cid:3)(cid:3)
+δ(cid:3)(cid:32)(cid:3)(cid:19)(cid:17)(cid:19)(cid:24)(cid:3)
+
+(cid:40)(cid:85)(cid:85)(cid:82)(cid:85)(cid:3)(cid:32)(cid:3)(cid:24)(cid:8)(cid:3)
+
+(cid:49)
+
+(cid:49)
+
+(cid:49)
+
+(cid:24)
+(cid:91)(cid:3)(cid:20)(cid:19)(cid:23)
+
+(cid:20)(cid:19)
+(cid:91)(cid:3)(cid:20)(cid:19)(cid:23)
+
+(cid:20)(cid:24)
+(cid:91)(cid:3)(cid:20)(cid:19)(cid:23)
+
+has consistently higher error for N < T , but also higher commu-
+nication cost.
+
+Setting α for the Static Algorithm. To validate our theoretical
+results, we compare the optimal value of α obtained from our the-
+oretical model using a gradient descent approach to the ideal value
+of α obtained from experiments. For this experiment, we use a
+uniform distribution to send a given packet from the input ﬁle to
+the monitoring nodes. This is because the static threshold assign-
+ment algorithms have a worst case when the packets are uniformly
+distributed across the remote sites. We repeat the experiment 100
+times to ensure that the outcome is not biased by outliers (while
+generating uniform distribution), and the experimental results pre-
+sented here are the average value from all the 100 runs.
+
+In our experiments we consider several different values for T
+and δ. The range of values for T was [100,100000] and the range
+of values δ was [0.01, 0.1]. As we showed in Section 4.3, the total
+number of messages in a monitoring system using blended static
+thresholding approach also depends on Ni, the count of the event
+in the monitor i. Hence in our experiments we also vary the over-
+all count of the event that we track in the range [2500, 960000].
+For each combination of values for T , δ, and N (referred to as a
+parameter setting), we vary the value of α from 0 to 1 with incre-
+ments of 0.001. For every parameter setting we compute the value
+of α that resulted in the minimum number of communications, both
+using simulations and the theoretical model.
+
+The comparison of the ideal values of α from the simulations
+and theoretical model is shown in the top of Figure 5. Although the
+theoretical results closely match the experimental values in most
+of the cases, there are a few cases where the difference between
+the two is signiﬁcant. However, these have minimal impact on the
+overall cost, as shown in the lower half of the ﬁgure. The discrep-
+ancies are mainly due to the fact that we use integer values in our
+simulator while our theoretical model ignores this condition and
+considers thresholds to be real values. The difference between the
+experimental and theoretical results are signiﬁcant only when the
+values of both T and δ are small (i.e., when the system requires
+high accuracy). We see that in most cases, the cost using the theo-
+retically predicted alpha is as good as or better than the value found
+by simulations, and in only a few cases is there a slight beneﬁt for
+the empirically found value.
+
+0.2
+
+0.4
+
+0.6
+
+0.8
+
+1
+
+2
+
+4
+
+6
+
+8
+
+δ = 0.05 
+
+δ = 0.1 
+
+T=30000
+T=50000
+T=100000
+T=500000
+
+T=30000
+T=50000
+T=100000
+T=500000
+
+α
+
+α
+
+Basic Adaptive Alg; δ = 0.05
+Basic Adaptive Alg; δ = 0.1
+Modified Adaptive Alg; δ = 0.05
+Modified Adaptive Alg; δ = 0.1
+
+Modified Adaptive Alg; δ = 0.05
+Modified Adaptive Alg; δ = 0.1
+OJW Alg; δ = 0.05
+OJW Alg; δ = 0.1
+
+T
+
+T
+
+10
+x 104
+
+10
+x 104
+
+0.2
+
+0.4
+
+0.6
+
+0.8
+
+1
+
+2
+
+4
+
+6
+
+8
+
+(a) Communication cost as α varies in static case
+
+(b) Communication case of the adaptive algorithms
+
+Figure 6: Communication Cost of Static and Adaptive Algorithms
+
+δ = 0.05 
+
+ 
+T=50000
+ 
+T=100000
+ 
+T=500000
+
+Static
+Adaptive
+
+4000
+
+3000
+
+2000
+
+1000
+
+s
+e
+g
+a
+s
+s
+e
+m
+
+ 
+f
+
+o
+
+ 
+r
+e
+b
+m
+u
+N
+
+0
+0
+
+108
+
+106
+
+104
+
+102
+0
+
+s
+e
+g
+a
+s
+s
+e
+m
+
+ 
+f
+
+o
+
+ 
+r
+e
+b
+m
+u
+N
+
+5000
+
+4500
+
+4000
+
+3500
+
+3000
+
+2500
+
+2000
+
+1500
+
+1000
+
+500
+
+s
+e
+g
+a
+s
+s
+e
+m
+
+ 
+f
+
+o
+
+ 
+
+ 
+r
+e
+b
+m
+u
+n
+m
+u
+m
+n
+M
+
+i
+
+i
+
+0
+0
+
+s
+e
+g
+a
+s
+s
+e
+m
+
+ 
+f
+
+o
+
+ 
+r
+e
+b
+m
+u
+N
+
+s
+e
+g
+a
+s
+s
+e
+m
+
+ 
+f
+
+o
+
+ 
+r
+e
+b
+m
+u
+N
+
+10000
+
+5000
+
+0
+0
+
+6000
+
+4000
+
+2000
+
+0
+0
+
+s
+e
+g
+a
+s
+s
+e
+m
+
+ 
+f
+
+o
+
+ 
+r
+e
+b
+m
+u
+N
+
+8000
+
+7000
+
+6000
+
+5000
+
+4000
+
+3000
+
+2000
+
+1000
+
+0
+0
+
+0.2
+
+0.4
+
+0.6
+
+0.8
+
+1
+
+α
+
+50
+100
+Different parameter settings
+
+150
+
+Figure 7: Variation in communication cost with varying α in
+the static model over 500 repetitions with random incoming
+packet distribution.
+
+Figure 8: Comparing cost of adaptive and static threshold set-
+tings. Each combination of T , δ, and Ni is referred to as a
+“parameter setting” and represents a single point on the x-axis.
+
+7.3 Communication Cost
+
+Uniformly Distributed Events. Figure 6(a) examines the impact
+of α on the number of messages exchanged in a monitoring system
+using static thresholds. The total count, N , of the event that is
+tracked is 960000. For a small value of T (i.e., a high value of
+the ratio N
+T ), as the value of α increases, the number of messages
+exchanged in the system decreases.
+In other words, the optimal
+value of α is close to 1. For a larger value of T (i.e., a small value
+of N
+T ), the optimal value of α is closer to 0. In essence, as the ratio
+N
+T decreases, the optimal value of α moves towards 0. However,
+there is a broad range of settings of α which achieve similarly low
+costs, showing that an approximate value of α will often sufﬁce.
+Lastly, in line with expectations, decreasing δ increases total cost.
+In Figure 6(b) we compare the performance of the basic adap-
+tive, modiﬁed adaptive, and the OJW algorithms. The top graph in
+the ﬁgure compares the total number of messages exchanged in the
+system (from the monitors to the central node and vice versa) using
+
+basic adaptive and modiﬁed adaptive algorithms. The modiﬁed al-
+gorithm outperformed the basic algorithm by an appreciable factor
+in all our experiments. The bottom graph in the ﬁgure compares the
+performance of OJW algorithm with modiﬁed adaptive algorithm.
+Note that the y-axis in this graph is in log scale. The graph shows
+that the modiﬁed algorithm performs at least two orders of mag-
+nitude better than the OJW algorithm conﬁrming that the existing
+techniques are insufﬁcient for this problem.
+
+Randomly Distributed Events. Previous results were based on se-
+lecting which node to update uniformly. In Figure 7 we explore the
+effect of using random distributions to update different nodes. Ran-
+dom distributions are created by generating random probabilities
+associated with each of the monitoring nodes. These probabilities
+are used to send the updates from the input trace to the monitoring
+nodes. Note that a different random distribution is generated for
+every simulation run. We repeat the simulation 500 times to ensure
+that we capture a variety of different random distributions. In Fig-
+ure 7 we plot the average number of messages exchanged due to
+
+(cid:91)(cid:3)(cid:20)(cid:19)(cid:25)
+
+(cid:22)
+
+(cid:21)(cid:17)(cid:24)
+
+(cid:86)
+(cid:72)
+(cid:74)
+(cid:68)
+(cid:86)
+(cid:86)
+(cid:72)
+(cid:80)
+
+(cid:3)
+(cid:73)
+
+(cid:82)
+
+(cid:3)
+(cid:85)
+(cid:72)
+(cid:69)
+(cid:80)
+(cid:88)
+(cid:49)
+
+(cid:20)(cid:17)(cid:24)
+
+(cid:21)
+
+(cid:20)
+
+(cid:19)(cid:17)(cid:24)
+
+(cid:19)
+(cid:19)
+
+(cid:55)(cid:32)(cid:24)(cid:19)(cid:19)
+(cid:55)(cid:32)(cid:22)(cid:19)(cid:19)(cid:19)
+(cid:55)(cid:32)(cid:23)(cid:19)(cid:19)(cid:19)
+(cid:55)(cid:32)(cid:20)(cid:19)(cid:19)(cid:19)(cid:19)
+(cid:55)(cid:32)(cid:24)(cid:19)(cid:19)(cid:19)(cid:19)
+(cid:55)(cid:32)(cid:20)(cid:19)(cid:19)(cid:19)(cid:19)(cid:19)
+
+δ = 0.01
+δ = 0.05
+δ = 0.1
+
+107
+
+106
+
+s
+e
+g
+a
+s
+s
+e
+m
+
+ 
+f
+
+o
+
+ 
+r
+e
+b
+m
+u
+N
+
+105
+
+104
+
+103
+
+102
+
+101
+
+102
+
+(cid:19)(cid:17)(cid:21)
+
+(cid:19)(cid:17)(cid:23)
+
+(cid:19)(cid:17)(cid:25)
+
+(cid:36)(cid:79)(cid:83)(cid:75)(cid:68)(cid:3)(cid:89)(cid:68)(cid:79)(cid:88)(cid:72)
+
+(cid:19)(cid:17)(cid:27)
+
+(cid:20)
+
+103
+
+104
+
+105
+
+T
+
+(a) Number of messages Vs. α for static thresholds using one
+hour’s data from a live network.
+
+(b) Number of messages Vs. T for adaptive thresholds using one
+hour’s data from a live network.
+
+Figure 9: Experiments on real network data
+
+these random distributions. The error bars in the ﬁgure represent
+the range of values for the number of messages generated by the
+500 runs of the simulator. We can see that the effect of using ran-
+dom distributions is relatively small. As before, the optimal value
+of α that results in the minimum number of messages in the system
+decreases as the ratio N
+T decreases. Note that the total number of
+messages in the best case (1000-2000) is approximately 0.1% of
+the total number of updates. Hence we observe a thousand-fold re-
+duction in cost compared to the cost of sending every update to the
+central site.
+
+Comparing Costs of Static and Adaptive Algorithms. Figure 8
+compares the blended static thresholding algorithm and the mod-
+iﬁed adaptive algorithm in terms of the number of messages in
+the monitoring system for different parameter settings. For both
+the algorithms, we vary the values of T , δ, and N in the range
+[100,100000], [0.01, 0.1], and [2500, 960000] respectively. In the
+static algorithm, we used the empirically determined optimal value
+of α for the given parameter setting. We can see that the perfor-
+mance of the adaptive algorithm is always slightly better than the
+static algorithm. However, which method is best will depend on
+the scenario in which they are being applied: every message in the
+static algorithm is only a few bytes long (to indicate the current
+threshold being used by the site), while the messages are longer in
+adaptive algorithms since the central site must give more informa-
+tion (the type of message, the new threshold being sent, etc.). In
+power constrained sensor networks, the energy consumption of the
+adaptive algorithms may therefore be higher, whereas in more tra-
+ditional wired networks, the size of message headers will make the
+difference in size of the messages insigniﬁcant.
+
+Experiments on Real Network Data. The results from our exper-
+iments presented until now tracked a single event. In order to ex-
+plore a more realistic and practical scenario, we obtained complete
+network packet traces from a research network. The network con-
+sists of several routers and we obtained anonymized traces of all the
+packets that entered the network at each of the routers for one hour
+on Aug 15, 2005.4 Our network monitoring system architecture
+
+4For anonymity and proprietary reasons, we cannot give further
+details of the experimental set up.
+
+consisted of monitoring nodes, one collocated with every router in
+the network. We used the traces from the collocated router as the
+input to the monitoring node. The monitoring nodes tracked all the
+incoming events for one hour, approximately 8 million in total.
+
+Figure 9(a) shows the number of messages required by the sta-
+tic monitoring system to track all the events with δ-accuracy. We
+can see that when the value of T is small, a high value of α re-
+sults in minimum communication overhead, and at higher values
+of T , the best value of α reduces. Figure 9(b) shows the number
+of messages in the monitoring system using adaptive thresholds.
+Comparing Figures 9(a) and 9(b) we can see that, at large values
+of T , the adaptive algorithm performs signiﬁcantly better than the
+static algorithm. Since Figure 9(b) is plotted on a log-log scale,
+it shows an approximately linear relation between the logarithm of
+the number of messages and log T , implying an inverse polynomial
+dependency on T . This agrees with our analysis of the adaptive al-
+gorithm, suggesting that the bulk of the cost is due to items whose
+count Nv < T : for these items, the number of messages is propor-
+tional to Nv
+
+δT , which agrees with the observed behavior.
+
+8. CONCLUSIONS AND FUTURE WORK
+
+We have given a number of algorithms to efﬁciently monitor
+distributed sets of counts in a continuous fashion, a fundamental
+problem at the heart of many network and sensor monitoring prob-
+lems. In our experimental evaluation, we observed that our adaptive
+algorithms typically outperform those based on maintaining static
+thresholds. However, the adaptive algorithms may be more expen-
+sive in terms of resources required to run and computational power
+of the participants.
+
+Several problems remain open to study in future work: ﬁrstly,
+to compare the cost of deploying the these algorithms in real net-
+work scenarios such as a particular sensor network environment or
+IP network monitoring setting (so far we have focused on the per-
+vasive cost issues rather than considering any particular situation).
+In these situations, we can consider other network topologies, such
+as more hierarchical approaches to avoid overwhelming the central
+coordinator. It will be of interest to extend our approach to other
+query types with a similar thresholded nature, such as arithmetic
+combinations of thresholds (“report x + y when x + y > T ” or
+
+“report x ∗ y when x ∗ y > T ”) or apply across sites (“report the
+number of sites observing event E when E is observed by more
+than n sites”).
+
+9. REFERENCES
+[1] D. Abadi, D. Carney, U. C¸ etintemel, M. Cherniack, C. Convey,
+
+C. Erwin, E. Galvez, M. Hatoun, A. Maskey, A. Rasin, A. Singer,
+M. Stonebraker, N. Tatbul, Y. Xing, R. Yan, and S. Zdonik. Aurora: a
+data stream management system. In ACM SIGMOD, 2003.
+
+[2] A. Arasu, B. Babcock, S. Babu, M. Datar, K. Ito, I. Nishizawa,
+
+J. Rosenstein, and J; Widom. STREAM: the Stanford Stream Data
+Manager (demonstration description). In ACM SIGMOD, 2003.
+
+[3] B. Babcock and C. Olston. Distributed top-k monitoring. In ACM
+
+SIGMOD, 2003.
+
+[4] S. Chandrasekaran, O. Cooper, A. Deshpande, M. J. Franklin, J. M.
+
+Hellerstein, W. Hong, S. Krishnamurthy, S. R. Madden, F. Reiss, and
+M. A. Shah. TelegraphCQ: continuous dataﬂow processing. In ACM
+SIGMOD, 2003.
+
+[5] M. Cherniack, H. Balakrishnan, M. Balazinska, D. Carney,
+
+U. Cetintemel, Y. Xing, and S. Zdonik. Scalable distributed stream
+processing. In Conference on Innovative Data Systems Research,
+2003.
+
+[6] J. Considine, F. Li, G. Kollios, and J. Byers. Approximate
+
+aggregation techniques for sensor databases. In IEEE ICDE, 2004.
+
+[7] G. Cormode and M. Garofalakis. Sketching streams through the net:
+
+Distributed approximate query tracking. In VLDB, 2005.
+
+[8] G. Cormode, M. Garofalakis, S. Muthukrishnan, and R. Rastogi.
+Holistic aggregates in a networked world: Distributed tracking of
+approximate quantiles. In ACM SIGMOD , 2005.
+
+[9] G. Cormode and S. Muthukrishnan. An improved data stream
+
+summary: The count-min sketch and its applications. Journal of
+Algorithms 55(1), pages 58–75, 2005.
+
+[10] G. Cormode, S. Muthukrishnan, and W. Zhuang. What’s different:
+
+Distributed, continuous monitoring of duplicate resilient aggregates
+on data streams. In IEEE ICDE, 2006.
+
+[11] C. Cranor, T. Johnson, O. Spatscheck, and V. Shkapenyuk.
+
+Gigascope: A stream database for network applications. In ACM
+SIGMOD, 2003.
+
+[12] A. Das, S. Ganguly, M. Garofalakis, and R. Rastogi. Distributed
+
+set-expression cardinality estimation. In VLDB, 2004.
+
+[13] C. Estan and G. Varghese. New directions in trafﬁc measurement and
+
+accounting. In ACM SIGCOMM, 2002.
+
+[14] Ahmad et. al. Distributed operation in the borealis stream processing
+
+engine. In ACM SIGMOD, 2005.
+
+[15] A. Jain, J. Hellerstein, S. Ratnasamy, and D. Wetherall. A wakeup
+
+call for internet monitoring systems: The case for distributed
+triggers. In ACM SIGCOMM Hotnets, 2004.
+
+[16] N. Jain, P. Yalagandula, M. Dahlin, and Y. Zhang. INSIGHT: A
+
+distributed monitoring system for tracking continuous queries. In
+Work-in-progress session at ACM SOSP, 2005.
+
+[17] A. Manjhi, S. Nath, and P. Gibbons. Tributaries and deltas: Efﬁcient
+
+and robust aggregation in sensor network streams. In ACM SIGMOD,
+2005.
+
+[18] G.S. Manku and R. Motwani. Approximate frequency counts over
+
+data streams. In VLDB, 2002.
+
+[19] S. Nath, P. B. Gibbons, S. Seshan, and Z. R. Anderson. Synopsis
+
+diffusion for robust aggrgation in sensor networks. In ACM SenSys,
+2004.
+
+[20] National Laboratory for Applied Network Research.
+
+http://www.nlanr.net/.
+
+[21] C. Olston, J. Jiang, and J. Widom. Adaptive ﬁlters for continuous
+
+queries over distributed data streams. In ACM SIGMOD , 2003.
+
+[22] Stanford stream data manager.
+
+http://www-db.stanford.edu/stream/sqr.
+
+[23] M. Sullivan and A. Heybey. A system for managing large databases
+
+of network trafﬁc. In USENIX, 1998.
+
+[24] S. Zdonik, M. Stonebraker, M. Cherniack, and U. Cetintemel. The
+
+Aurora and Medusa projects. Bulletin of the Technical Committee on
+Data Engineering, pages 3–10, March 2003.
+
+[25] I. Sharfman, A. Schuster, and D. Keren. A Geometric Approach to
+
+Monitoring Threshold Functions Over Distributed Data Streams. In
+ACM SIGMOD, June 2006.
+
+APPENDIX
+
+A. PROOF OF CONVEXITY OF KN
+THEOREM 5. KN = m log(1 + αh) − log(1 − α)
+
+log(1 + αδ)
+
+vex function in α in the range α ∈ (0, 1) for small values of δ.
+
+is a con-
+
+PROOF. We prove that k is convex in α by showing that the
+
+second derivative k(cid:4)(cid:4) ≥ 0, where
+
+k =
+
+KN
+m =
+
+log(1 + αh) − log(1 − α)
+
+log(1 + αδ)
+
+log(1 + αh) − log(1 − α)
+
+=
+
+αδ
+
+Since h = N
+− 1 and N, T > 0, h ∈ (−1, ∞) or h + 1 > 0. Also,
+T
+α, δ ∈ (0, 1), and assuming that δ is very small, we approximate
+ln(1 + αδ) as αδ.
+
+Differentiating k, we get the ﬁrst and second derivates as
+
+δα k(cid:4)
+
+δα k(cid:4)(cid:4)
+
+h
+
+1 + hα +
+−
+
+1
+
+(1 − α)2
+
+1
+
+−
+
+=
+
+=
+
+=
+
+1
+
+1 − α
+
+− δk
+
+(1 + hα)2
+
+− 2δk(cid:4)
+
+h2
+
+h2
+
+(1 − α)2
+
+(1 + hα)2
+
+− 2
+
+h
+
+1
+
+α (cid:6)
+
+1 + hα +
+
+1 − α
+
+(3)
+
+(4)
+
+− δk
+
+(cid:7)
+
+(5)
+
+Using Lemma 6,
+
+ln(1 + hα) − ln(1 − α) = ln
+
+1 + hα
+1 − α (cid:7)
+
+≥ 2α(h + 1)
+2 + hα − α
+
+(cid:6)
+
+Note that 1+hα
+1−α
+k ≥ 1
+δα
+
+> 1, since h + 1, α > 0. Thus,
+
+2α(h + 1)
+2 + hα − α =
+
+2
+δ (cid:6)
+
+h + 1
+
+2 + hα − α (cid:7)
+
+Substituting this is in Equation( 5), we get
+
+δαk(cid:4)(cid:4) ≥ (h + 1)(1 + 2hα − h)
+(1 − α)2(1 + hα)2
+− 2
+
+h + 1
+
+α (cid:6)
+
+(1 + hα)(1 − α)
+
+− 2(h + 1)
+
+2 + hα − α (cid:7)
+
+=
+
+(h + 1)(1 + 2hα − h)2
+
+(1 − α)2(1 + hα)2(2 + hα − α)
+
+≥ 0
+
+Since k(cid:4)(cid:4) ≥ 0, k is convex in α.
+
+LEMMA 6. ln(x) ≥ 2
+
+, when x > 1
+
+x−1
+x+1
+
+(cid:8)
+
+(cid:9)
+
+x ) = − ln(x) =
+
+PROOF. Using Taylor’s series, we get
+ln( 1
+So ln(x) =
+≥
+
+1
+x
+
+3 − . . .
+
+1
+x
+
+− 1
+− 1
+2
+1 − 1
+(cid:3)
+(cid:4)
++ 1
+x
+2
+1 − 1
++ 1
+(cid:3)
+x
+2
+(cid:3)
+1 + 1−1/x
+(cid:10)
+
+− 1
+3 + . . .
+(cid:4)
+3 + . . .
+
+− 1
+2 + 1
+(cid:4)
+3
+2 + 1
+4
+1−1/x
+
+2 + 1
+3
+1 − 1
+(cid:3)
+x
+1 − 1
+(cid:4)
+(cid:3)
+x
+2
+(cid:4)
+(cid:3)
++ . . .
+2
+
+(cid:4)
+(cid:4)
+2 +
+
+(cid:4)
+(cid:4)
+
+(cid:11)
+
+1
+
+1− 1−1/x
+
+2
+
+(cid:10)
+
+(cid:11)
+
+(cid:8)
+= 2
+
+(cid:9)
+1−1/x
+1+1/x
+
+(cid:8)
+
+(cid:9)
+
+(cid:3)
+
+1
+x
+1 − 1
+x
+1 − 1
+(cid:3)
+x
+(cid:3)
+1 − 1
+x
+(cid:3)
+
+=
+
+=
+
+1 − 1
+x
+(cid:3)
+= 2
+
+x−1
+x+1
+
+(cid:8)
+
+(cid:4)
+
+(cid:4)
+
+(cid:9)
+
+
