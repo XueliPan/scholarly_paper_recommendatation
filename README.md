@@ -81,6 +81,7 @@ Accessing to some data that could not provide in the repo via google drive, down
 
 |     |vector representation model| NDCG@10 |  P@10  |MRR     |
 |:---:|:-------------: | :-------------: | :----: | :-----:|
+| random selection| -| 0.0034 | 0.0007  |0.0022 |
 | using most recent paper| CP model|0.3665 |**0.1340** |0.2736 |
 | using most recent paper| GN model|0.3389|  0.1080 |0.2747 |
 | using all papers| CP model|**0.3731** |0.114 |**0.3282** |
